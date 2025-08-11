@@ -121,6 +121,21 @@ type TransactionRecord struct {
 	ProcessingStatus    sql.NullString `json:"processingStatus"`
 }
 
+// ▼▼▼ [修正点] 在庫計算のためのヘルパーメソッドを追加 ▼▼▼
+// SignedYjQty returns the transaction's YjQuantity with a sign based on its flag (in/out).
+func (t *TransactionRecord) SignedYjQty() float64 {
+	switch t.Flag {
+	case 1, 4, 11: // 入庫・納品・棚卸増
+		return t.YjQuantity
+	case 2, 3, 5, 12: // 出庫・返品・処方・棚卸減
+		return -t.YjQuantity
+	default: // 棚卸(0)など、直接変動させないものは0を返す
+		return 0
+	}
+}
+
+// ▲▲▲ 修正ここまで ▲▲▲
+
 // ProductMasterView is a data structure for the master edit screen, including formatted fields.
 type ProductMasterView struct {
 	ProductMaster
@@ -139,7 +154,7 @@ type AggregationFilters struct {
 	EndDate     string
 	KanaName    string
 	DrugTypes   []string
-	NoMovement  bool
+	DosageForm  string // 「剤型」フィルター用のフィールドを追加
 	Coefficient float64
 }
 
@@ -167,6 +182,7 @@ type StockLedgerPackageGroup struct {
 	MaxUsage        float64             `json:"maxUsage"`
 	ReorderPoint    float64             `json:"reorderPoint"`
 	IsReorderNeeded bool                `json:"isReorderNeeded"`
+	Master          *ProductMaster      `json:"-"` // Not marshalled to JSON
 }
 
 // LedgerTransaction is a transaction record that includes a running balance.

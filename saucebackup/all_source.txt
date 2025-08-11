@@ -496,31 +496,29 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"wasabi/model"
 	"wasabi/units"
 )
 
-// GetStockLedger generates the stock ledger report, including detailed transactions.
 func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.StockLedgerYJGroup, error) {
-	// Step 1: Filter product masters based on filters.
+	// 1. Get and group product masters by YJ code
 	masterQuery := `SELECT ` + selectColumns + ` FROM product_master p WHERE 1=1 `
 	var masterArgs []interface{}
 	if filters.KanaName != "" {
 		masterQuery += " AND p.kana_name LIKE ? "
 		masterArgs = append(masterArgs, "%"+filters.KanaName+"%")
 	}
-	// (Additional drugType filter logic would go here if implemented)
-
 	masterRows, err := conn.Query(masterQuery, masterArgs...)
 	if err != nil {
-		return nil, fmt.Errorf("ledger master query failed: %w", err)
+		return nil, err
 	}
 	defer masterRows.Close()
 
 	mastersByYjCode := make(map[string][]*model.ProductMaster)
+	productCodeToMaster := make(map[string]*model.ProductMaster)
 	var productCodes []string
-	productCodeSet := make(map[string]struct{})
 	for masterRows.Next() {
 		m, err := scanProductMaster(masterRows)
 		if err != nil {
@@ -529,18 +527,16 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		if m.YjCode != "" {
 			mastersByYjCode[m.YjCode] = append(mastersByYjCode[m.YjCode], m)
 		}
-		if _, ok := productCodeSet[m.ProductCode]; !ok {
-			productCodeSet[m.ProductCode] = struct{}{}
-			productCodes = append(productCodes, m.ProductCode)
-		}
+		productCodes = append(productCodes, m.ProductCode)
+		productCodeToMaster[m.ProductCode] = m
 	}
 	if len(productCodes) == 0 {
 		return []model.StockLedgerYJGroup{}, nil
 	}
 
-	// Step 2: Get all relevant transactions for the filtered products.
+	// 2. Fetch all relevant transactions
 	txQuery := `SELECT ` + TransactionColumns + ` FROM transaction_records WHERE jan_code IN (?` + strings.Repeat(",?", len(productCodes)-1) + `)`
-	var txArgs []interface{}
+	txArgs := make([]interface{}, 0, len(productCodes)+2)
 	for _, pc := range productCodes {
 		txArgs = append(txArgs, pc)
 	}
@@ -556,68 +552,134 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 
 	txRows, err := conn.Query(txQuery, txArgs...)
 	if err != nil {
-		return nil, fmt.Errorf("ledger transaction query failed: %w", err)
+		return nil, err
 	}
 	defer txRows.Close()
 
-	transactionsByProductCode := make(map[string][]*model.TransactionRecord)
+	transactionsByYjCode := make(map[string][]*model.TransactionRecord)
 	for txRows.Next() {
 		t, err := ScanTransactionRecord(txRows)
 		if err != nil {
 			return nil, err
 		}
-		transactionsByProductCode[t.JanCode] = append(transactionsByProductCode[t.JanCode], t)
+		if master, ok := productCodeToMaster[t.JanCode]; ok {
+			transactionsByYjCode[master.YjCode] = append(transactionsByYjCode[master.YjCode], t)
+		}
 	}
 
-	// Step 3: Group, calculate, and build the full report structure.
+	// 3. Process each YJ group
 	var result []model.StockLedgerYJGroup
 	for yjCode, masters := range mastersByYjCode {
-		yjGroup := model.StockLedgerYJGroup{
-			YjCode:      yjCode,
-			ProductName: masters[0].ProductName,
-			YjUnitName:  units.ResolveName(masters[0].YjUnitName),
+		allTxsForYj, ok := transactionsByYjCode[yjCode]
+		if !ok || len(allTxsForYj) == 0 {
+			continue
 		}
-		var yjTotalEnd float64
 
-		for _, master := range masters {
-			packageKey := fmt.Sprintf("%s|%g|%s", master.PackageSpec, master.JanPackInnerQty, master.YjUnitName)
-			txs, hasTxs := transactionsByProductCode[master.ProductCode]
-			if !hasTxs {
-				continue
+		latestInventoryDate := ""
+		var inventorySumOnDate float64
+		for i := len(allTxsForYj) - 1; i >= 0; i-- {
+			if allTxsForYj[i].Flag == 0 {
+				latestInventoryDate = allTxsForYj[i].TransactionDate
+				break
 			}
-
-			var currentBalance float64 = 0
-			var ledgerTransactions []model.LedgerTransaction
-
-			for _, t := range txs {
-				signedYjQty := 0.0
-				switch t.Flag {
-				case 1, 4, 11:
-					signedYjQty = t.YjQuantity // In
-				case 2, 3, 5, 12:
-					signedYjQty = -t.YjQuantity // Out
+		}
+		if latestInventoryDate != "" {
+			for _, t := range allTxsForYj {
+				if t.TransactionDate == latestInventoryDate && t.Flag == 0 {
+					inventorySumOnDate += t.YjQuantity
 				}
-				currentBalance += signedYjQty
-				ledgerTransactions = append(ledgerTransactions, model.LedgerTransaction{
-					TransactionRecord: *t,
-					RunningBalance:    currentBalance,
-				})
 			}
-
-			pkgLedger := model.StockLedgerPackageGroup{
-				PackageKey:    packageKey,
-				EndingBalance: currentBalance,
-				Transactions:  ledgerTransactions,
-			}
-			yjGroup.PackageLedgers = append(yjGroup.PackageLedgers, pkgLedger)
-			yjTotalEnd += pkgLedger.EndingBalance
 		}
 
-		if len(yjGroup.PackageLedgers) > 0 {
-			yjGroup.EndingBalance = yjTotalEnd
-			result = append(result, yjGroup)
+		var allLedgerTransactions []model.LedgerTransaction
+		currentBalance := 0.0
+		if latestInventoryDate == "" {
+			for _, t := range allTxsForYj {
+				currentBalance += t.SignedYjQty()
+				allLedgerTransactions = append(allLedgerTransactions, model.LedgerTransaction{TransactionRecord: *t, RunningBalance: currentBalance})
+			}
+		} else {
+			// Process transactions up to the day before the latest inventory
+			txsOnAndBeforePivot := []*model.TransactionRecord{}
+			for _, t := range allTxsForYj {
+				if t.TransactionDate <= latestInventoryDate {
+					txsOnAndBeforePivot = append(txsOnAndBeforePivot, t)
+				}
+			}
+
+			for _, t := range txsOnAndBeforePivot {
+				if t.TransactionDate < latestInventoryDate {
+					currentBalance += t.SignedYjQty()
+					allLedgerTransactions = append(allLedgerTransactions, model.LedgerTransaction{TransactionRecord: *t, RunningBalance: currentBalance})
+				} else if t.TransactionDate == latestInventoryDate && t.Flag != 0 {
+					currentBalance += t.SignedYjQty()
+					allLedgerTransactions = append(allLedgerTransactions, model.LedgerTransaction{TransactionRecord: *t, RunningBalance: currentBalance})
+				}
+			}
+
+			currentBalance = inventorySumOnDate // Overwrite balance
+			for _, t := range txsOnAndBeforePivot {
+				if t.TransactionDate == latestInventoryDate && t.Flag == 0 {
+					allLedgerTransactions = append(allLedgerTransactions, model.LedgerTransaction{TransactionRecord: *t, RunningBalance: currentBalance})
+				}
+			}
+
+			// Process transactions after the latest inventory date
+			for _, t := range allTxsForYj {
+				if t.TransactionDate > latestInventoryDate {
+					currentBalance += t.SignedYjQty()
+					allLedgerTransactions = append(allLedgerTransactions, model.LedgerTransaction{TransactionRecord: *t, RunningBalance: currentBalance})
+				}
+			}
 		}
+
+		// ▼▼▼ [修正点] 計算済みのトランザクションを包装ごとの小グループに分配 ▼▼▼
+		packageLedgersMap := make(map[string]*model.StockLedgerPackageGroup)
+		for _, m := range masters {
+			key := fmt.Sprintf("%s|%g|%s", m.PackageSpec, m.JanPackInnerQty, m.YjUnitName)
+			packageLedgersMap[key] = &model.StockLedgerPackageGroup{PackageKey: key}
+		}
+		for _, lt := range allLedgerTransactions {
+			if master, ok := productCodeToMaster[lt.JanCode]; ok {
+				key := fmt.Sprintf("%s|%g|%s", master.PackageSpec, master.JanPackInnerQty, master.YjUnitName)
+				if pkg, ok := packageLedgersMap[key]; ok {
+					pkg.Transactions = append(pkg.Transactions, lt)
+				}
+			}
+		}
+		var finalPackageLedgers []model.StockLedgerPackageGroup
+		for _, pkg := range packageLedgersMap {
+			if len(pkg.Transactions) > 0 {
+				finalPackageLedgers = append(finalPackageLedgers, *pkg)
+			}
+		}
+		sort.Slice(finalPackageLedgers, func(i, j int) bool { return finalPackageLedgers[i].PackageKey < finalPackageLedgers[j].PackageKey })
+		// ▲▲▲ 修正ここまで ▲▲▲
+
+		yjGroup := model.StockLedgerYJGroup{
+			YjCode: yjCode, ProductName: masters[0].ProductName, YjUnitName: units.ResolveName(masters[0].YjUnitName),
+			PackageLedgers: finalPackageLedgers, // 正しいフィールドに正しいデータ構造をセット
+			EndingBalance:  currentBalance,
+		}
+		if len(allLedgerTransactions) > 0 {
+			firstTx := allLedgerTransactions[0]
+			// SignedYjQty()を正しく呼び出す
+			yjGroup.StartingBalance = firstTx.RunningBalance - firstTx.SignedYjQty()
+			yjGroup.NetChange = yjGroup.EndingBalance - yjGroup.StartingBalance
+		}
+		result = append(result, yjGroup)
 	}
+
+	// 4. Final sort
+	sort.Slice(result, func(i, j int) bool {
+		masterI := mastersByYjCode[result[i].YjCode][0]
+		masterJ := mastersByYjCode[result[j].YjCode][0]
+		if masterI.UsageClassification != masterJ.UsageClassification {
+			return masterI.UsageClassification < masterJ.UsageClassification
+		}
+		return masterI.KanaName < masterJ.KanaName
+	})
+
 	return result, nil
 }
 
@@ -1398,16 +1460,21 @@ import (
 	"time"
 	"wasabi/db"
 	"wasabi/mappers"
+	"wasabi/mastermanager"
 	"wasabi/model"
 )
 
+// SaveRecordInput defines the minimal structure for a line item from the frontend.
 type SaveRecordInput struct {
+	ProductCode string  `json:"productCode"`
+	ProductName string  `json:"productName"` // Used as a fallback for mastermanager
 	JanQuantity float64 `json:"janQuantity"`
+	DatQuantity float64 `json:"datQuantity"` // 「個数」フィールドを追加
 	ExpiryDate  string  `json:"expiryDate"`
 	LotNumber   string  `json:"lotNumber"`
-	model.ProductMaster
 }
 
+// SavePayload defines the structure for the entire JSON payload from the frontend.
 type SavePayload struct {
 	IsNewClient           bool              `json:"isNewClient"`
 	ClientCode            string            `json:"clientCode"`
@@ -1418,6 +1485,7 @@ type SavePayload struct {
 	OriginalReceiptNumber string            `json:"originalReceiptNumber"`
 }
 
+// SaveInOutHandler processes the saving of an in/out transaction.
 func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var payload SavePayload
@@ -1433,7 +1501,6 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer tx.Rollback()
 
-		// 1. 得意先を処理
 		clientCode := payload.ClientCode
 		if payload.IsNewClient {
 			exists, err := db.CheckClientExistsByName(tx, payload.ClientName)
@@ -1457,7 +1524,6 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 			clientCode = newCode
 		}
 
-		// 2. 伝票番号を処理
 		var receiptNumber string
 		dateStr := payload.TransactionDate
 		if dateStr == "" {
@@ -1482,32 +1548,49 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 			receiptNumber = fmt.Sprintf("io%s%03d", dateStr, newSeq)
 		}
 
-		// 3. 各明細レコードを処理
 		var finalRecords []model.TransactionRecord
 		flagMap := map[string]int{"入庫": 11, "出庫": 12}
 		flag := flagMap[payload.TransactionType]
+
+		var keyList, janList []string
+		keySet, janSet := make(map[string]struct{}), make(map[string]struct{})
+		for _, rec := range payload.Records {
+			if rec.ProductCode != "" && rec.ProductCode != "0000000000000" {
+				if _, seen := janSet[rec.ProductCode]; !seen {
+					janSet[rec.ProductCode] = struct{}{}
+					janList = append(janList, rec.ProductCode)
+				}
+			}
+			key := rec.ProductCode
+			if key == "" || key == "0000000000000" {
+				key = fmt.Sprintf("9999999999999%s", rec.ProductName)
+			}
+			if _, seen := keySet[key]; !seen {
+				keySet[key] = struct{}{}
+				keyList = append(keyList, key)
+			}
+		}
+		mastersMap, err := db.GetProductMastersByCodesMap(conn, keyList)
+		if err != nil {
+			http.Error(w, "Failed to pre-fetch product masters", http.StatusInternalServerError)
+			return
+		}
+		jcshmsMap, err := db.GetJcshmsByCodesMap(conn, janList)
+		if err != nil {
+			http.Error(w, "Failed to pre-fetch JCSHMS data", http.StatusInternalServerError)
+			return
+		}
 
 		for i, rec := range payload.Records {
 			if rec.ProductCode == "" {
 				continue
 			}
-
-			// フロントエンドから送られてきたマスター情報で製品マスターが存在するか確認・なければ作成
-			master, err := db.GetProductMasterByCode(conn, rec.ProductCode) // トランザクション外でチェック
+			master, err := mastermanager.FindOrCreate(tx, rec.ProductCode, rec.ProductName, mastersMap, jcshmsMap)
 			if err != nil {
-				http.Error(w, fmt.Sprintf("Failed to get product master for %s", rec.ProductCode), http.StatusInternalServerError)
+				http.Error(w, fmt.Sprintf("Failed to resolve master for %s: %v", rec.ProductName, err), http.StatusInternalServerError)
 				return
 			}
-			if master == nil {
-				newMasterInput := model.ProductMasterInput(rec.ProductMaster)
-				if err := db.CreateProductMasterInTx(tx, newMasterInput); err != nil {
-					http.Error(w, fmt.Sprintf("Failed to create new product master for %s", rec.ProductCode), http.StatusInternalServerError)
-					return
-				}
-				master = &rec.ProductMaster
-			}
 
-			// 4. トランザクションレコードを作成
 			yjQuantity := rec.JanQuantity * master.JanPackInnerQty
 			subtotal := yjQuantity * master.NhiPrice
 
@@ -1517,8 +1600,9 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 				ReceiptNumber:    receiptNumber,
 				LineNumber:       fmt.Sprintf("%d", i+1),
 				Flag:             flag,
-				JanCode:          rec.ProductCode,
+				JanCode:          master.ProductCode,
 				JanQuantity:      rec.JanQuantity,
+				DatQuantity:      rec.DatQuantity, // 「個数」をセット
 				YjQuantity:       yjQuantity,
 				Subtotal:         subtotal,
 				ExpiryDate:       rec.ExpiryDate,
@@ -1530,7 +1614,6 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 			finalRecords = append(finalRecords, tr)
 		}
 
-		// 5. DBに保存してコミット
 		if len(finalRecords) > 0 {
 			if err := db.PersistTransactionRecordsInTx(tx, finalRecords); err != nil {
 				log.Printf("Failed to persist records: %v", err)
@@ -1652,10 +1735,18 @@ import (
 	"database/sql"
 	"fmt"
 	"wasabi/db"
-	"wasabi/mappers" // <-- IMPORT ADDED
+	"wasabi/mappers"
 	"wasabi/mastermanager"
 	"wasabi/model"
 )
+
+// ▼▼▼ [修正点] DAT/USAGEプロセッサと同様の定数を定義 ▼▼▼
+const (
+	FlagComplete    = "COMPLETE"
+	FlagProvisional = "PROVISIONAL"
+)
+
+// ▲▲▲ 修正ここまで ▲▲▲
 
 // ProcessInventoryRecords processes de-duplicated inventory records into transaction records.
 func ProcessInventoryRecords(tx *sql.Tx, conn *sql.DB, records []model.UnifiedInputRecord) ([]model.TransactionRecord, error) {
@@ -1712,10 +1803,17 @@ func ProcessInventoryRecords(tx *sql.Tx, conn *sql.DB, records []model.UnifiedIn
 			tr.JanQuantity = tr.YjQuantity / master.JanPackInnerQty
 		}
 
-		// Map master data to the transaction record
 		mappers.MapProductMasterToTransaction(&tr, master)
-		tr.ProcessFlagMA = "COMPLETE"
-		tr.ProcessingStatus = sql.NullString{String: "completed", Valid: true}
+
+		// ▼▼▼ [修正点] マスターの由来(Origin)によって処理ステータスを分岐 ▼▼▼
+		if master.Origin == "JCSHMS" {
+			tr.ProcessFlagMA = FlagComplete
+			tr.ProcessingStatus = sql.NullString{String: "completed", Valid: true}
+		} else {
+			tr.ProcessFlagMA = FlagProvisional
+			tr.ProcessingStatus = sql.NullString{String: "provisional", Valid: true}
+		}
+		// ▲▲▲ 修正ここまで ▲▲▲
 
 		finalRecords = append(finalRecords, tr)
 	}
@@ -2248,6 +2346,21 @@ type TransactionRecord struct {
 	ProcessingStatus    sql.NullString `json:"processingStatus"`
 }
 
+// ▼▼▼ [修正点] 在庫計算のためのヘルパーメソッドを追加 ▼▼▼
+// SignedYjQty returns the transaction's YjQuantity with a sign based on its flag (in/out).
+func (t *TransactionRecord) SignedYjQty() float64 {
+	switch t.Flag {
+	case 1, 4, 11: // 入庫・納品・棚卸増
+		return t.YjQuantity
+	case 2, 3, 5, 12: // 出庫・返品・処方・棚卸減
+		return -t.YjQuantity
+	default: // 棚卸(0)など、直接変動させないものは0を返す
+		return 0
+	}
+}
+
+// ▲▲▲ 修正ここまで ▲▲▲
+
 // ProductMasterView is a data structure for the master edit screen, including formatted fields.
 type ProductMasterView struct {
 	ProductMaster
@@ -2294,6 +2407,7 @@ type StockLedgerPackageGroup struct {
 	MaxUsage        float64             `json:"maxUsage"`
 	ReorderPoint    float64             `json:"reorderPoint"`
 	IsReorderNeeded bool                `json:"isReorderNeeded"`
+	Master          *ProductMaster      `json:"-"` // Not marshalled to JSON
 }
 
 // LedgerTransaction is a transaction record that includes a running balance.
@@ -2682,11 +2796,19 @@ header { display: flex; align-items: center; gap: 8px; padding: 10px; border-bot
 .btn:hover { background-color: #dee2e6; }
 
 table { border-collapse: collapse; width: 100%; table-layout: fixed; }
-th, td { border: 1px solid black; padding: 4px; }
+th, td { border: 1px solid black; padding: 4px; vertical-align: middle; }
 th { text-align: center; background-color: #f0f0f0; }
 .yj-jan-code { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .left { text-align: left; }
 .right { text-align: right; }
+
+.data-table td input[type="text"],
+.data-table td input[type="number"] {
+    width: 100%;
+    border: 1px solid #999;
+    padding: 4px;
+    font-size: 11pt;
+}
 
 #loading-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 9999; color: white; }
 .spinner { border: 5px solid #f3f3f3; border-top: 5px solid #0d6efd; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin-bottom: 10px; }
@@ -2697,14 +2819,147 @@ th { text-align: center; background-color: #f0f0f0; }
 .notification-box.success { background-color: #198754; }
 .notification-box.error { background-color: #dc3545; }
 
+.modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.6); display: flex; align-items: center; justify-content: center; z-index: 2000; }
+.modal-content { background-color: #ffffff; border: 1px solid #000000; padding: 20px; width: 80%; max-width: 900px; max-height: 90vh; display: flex; flex-direction: column; }
+.modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+.modal-header h2 { font-size: 20px; }
+.modal-body { overflow-y: auto; }
+.close-button { font-size: 24px; border: none; background: none; cursor: pointer; }
+
+.agg-yj-header { background-color: #343a40; color: white; padding: 8px; margin-top: 20px; font-weight: bold; font-size: 16px; display: flex; align-items: center; }
+.agg-yj-header .product-name { margin-left: 20px; flex-grow: 1; }
+.agg-yj-header .balance-info { font-size: 14px; font-weight: normal; }
+.agg-pkg-header { background-color: #e9ecef; padding: 6px 8px; border: 1px solid #ccc; border-bottom: none; font-weight: bold; }
+
+/* ▼▼▼ [修正点] 削除されていた列幅指定を再追加 ▼▼▼ */
+.col-1 { width: 3.0%; }  /* 操作 */
+.col-2 { width: 6.0%; }  /* 日付/種別 */
+.col-3 { width: 9.0%; }  /* YJ/JAN */
+.col-4 { width: 14.0%; } /* 製品名/包装 */
+.col-5 { width: 10.0%; } /* 製品名/メーカー */
+.col-6 { width: 4.0%; }  /* 個数/剤型 */
+.col-7 { width: 6.5%; }  /* YJ数量/JAN数量 */
+.col-8 { width: 6.5%; }  /* YJ包装数/JAN包装数 */
+.col-9 { width: 4.5%; }  /* YJ単位/JAN単位 */
+.col-10 { width: 6.5%; } /* 単価/金額 */
+.col-11 { width: 4.5%; } /* 税額/税率 */
+.col-12 { width: 6.0%; } /* 期限/ロット */
+.col-13 { width: 9.0%; } /* 得意先/伝票番号 */
+.col-14 { width: 3.5%; } /* 行/MA */
+/* ▲▲▲ 修正ここまで ▲▲▲ */
+
+----- C:\Dev\WASABI\static\js\aggregation.js -----
+import { transactionTypeMap, createUploadTableHTML, renderUploadTableRows } from './common_table.js';
+
+let view, runBtn, printBtn, outputContainer, startDateInput, endDateInput, kanaNameInput;
+
+function renderResults(data) {
+    if (!data || data.length === 0) {
+        outputContainer.innerHTML = "<p>対象データが見つかりませんでした。</p>";
+        return;
+    }
+
+    // 全体のHTML構造を構築
+    let html = '';
+    data.forEach((yjGroup, yjIndex) => {
+        // YJグループのサマリーヘッダー
+        html += `
+            <div class="agg-yj-header">
+                <span>YJ: ${yjGroup.yjCode}</span>
+                <span class="product-name">${yjGroup.productName}</span>
+                <span class="balance-info">
+                    期首: ${yjGroup.startingBalance.toFixed(2)} | 
+                    変動: ${yjGroup.netChange.toFixed(2)} | 
+                    期末: ${yjGroup.endingBalance.toFixed(2)}
+                </span>
+            </div>
+        `;
+
+        // 包装ごとのコンテナ
+        yjGroup.packageLedgers.forEach((pkg, pkgIndex) => {
+            const tableId = `agg-table-${yjIndex}-${pkgIndex}`;
+            html += `
+                <div class="agg-pkg-header">
+                    包装: ${pkg.packageKey}
+                </div>
+                <div id="${tableId}-container"></div>
+            `;
+        });
+    });
+    outputContainer.innerHTML = html;
+
+    // HTML構造をDOMに挿入した後、各コンテナに共通テーブルを描画
+    data.forEach((yjGroup, yjIndex) => {
+        yjGroup.packageLedgers.forEach((pkg, pkgIndex) => {
+            const tableId = `agg-table-${yjIndex}-${pkgIndex}`;
+            const container = document.getElementById(`${tableId}-container`);
+            if (container) {
+                // 共通のテーブル作成関数を呼び出し
+                container.innerHTML = createUploadTableHTML(tableId);
+                // 共通の行描画関数を呼び出し (トランザクションリストを渡す)
+                // バックエンドから渡されるLedgerTransactionからTransactionRecord部分のみを渡す
+                const transactions = pkg.transactions.map(lt => ({ ...lt.TransactionRecord, runningBalance: lt.runningBalance }));
+                renderUploadTableRows(tableId, transactions);
+            }
+        });
+    });
+}
+
+
+export function initAggregation() {
+    view = document.getElementById('aggregation-view');
+    if (!view) return;
+
+    runBtn = document.getElementById('run-aggregation-btn');
+    printBtn = document.getElementById('print-aggregation-btn');
+    outputContainer = document.getElementById('aggregation-output-container');
+    startDateInput = document.getElementById('startDate');
+    endDateInput = document.getElementById('endDate');
+    kanaNameInput = document.getElementById('kanaName');
+
+    const today = new Date();
+    const threeMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 3, today.getDate());
+    endDateInput.value = today.toISOString().slice(0, 10);
+    startDateInput.value = threeMonthsAgo.toISOString().slice(0, 10);
+
+    printBtn.addEventListener('click', () => window.print());
+
+    runBtn.addEventListener('click', async () => {
+        window.showLoading();
+        const params = new URLSearchParams({
+            startDate: startDateInput.value.replace(/-/g, ''),
+            endDate: endDateInput.value.replace(/-/g, ''),
+            kanaName: kanaNameInput.value,
+        });
+
+        try {
+            const res = await fetch(`/api/aggregation?${params.toString()}`);
+            if (!res.ok) {
+                const errText = await res.text();
+                throw new Error(errText || 'Aggregation failed');
+            }
+            const data = await res.json();
+            renderResults(data);
+        } catch (err) {
+            outputContainer.innerHTML = `<p style="color:red;">エラー: ${err.message}</p>`;
+        } finally {
+            window.hideLoading();
+        }
+    });
+}
+
 ----- C:\Dev\WASABI\static\js\app.js -----
+import { initInOut, resetInOutView } from './inout.js';
 import { initDatUpload } from './dat.js';
 import { initUsageUpload } from './usage.js';
+import { initInventoryUpload } from './inventory.js';
+import { initAggregation } from './aggregation.js'; // 集計モジュールをインポート
 
 // Global UI Elements
 const loadingOverlay = document.getElementById('loading-overlay');
 const notificationBox = document.getElementById('notification-box');
 
+// Global helper functions
 window.showLoading = () => loadingOverlay.classList.remove('hidden');
 window.hideLoading = () => loadingOverlay.classList.add('hidden');
 window.showNotification = (message, type = 'success') => {
@@ -2714,25 +2969,62 @@ window.showNotification = (message, type = 'success') => {
     setTimeout(() => { notificationBox.classList.remove('show'); }, 3000);
 };
 
-// Main Application Logic
 document.addEventListener('DOMContentLoaded', () => {
+    // --- DOM Elements ---
+    const allViews = document.querySelectorAll('main > div[id$="-view"]');
+    const inOutBtn = document.getElementById('inOutViewBtn');
     const datBtn = document.getElementById('datBtn');
-    const datFileInput = document.getElementById('datFileInput');
     const usageBtn = document.getElementById('usageBtn');
+    const inventoryBtn = document.getElementById('inventoryBtn');
+    const aggregationBtn = document.getElementById('aggregationBtn'); // 集計ボタンを取得
+    
+    const datFileInput = document.getElementById('datFileInput');
     const usageFileInput = document.getElementById('usageFileInput');
+    const inventoryFileInput = document.getElementById('inventoryFileInput');
 
-    // Initialize the uploader logic for both types
+    // --- Initialize all modules ---
+    initInOut();
     initDatUpload();
     initUsageUpload();
+    initInventoryUpload();
+    initAggregation(); // 集計モジュールを初期化
 
-    // Make the buttons click their respective hidden file inputs
+    // --- View Switching Logic ---
+    function showView(viewIdToShow) {
+        allViews.forEach(view => {
+            view.classList.toggle('hidden', view.id !== viewIdToShow);
+        });
+    }
+
+    // --- Event Listeners ---
+    inOutBtn.addEventListener('click', () => {
+        showView('in-out-view');
+        resetInOutView();
+    });
     datBtn.addEventListener('click', () => {
+        showView('upload-view');
+        document.getElementById('upload-view-title').textContent = `DAT File Upload`;
+        document.getElementById('upload-output-container').innerHTML = `<p>ファイルを選択してください...</p>`;
         datFileInput.click();
     });
-
     usageBtn.addEventListener('click', () => {
+        showView('upload-view');
+        document.getElementById('upload-view-title').textContent = `USAGE File Upload`;
+        document.getElementById('upload-output-container').innerHTML = `<p>ファイルを選択してください...</p>`;
         usageFileInput.click();
     });
+    inventoryBtn.addEventListener('click', () => {
+        showView('inventory-view');
+        document.getElementById('inventory-output-container').innerHTML = `<p>棚卸ファイルを選択してください...</p>`;
+        inventoryFileInput.click();
+    });
+    aggregationBtn.addEventListener('click', () => {
+        showView('aggregation-view');
+    });
+
+    // --- Initial State ---
+    showView('in-out-view');
+    resetInOutView();
 });
 
 ----- C:\Dev\WASABI\static\js\common_table.js -----
@@ -2741,26 +3033,36 @@ export const transactionTypeMap = {
     5: "棚卸減", 11: "入庫", 12: "出庫", 30: "月末",
 };
 
+// teble.htmlのレイアウトを正確に再現する関数
 export function createUploadTableHTML(tableId) {
+  const colgroup = `
+    <colgroup>
+      <col class="col-1"><col class="col-2"><col class="col-3"><col class="col-4"><col class="col-5">
+      <col class="col-6"><col class="col-7"><col class="col-8"><col class="col-9"><col class="col-10">
+      <col class="col-11"><col class="col-12"><col class="col-13"><col class="col-14">
+    </colgroup>
+  `;
   const header = `
     <thead>
       <tr>
-        <th rowspan="2">日付</th><th rowspan="2">種別</th><th>YJ</th><th colspan="2">製品名</th>
-        <th rowspan="2">個数</th><th>JAN数量</th><th>JAN包装数</th><th>JAN単位</th>
-        <th>単価</th><th>税額</th><th>期限</th><th>ロット</th><th>MA</th>
+        <th rowspan="2">－</th>
+        <th>日付</th><th class="yj-jan-code">YJ</th><th colspan="2">製品名</th>
+        <th>個数</th><th>YJ数量</th><th>YJ包装数</th><th>YJ単位</th>
+        <th>単価</th><th>税額</th><th>期限</th><th>得意先</th><th>行</th>
       </tr>
       <tr>
-        <th>JAN</th><th>包装</th><th>メーカー</th><th>YJ数量</th>
-        <th>YJ包装数</th><th>YJ単位</th><th>金額</th><th>税率</th>
-        <th>得意先</th><th>伝票番号</th><th>行</th>
+        <th>種別</th><th class="yj-jan-code">JAN</th><th>包装</th><th>メーカー</th>
+        <th>剤型</th><th>JAN数量</th><th>JAN包装数</th><th>JAN単位</th>
+        <th>金額</th><th>税率</th><th>ロット</th><th>伝票番号</th><th>MA</th>
       </tr>
     </thead>
   `;
-  return `<table id="${tableId}" class="data-table">${header}<tbody>
+  return `<table id="${tableId}" class="data-table">${colgroup}${header}<tbody>
     <tr><td colspan="14">ファイルを選択してください。</td></tr>
   </tbody></table>`;
 }
 
+// 新レイアウトに合わせて表示用の行を生成する関数
 export function renderUploadTableRows(tableId, records) {
   const tbody = document.querySelector(`#${tableId} tbody`);
   if (!records || records.length === 0) {
@@ -2772,43 +3074,45 @@ export function renderUploadTableRows(tableId, records) {
   records.forEach(rec => {
     html += `
       <tr>
-        <td rowspan="2">${rec.transactionDate || ""}</td>
-        <td rowspan="2">${transactionTypeMap[rec.flag] ?? ""}</td>
-        <td>${rec.yjCode || ""}</td>
+        <td rowspan="2"></td>
+        <td>${rec.transactionDate || ""}</td>
+        <td class="yj-jan-code">${rec.yjCode || ""}</td>
         <td class="left" colspan="2">${rec.productName || ""}</td>
-        <td class="right" rowspan="2">${rec.datQuantity?.toFixed(2) || ""}</td>
-        <td class="right">${rec.janQuantity?.toFixed(2) || ""}</td>
-        <td class="right">${rec.janPackUnitQty || ""}</td>
-        <td>${rec.janUnitName || ""}</td>
-        <td class="right">${rec.unitPrice?.toFixed(2) || ""}</td>
-        <td class="right">${rec.taxAmount?.toFixed(2) || ""}</td>
-        <td>${rec.expiryDate || ""}</td>
-        <td class="left">${rec.lotNumber || ""}</td>
-        <td class="left">${rec.processFlagMA || ""}</td>
-      </tr>
-      <tr>
-        <td>${rec.janCode || ""}</td>
-        <td class="left">${rec.packageSpec || ""}</td>
-        <td class="left">${rec.makerName || ""}</td>
+        <td class="right">${rec.datQuantity?.toFixed(2) || ""}</td>
         <td class="right">${rec.yjQuantity?.toFixed(2) || ""}</td>
         <td class="right">${rec.yjPackUnitQty || ""}</td>
         <td>${rec.yjUnitName || ""}</td>
+        <td class="right">${rec.unitPrice?.toFixed(4) || ""}</td>
+        <td class="right">${rec.taxAmount?.toFixed(2) || ""}</td>
+        <td>${rec.expiryDate || ""}</td>
+        <td class="left">${rec.clientCode || ""}</td>
+        <td class="right">${rec.lineNumber || ""}</td>
+      </tr>
+      <tr>
+        <td>${transactionTypeMap[rec.flag] ?? ""}</td>
+        <td class="yj-jan-code">${rec.janCode || ""}</td>
+        <td class="left">${rec.packageSpec || ""}</td>
+        <td class="left">${rec.makerName || ""}</td>
+        <td class="left">${rec.usageClassification || ""}</td>
+        <td class="right">${rec.janQuantity?.toFixed(2) || ""}</td>
+        <td class="right">${rec.janPackUnitQty || ""}</td>
+        <td>${rec.janUnitName || ""}</td>
         <td class="right">${rec.subtotal?.toFixed(2) || ""}</td>
         <td class="right">${rec.taxRate != null ? (rec.taxRate * 100).toFixed(0) + "%" : ""}</td>
-        <td class="left">${rec.clientCode || ""}</td>
+        <td class="left">${rec.lotNumber || ""}</td>
         <td class="left">${rec.receiptNumber || ""}</td>
-        <td class="right">${rec.lineNumber || ""}</td>
+        <td class="left">${rec.processFlagMA || ""}</td>
       </tr>
     `;
   });
   tbody.innerHTML = html;
 }
 
+// (setupDateDropdown and setupClientDropdown functions are unchanged)
 export function setupDateDropdown(inputEl) {
   if (!inputEl) return;
   inputEl.value = new Date().toISOString().slice(0, 10);
 }
-
 export async function setupClientDropdown(selectEl) {
   if (!selectEl) return;
   const preservedOptions = Array.from(selectEl.querySelectorAll('option[value=""]'));
@@ -2870,70 +3174,52 @@ export function initDatUpload() {
 
 ----- C:\Dev\WASABI\static\js\inout_details_table.js -----
 import { initModal, showModal } from './inout_modal.js';
-import { transactionTypeMap } from './common_table.js';
+import { transactionTypeMap, createUploadTableHTML } from './common_table.js';
 
 let tableBody, addRowBtn, tableContainer;
 
-function createInoutTableHTML(tableId) {
-    const header = `
-        <thead>
-            <tr>
-                <th rowspan="2">操作</th><th rowspan="2">種別</th><th>YJ</th><th colspan="2">製品名</th>
-                <th rowspan="2">個数</th><th>JAN数量</th><th>JAN包装数</th><th>JAN単位</th><th>単価</th>
-                <th>税額</th><th>期限</th><th>ロット</th><th>MA</th>
-            </tr>
-            <tr>
-                <th>JAN</th><th>包装</th><th>メーカー</th><th>YJ数量</th>
-                <th>YJ包装数</th><th>YJ単位</th><th>金額</th><th>税率</th>
-                <th>得意先</th><th>伝票番号</th><th>行</th>
-            </tr>
-        </thead>
-    `;
-    return `<table id="${tableId}" class="data-table">${header}<tbody>
-        <tr><td colspan="14">ヘッダーで情報を選択後、「明細を追加」ボタンを押してください。</td></tr>
-    </tbody></table>`;
-}
-
-function createRowsHTML(record = {}) {
+function createInoutRowsHTML(record = {}) {
     const rowId = record.lineNumber || `new-${Date.now()}`;
-    
     const janQuantity = record.janQuantity ?? 1;
+    const datQuantity = record.datQuantity ?? 1;
     const nhiPrice = record.nhiPrice || 0;
     const janPackInnerQty = record.janPackInnerQty || 0;
     const yjQuantity = janQuantity * janPackInnerQty;
     const subtotal = yjQuantity * nhiPrice;
     const transactionType = record.flag ? (transactionTypeMap[record.flag] || '') : '';
-    
+
     const upperRow = `
         <tr data-row-id="${rowId}">
             <td rowspan="2" class="center"><button class="delete-row-btn btn">削除</button></td>
-            <td rowspan="2">${transactionType}</td>
-            <td class="display-yj-code">${record.yjCode || ''}</td>
+            <td>${record.transactionDate || ''}</td>
+            <td class="yj-jan-code display-yj-code">${record.yjCode || ''}</td>
             <td colspan="2" class="product-name-cell left" style="cursor: pointer; text-decoration: underline; color: blue;">${record.productName || 'ここをクリックして製品を検索'}</td>
-            <td rowspan="2" class="right">${record.datQuantity || ''}</td>
-            <td><input type="number" name="janQuantity" value="${janQuantity}" step="any" class="right"></td>
-            <td class="right display-jan-pack-unit-qty">${record.janPackUnitQty || ''}</td>
-            <td class="display-jan-unit-name">${record.janUnitName || ''}</td>
+            <td class="right"><input type="number" name="datQuantity" value="${datQuantity}" step="any"></td>
+            <td class="right display-yj-quantity">${yjQuantity.toFixed(2)}</td>
+            <td class="right display-yj-pack-unit-qty">${record.yjPackUnitQty || ''}</td>
+            <td class="display-yj-unit-name">${record.yjUnitName || ''}</td>
             <td class="right display-unit-price">${nhiPrice.toFixed(4)}</td>
             <td class="right">${record.taxAmount || ''}</td>
             <td><input type="text" name="expiryDate" value="${record.expiryDate || ''}" placeholder="YYYYMM"></td>
-            <td><input type="text" name="lotNumber" value="${record.lotNumber || ''}"></td>
-            <td class="left">${record.processFlagMA || ''}</td>
+            <td class="left">${record.clientCode || ''}</td>
+            <td class="right">${record.lineNumber || ''}</td>
         </tr>`;
 
     const lowerRow = `
         <tr data-row-id-lower="${rowId}">
-            <td class="display-jan-code">${record.productCode || record.janCode || ''}</td>
+            <td>${transactionType}</td>
+            <td class="yj-jan-code display-jan-code">${record.productCode || record.janCode || ''}</td>
             <td class="left display-package-spec">${record.formattedPackageSpec || record.packageSpec || ''}</td>
             <td class="left display-maker-name">${record.makerName || ''}</td>
-            <td class="right display-yj-quantity">${yjQuantity.toFixed(2)}</td>
-            <td class="right display-yj-pack-unit-qty">${record.yjPackUnitQty || ''}</td>
-            <td class="display-yj-unit-name">${record.yjUnitName || ''}</td>
+            <td class="left display-usage-classification">${record.usageClassification || ''}</td>
+            <td class="right"><input type="number" name="janQuantity" value="${janQuantity}" step="any"></td>
+            <td class="right display-jan-pack-unit-qty">${record.janPackUnitQty || ''}</td>
+            <td class="display-jan-unit-name">${record.janUnitName || ''}</td>
             <td class="right display-subtotal">${subtotal.toFixed(2)}</td>
             <td class="right">${record.taxRate != null ? (record.taxRate * 100).toFixed(0) + "%" : ""}</td>
-            <td class="left">${record.clientCode || ''}</td>
+            <td class="left"><input type="text" name="lotNumber" value="${record.lotNumber || ''}"></td>
             <td class="left">${record.receiptNumber || ''}</td>
-            <td class="right">${record.lineNumber || ''}</td>
+            <td class="left">${record.processFlagMA || ''}</td>
         </tr>`;
 
     return upperRow + lowerRow;
@@ -2944,14 +3230,12 @@ export function populateDetailsTable(records) {
         clearDetailsTable();
         return;
     }
-    tableBody.innerHTML = records.map(createRowsHTML).join('');
+    tableBody.innerHTML = records.map(createInoutRowsHTML).join('');
     
     tableBody.querySelectorAll('tr[data-row-id]').forEach((row, index) => {
         if (records[index]) {
-            // master object全体をdatasetに保存する
             const masterData = { ...records[index] };
-            // TransactionRecordのフィールドは除外して純粋なマスター情報にする
-            delete masterData.id; 
+            delete masterData.id;
             delete masterData.runningBalance;
             row.dataset.product = JSON.stringify(masterData);
         }
@@ -2959,7 +3243,7 @@ export function populateDetailsTable(records) {
 }
 
 export function clearDetailsTable() {
-    if(tableBody) {
+    if (tableBody) {
         tableBody.innerHTML = `<tr><td colspan="14">ヘッダーで情報を選択後、「明細を追加」ボタンを押してください。</td></tr>`;
     }
 }
@@ -2967,18 +3251,19 @@ export function clearDetailsTable() {
 export function getDetailsData() {
     const records = [];
     const rows = tableBody.querySelectorAll('tr[data-row-id]');
-    
     rows.forEach(row => {
         const productDataString = row.dataset.product;
         if (!productDataString || productDataString === '{}') return;
-
         const productData = JSON.parse(productDataString);
+        const lowerRow = row.nextElementSibling;
         
         const record = {
-            ...productData, // ProductMasterの全フィールドを含む
-            janQuantity: parseFloat(row.querySelector('input[name="janQuantity"]').value) || 0,
+            productCode: productData.productCode,
+            productName: productData.productName,
+            datQuantity: parseFloat(row.querySelector('input[name="datQuantity"]').value) || 0,
             expiryDate: row.querySelector('input[name="expiryDate"]').value,
-            lotNumber: row.querySelector('input[name="lotNumber"]').value,
+            janQuantity: parseFloat(lowerRow.querySelector('input[name="janQuantity"]').value) || 0,
+            lotNumber: lowerRow.querySelector('input[name="lotNumber"]').value,
         };
         records.push(record);
     });
@@ -2988,46 +3273,48 @@ export function getDetailsData() {
 function recalculateRow(upperRow) {
     const productDataString = upperRow.dataset.product;
     if (!productDataString) return;
-
     const product = JSON.parse(productDataString);
     const lowerRow = upperRow.nextElementSibling;
     if (!lowerRow) return;
     
-    const janQuantity = parseFloat(upperRow.querySelector('[name="janQuantity"]').value) || 0;
+    const janQuantity = parseFloat(lowerRow.querySelector('[name="janQuantity"]').value) || 0;
     const nhiPrice = parseFloat(product.nhiPrice) || 0;
     const janPackInnerQty = parseFloat(product.janPackInnerQty) || 0;
-
     const yjQuantity = janQuantity * janPackInnerQty;
     const subtotal = yjQuantity * nhiPrice;
 
-    lowerRow.querySelector('.display-yj-quantity').textContent = yjQuantity.toFixed(2);
+    upperRow.querySelector('.display-yj-quantity').textContent = yjQuantity.toFixed(2);
     lowerRow.querySelector('.display-subtotal').textContent = subtotal.toFixed(2);
 }
 
 export function initDetailsTable() {
     tableContainer = document.getElementById('inout-details-container');
     addRowBtn = document.getElementById('addRowBtn');
-    if(!tableContainer || !addRowBtn) return;
-    tableContainer.innerHTML = createInoutTableHTML('inout-details-table');
+    if (!tableContainer || !addRowBtn) return;
+    
+    tableContainer.innerHTML = createUploadTableHTML('inout-details-table');
     tableBody = document.querySelector('#inout-details-table tbody');
 
     initModal((selectedProduct, activeRow) => {
         activeRow.dataset.product = JSON.stringify(selectedProduct);
         const lowerRow = activeRow.nextElementSibling;
-
-        activeRow.querySelector('.product-name-cell').textContent = selectedProduct.productName;
+        
+        // Populate upper row
         activeRow.querySelector('.display-yj-code').textContent = selectedProduct.yjCode;
+        activeRow.querySelector('.product-name-cell').textContent = selectedProduct.productName;
+        activeRow.querySelector('.display-yj-pack-unit-qty').textContent = selectedProduct.yjPackUnitQty || '';
+        activeRow.querySelector('.display-yj-unit-name').textContent = selectedProduct.yjUnitName || '';
         activeRow.querySelector('.display-unit-price').textContent = (selectedProduct.nhiPrice || 0).toFixed(4);
-        activeRow.querySelector('.display-jan-pack-unit-qty').textContent = selectedProduct.janPackUnitQty || '';
-        activeRow.querySelector('.display-jan-unit-name').textContent = selectedProduct.janUnitName || '';
         
+        // Populate lower row
         lowerRow.querySelector('.display-jan-code').textContent = selectedProduct.productCode;
-        lowerRow.querySelector('.display-package-spec').textContent = selectedProduct.formattedPackageSpec || selectedProduct.packageSpec || '';
+        lowerRow.querySelector('.display-package-spec').textContent = selectedProduct.formattedPackageSpec || '';
         lowerRow.querySelector('.display-maker-name').textContent = selectedProduct.makerName;
-        lowerRow.querySelector('.display-yj-pack-unit-qty').textContent = selectedProduct.yjPackUnitQty || '';
-        lowerRow.querySelector('.display-yj-unit-name').textContent = selectedProduct.yjUnitName || '';
+        lowerRow.querySelector('.display-usage-classification').textContent = selectedProduct.usageClassification || ''; // 剤型
+        lowerRow.querySelector('.display-jan-pack-unit-qty').textContent = selectedProduct.janPackUnitQty || '';
+        lowerRow.querySelector('.display-jan-unit-name').textContent = selectedProduct.janUnitName || '';
         
-        const quantityInput = activeRow.querySelector('input[name="janQuantity"]');
+        const quantityInput = lowerRow.querySelector('input[name="janQuantity"]');
         quantityInput.focus();
         quantityInput.select();
         recalculateRow(activeRow);
@@ -3037,29 +3324,28 @@ export function initDetailsTable() {
         if (tableBody.querySelector('td[colspan="14"]')) {
             tableBody.innerHTML = '';
         }
-        tableBody.insertAdjacentHTML('beforeend', createRowsHTML());
+        tableBody.insertAdjacentHTML('beforeend', createInoutRowsHTML());
     });
 
     tableBody.addEventListener('click', (e) => {
-        const target = e.target;
-        if (target.classList.contains('delete-row-btn')) {
-            const upperRow = target.closest('tr');
+        if (e.target.classList.contains('delete-row-btn')) {
+            const upperRow = e.target.closest('tr');
             const lowerRow = upperRow.nextElementSibling;
             if(lowerRow) lowerRow.remove();
             upperRow.remove();
             if (tableBody.children.length === 0) {
-                clearDetailsTable();
+                 clearDetailsTable();
             }
         }
-        if (target.classList.contains('product-name-cell')) {
-            const activeRow = target.closest('tr');
-            showModal(activeRow);
+        if (e.target.classList.contains('product-name-cell')) {
+            showModal(e.target.closest('tr'));
         }
     });
 
     tableBody.addEventListener('input', (e) => {
-        if(e.target.name === 'janQuantity') {
-            recalculateRow(e.target.closest('tr'));
+        const upperRow = e.target.closest('tr[data-row-id]') || e.target.closest('tr[data-row-id-lower]')?.previousElementSibling;
+        if(upperRow) {
+            recalculateRow(upperRow);
         }
     });
 }
@@ -3085,7 +3371,8 @@ async function initializeClientDropdown() {
 export function resetHeader() {
     if (!clientSelect || !headerDateInput) return;
     setupDateDropdown(headerDateInput);
-    initializeClientDropdown();
+    initializeClientDropdown(); // Dropdown population is now centralized here
+    
     receiptSelect.innerHTML = `
         <option value="">日付を選択してください</option>
         <option value="${NEW_ENTRY_VALUE}">--- 新規作成 ---</option>
@@ -3106,15 +3393,13 @@ export async function initHeader(getDetailsData, clearDetailsTable, populateDeta
     headerTypeSelect = document.getElementById('in-out-type');
 
     if (!clientSelect || !receiptSelect || !saveBtn || !deleteBtn) return;
-    deleteBtn.disabled = true;
-
-    setupDateDropdown(headerDateInput);
-    await initializeClientDropdown();
     
+    // [修正点] initHeaderからはdropdownの初期化呼び出しを削除し、イベントリスナーの設定のみに限定
+    
+    // --- ONE-TIME EVENT LISTENER SETUP ---
     headerDateInput.addEventListener('change', async () => {
         const date = headerDateInput.value.replace(/-/g, '');
         if (!date) return;
-
         try {
             const res = await fetch(`/api/receipts?date=${date}`);
             if (!res.ok) throw new Error('伝票の取得に失敗');
@@ -3124,7 +3409,6 @@ export async function initHeader(getDetailsData, clearDetailsTable, populateDeta
                 <option value="">選択してください</option>
                 <option value="${NEW_ENTRY_VALUE}">--- 新規作成 ---</option>
             `;
-
             if (receiptNumbers && receiptNumbers.length > 0) {
                 receiptNumbers.forEach(num => {
                     const opt = document.createElement('option');
@@ -3133,9 +3417,7 @@ export async function initHeader(getDetailsData, clearDetailsTable, populateDeta
                     receiptSelect.appendChild(opt);
                 });
             }
-        } catch (err) {
-            console.error(err);
-        }
+        } catch (err) { console.error(err); }
     });
 
     clientSelect.addEventListener('change', () => {
@@ -3170,14 +3452,12 @@ export async function initHeader(getDetailsData, clearDetailsTable, populateDeta
                 const res = await fetch(`/api/transaction/${selectedValue}`);
                 if (!res.ok) throw new Error('明細の読込に失敗');
                 const records = await res.json();
-
                 if (records && records.length > 0) {
                     currentLoadedReceipt = selectedValue;
                     clientSelect.value = records[0].clientCode;
                     headerTypeSelect.value = records[0].flag === 11 ? "入庫" : "出庫";
                     newClientName = null;
                 }
-                
                 populateDetailsTable(records);
             } catch (err) {
                 console.error(err);
@@ -3192,7 +3472,6 @@ export async function initHeader(getDetailsData, clearDetailsTable, populateDeta
         let clientCode = clientSelect.value;
         let clientNameToSave = '';
         let isNewClient = false;
-
         if (newClientName && clientCode.startsWith('new:')) {
             clientNameToSave = newClientName;
             isNewClient = true;
@@ -3203,23 +3482,18 @@ export async function initHeader(getDetailsData, clearDetailsTable, populateDeta
                 return;
             }
         }
-        
         const records = getDetailsData();
         if (records.length === 0) {
             window.showNotification('保存する明細データがありません。', 'error');
             return;
         }
-        
         const payload = {
-            isNewClient: isNewClient,
-            clientCode: clientCode,
-            clientName: clientNameToSave,
+            isNewClient, clientCode, clientName: clientNameToSave,
             transactionDate: headerDateInput.value.replace(/-/g, ''),
             transactionType: headerTypeSelect.value,
             records: records,
             originalReceiptNumber: currentLoadedReceipt
         };
-
         window.showLoading();
         try {
             const res = await fetch('/api/inout/save', {
@@ -3231,9 +3505,7 @@ export async function initHeader(getDetailsData, clearDetailsTable, populateDeta
             if (!res.ok) {
                 throw new Error(resData.message || `保存に失敗しました (HTTP ${res.status})`);
             }
-
             window.showNotification(`データを保存しました。\n伝票番号: ${resData.receiptNumber}`, 'success');
-            
             resetHeader();
             clearDetailsTable();
         } catch (err) {
@@ -3250,24 +3522,17 @@ export async function initHeader(getDetailsData, clearDetailsTable, populateDeta
             window.showNotification("削除対象の伝票が選択されていません。", 'error');
             return;
         }
-
         if (!confirm(`伝票番号 [${receiptNumber}] を完全に削除します。よろしいですか？`)) {
             return;
         }
-        
         window.showLoading();
         try {
-            const res = await fetch(`/api/transaction/delete/${receiptNumber}`, {
-                method: 'DELETE',
-            });
-            
+            const res = await fetch(`/api/transaction/delete/${receiptNumber}`, { method: 'DELETE' });
             const errData = await res.json().catch(() => null);
             if (!res.ok) {
                 throw new Error(errData?.message || '削除に失敗しました。');
             }
-
             window.showNotification(`伝票 [${receiptNumber}] を削除しました。`, 'success');
-            
             resetHeader();
             clearDetailsTable();
         } catch(err) {
@@ -3277,8 +3542,6 @@ export async function initHeader(getDetailsData, clearDetailsTable, populateDeta
             window.hideLoading();
         }
     });
-
-    headerDateInput.dispatchEvent(new Event('change'));
 }
 
 ----- C:\Dev\WASABI\static\js\inout_modal.js -----
@@ -3386,6 +3649,56 @@ export function resetInOutView() {
     resetHeader();
 }
 
+----- C:\Dev\WASABI\static\js\inventory.js -----
+import { createUploadTableHTML, renderUploadTableRows } from './common_table.js';
+
+// DOM要素をキャッシュ
+const fileInput = document.getElementById('inventoryFileInput');
+const outputContainer = document.getElementById('inventory-output-container');
+
+async function handleInventoryUpload(event) {
+    const files = event.target.files;
+    if (!files.length) return;
+
+    // テーブルの準備と処理中メッセージの表示
+    outputContainer.innerHTML = createUploadTableHTML('inventory-output-table');
+    const tbody = outputContainer.querySelector('tbody');
+    tbody.innerHTML = `<tr><td colspan="14" class="center">Processing...</td></tr>`;
+    
+    window.showLoading();
+    try {
+        const formData = new FormData();
+        for (const file of files) {
+            formData.append('file', file);
+        }
+
+        const response = await fetch('/api/inventory/upload', {
+            method: 'POST',
+            body: formData,
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(data.message || 'Inventory file processing failed.');
+        }
+
+        // 共通のテーブル描画関数を使って結果を表示
+        renderUploadTableRows('inventory-output-table', data.details);
+        window.showNotification(data.message || 'Inventory file processed successfully.', 'success');
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="14" class="center" style="color:red;">Error: ${err.message}</td></tr>`;
+        window.showNotification(err.message, 'error');
+    } finally {
+        window.hideLoading();
+        event.target.value = ''; // ファイル入力をリセット
+    }
+}
+
+export function initInventoryUpload() {
+    if (!fileInput) return;
+    fileInput.addEventListener('change', handleInventoryUpload);
+}
+
 ----- C:\Dev\WASABI\static\js\upload.js -----
 import { createUploadTableHTML, renderUploadTableRows } from './common_table.js';
 
@@ -3483,31 +3796,90 @@ export function initUsageUpload() {
     <meta charset="UTF-8">
     <title>WASABI</title>
     <link rel="stylesheet" href="/static/css/styles.css">
+    <link rel="stylesheet" href="/static/css/inout.css">
 </head>
 <body>
-    <header id="main-header">
-        <button id="datBtn" class="btn">DAT File Upload</button>
-        <button id="usageBtn" class="btn">USAGE File Upload</button>
-        <input type="file" id="datFileInput" multiple style="display:none;">
-        <input type="file" id="usageFileInput" style="display:none;">
-    </header>
 
-    <main id="app-container">
-        <div id="upload-view">
-            <div id="upload-output-container">
-                <p>上のボタンからアップロードするファイルの種類を選択してください。</p>
-            </div>
+<header id="main-header">
+    <button id="inOutViewBtn" class="btn">入庫・出庫</button>
+    <button id="datBtn" class="btn">納品・返品 (DAT)</button>
+    <button id="usageBtn" class="btn">処方 (USAGE)</button>
+    <button id="inventoryBtn" class="btn">棚卸</button>
+    <button id="aggregationBtn" class="btn">集計</button>
+</header>
+
+<main>
+    <input type="file" id="datFileInput" multiple style="display:none;">
+    <input type="file" id="usageFileInput" style="display:none;">
+    <input type="file" id="inventoryFileInput" style="display:none;">
+
+    <div id="in-out-view" class="inout-view-container">
+        <div class="inout-header-controls">
+            <div class="field-group"><label for="in-out-date">日付</label><input type="date" id="in-out-date"></div>
+            <div class="field-group"><label for="in-out-type">種別</label><select id="in-out-type"><option>入庫</option><option>出庫</option></select></div>
+            <div class="field-group"><label for="in-out-client">得意先</label><select id="in-out-client"></select></div>
+            <div class="field-group"><label for="in-out-receipt">伝票番号</label><select id="in-out-receipt"></select></div>
+            <div class="buttons-group"><button id="saveBtn" class="btn">保存</button><button id="deleteBtn" class="btn">伝票削除</button></div>
         </div>
-    </main>
+        <div class="inout-details-header"><button id="addRowBtn" class="btn">明細を追加</button></div>
+        <div id="inout-details-container"></div>
+    </div>
 
-    <div id="loading-overlay" class="hidden">
-        <div class="spinner"></div>
-        <p>Processing...</p>
+    <div id="upload-view" class="hidden">
+        <h3 id="upload-view-title">File Upload</h3>
+        <div id="upload-output-container"></div>
     </div>
     
-    <div id="notification-box" class="notification-box"></div>
+    <div id="inventory-view" class="hidden">
+        <h3>Inventory File Upload</h3>
+        <div id="inventory-output-container"></div>
+    </div>
+    <div id="aggregation-view" class="hidden">
+        <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px;">
+            <div class="field-group">
+                <label for="startDate">開始日</label>
+                <input type="date" id="startDate">
+            </div>
+            <div class="field-group">
+                <label for="endDate">終了日</label>
+                <input type="date" id="endDate">
+            </div>
+            <div class="field-group">
+                <label for="kanaName">カナ名</label>
+                <input type="text" id="kanaName" placeholder="（部分一致）" style="min-width: 200px;">
+            </div>
+            <div class="buttons-group" style="margin-left: auto;">
+                <button id="run-aggregation-btn" class="btn">集計実行</button>
+                <button id="print-aggregation-btn" class="btn">印刷</button>
+            </div>
+        </div>
+        <div id="aggregation-output-container"></div>
+    </div>
 
-    <script type="module" src="/static/js/app.js"></script>
+    <div id="search-modal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>薬品検索</h2>
+                <button id="closeModalBtn" class="close-button">&times;</button>
+            </div>
+            <div style="display: flex; gap: 5px; margin-bottom: 10px;">
+                <input type="text" id="product-search-input" placeholder="製品名またはカナ名（2文字以上）" style="flex-grow: 1; padding: 5px;">
+                <button id="product-search-btn" class="btn">検索</button>
+            </div>
+            <div class="modal-body" id="search-results-container">
+                <table id="search-results-table">
+                    <thead><tr><th>製品名</th><th>メーカー</th><th>包装</th><th>YJコード</th><th>JANコード</th><th>選択</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</main>
+
+<div id="loading-overlay" class="hidden"><div class="spinner"></div><p>Processing...</p></div>
+<div id="notification-box" class="notification-box"></div>
+
+<script type="module" src="/static/js/app.js"></script>
 </body>
 </html>
 
@@ -3637,28 +4009,28 @@ func FormatPackageSpec(jcshms *model.JCShms) string {
 	pkg := fmt.Sprintf("%s %g%s", jcshms.JC037, jcshms.JC044, yjUnitName)
 
 	if jcshms.JA006.Valid && jcshms.JA008.Valid && jcshms.JA008.Float64 != 0 {
-
-		// ▼▼▼ 修正箇所 ▼▼▼
-		// 指示通り、JAN単位コード(JA007)が0か空であればYJ単位を、それ以外はTANIマスターの単位を使用する
-		janUnitCode := jcshms.JA007.String
-		var janUnitName string
-		if janUnitCode == "0" || janUnitCode == "" {
-			janUnitName = yjUnitName
-		} else {
-			janUnitName = ResolveName(janUnitCode)
+		// ▼▼▼ [修正点] 未使用のyjUnitパラメータを削除 ▼▼▼
+		resolveJanUnitName := func(code string) string {
+			if code != "0" && code != "" {
+				return ResolveName(code)
+			}
+			return "" // 0か空の場合は単位を省略
 		}
-		// ▲▲▲ 修正箇所 ▲▲▲
+
+		janUnitName := resolveJanUnitName(jcshms.JA007.String)
+		// ▲▲▲ 修正ここまで ▲▲▲
 
 		pkg += fmt.Sprintf(" (%g%s×%g%s)",
 			jcshms.JA006.Float64,
 			yjUnitName,
 			jcshms.JA008.Float64,
-			janUnitName, // 修正したロジックで取得した単位名を使用
+			janUnitName,
 		)
 	}
 	return pkg
 }
 
+// (LoadTANIFile, ResolveName, ResolveCode functions are unchanged)
 func LoadTANIFile(path string) (map[string]string, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -3954,7 +4326,6 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"wasabi/aggregation"
 	"wasabi/backup"
 	"wasabi/dat"
 	"wasabi/db"
@@ -3969,39 +4340,35 @@ import (
 )
 
 func main() {
-	// 1. Initialize Database Connection
 	conn, err := sql.Open("sqlite3", "./wasabi.db")
 	if err != nil {
 		log.Fatalf("db open error: %v", err)
 	}
 	defer conn.Close()
 
-	// 2. Load Master Data
 	if err := loader.InitDatabase(conn); err != nil {
 		log.Fatalf("master data initialization failed: %v", err)
-	}
-	if err := db.InitializeSequenceFromMaxYjCode(conn); err != nil {
-		log.Printf("warning: failed to initialize yj sequence: %v", err)
-	}
-	if err := db.InitializeSequenceFromMaxClientCode(conn); err != nil {
-		log.Printf("warning: failed to initialize client sequence: %v", err)
 	}
 	if _, err := units.LoadTANIFile("SOU/TANI.CSV"); err != nil {
 		log.Fatalf("tani master init failed: %v", err)
 	}
 	log.Println("Master data loaded successfully.")
 
-	// 3. Setup HTTP Server
 	mux := http.NewServeMux()
 
-	// API Endpoints
-	mux.HandleFunc("/api/clients", db.GetAllClientsHandler(conn))              // A simple handler for getting all clients
-	mux.HandleFunc("/api/products/search", db.SearchJcshmsByNameHandler(conn)) // A simple handler for product search
-	mux.HandleFunc("/api/units/map", units.GetTaniMapHandler())
+	// --- All API Endpoints for DAT, USAGE, and INOUT ---
 	mux.HandleFunc("/api/dat/upload", dat.UploadDatHandler(conn))
 	mux.HandleFunc("/api/usage/upload", usage.UploadUsageHandler(conn))
-	mux.HandleFunc("/api/inventory/upload", inventory.UploadInventoryHandler(conn))
 	mux.HandleFunc("/api/inout/save", inout.SaveInOutHandler(conn))
+	mux.HandleFunc("/api/clients", db.GetAllClientsHandler(conn))
+	mux.HandleFunc("/api/products/search", db.SearchJcshmsByNameHandler(conn))
+	mux.HandleFunc("/api/units/map", units.GetTaniMapHandler())
+	mux.HandleFunc("/api/receipts", transaction.GetReceiptsHandler(conn))
+	mux.HandleFunc("/api/transaction/", transaction.GetTransactionHandler(conn))
+	mux.HandleFunc("/api/transaction/delete/", transaction.DeleteTransactionHandler(conn))
+
+	// Other handlers from the original source
+	mux.HandleFunc("/api/inventory/upload", inventory.UploadInventoryHandler(conn))
 	mux.HandleFunc("/api/masters/editable", masteredit.GetEditableMastersHandler(conn))
 	mux.HandleFunc("/api/master/update", masteredit.UpdateMasterHandler(conn))
 	mux.HandleFunc("/api/clients/export", backup.ExportClientsHandler(conn))
@@ -4009,18 +4376,13 @@ func main() {
 	mux.HandleFunc("/api/products/export", backup.ExportProductsHandler(conn))
 	mux.HandleFunc("/api/products/import", backup.ImportProductsHandler(conn))
 	mux.HandleFunc("/api/transactions/reprocess", reprocess.ReProcessTransactionsHandler(conn))
-	mux.HandleFunc("/api/aggregation", aggregation.GetAggregationHandler(conn))
-	mux.HandleFunc("/api/receipts", transaction.GetReceiptsHandler(conn))
-	mux.HandleFunc("/api/transaction/", transaction.GetTransactionHandler(conn))
-	mux.HandleFunc("/api/transaction/delete/", transaction.DeleteTransactionHandler(conn))
 
-	// 4. Serve Frontend
+	// Serve Frontend
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "./static/index.html")
 	})
 
-	// 5. Start Server
 	port := ":8080"
 	log.Printf("Server starting on http://localhost%s", port)
 	go openBrowser("http://localhost" + port)
@@ -4036,7 +4398,7 @@ func openBrowser(url string) {
 		err = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
 	case "darwin":
 		err = exec.Command("open", url).Start()
-	default: // linux, freebsd, openbsd, netbsd
+	default: // linux, etc.
 		err = exec.Command("xdg-open", url).Start()
 	}
 	if err != nil {

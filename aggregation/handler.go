@@ -20,17 +20,19 @@ func GetAggregationHandler(conn *sql.DB) http.HandlerFunc {
 			coefficient = 1.5 // Default value
 		}
 
+		// 新しいフィルター条件を構造体に含める
 		filters := model.AggregationFilters{
 			StartDate:   q.Get("startDate"),
 			EndDate:     q.Get("endDate"),
 			KanaName:    q.Get("kanaName"),
 			DrugTypes:   strings.Split(q.Get("drugTypes"), ","),
+			DosageForm:  q.Get("dosageForm"), // 剤型を取得
 			Coefficient: coefficient,
 		}
 
 		results, err := db.GetStockLedger(conn, filters)
 		if err != nil {
-			http.Error(w, "Failed to get aggregated data", http.StatusInternalServerError)
+			http.Error(w, "Failed to get aggregated data: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 

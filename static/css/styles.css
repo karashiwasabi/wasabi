@@ -6,7 +6,7 @@ header { display: flex; align-items: center; gap: 8px; padding: 10px; border-bot
 .btn { font-size: 14px; padding: 8px 12px; background-color: #e9ecef; border: 1px solid #ced4da; border-radius: 4px; cursor: pointer; }
 .btn:hover { background-color: #dee2e6; }
 
-table { border-collapse: collapse; width: 100%; }
+table { border-collapse: collapse; width: 100%; table-layout: fixed; }
 th, td { border: 1px solid black; padding: 4px; vertical-align: middle; }
 th { text-align: center; background-color: #f0f0f0; }
 .yj-jan-code { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -37,18 +37,8 @@ th { text-align: center; background-color: #f0f0f0; }
 .modal-body { overflow-y: auto; }
 .close-button { font-size: 24px; border: none; background: none; cursor: pointer; }
 
-/* teble.htmlから持ってきた列幅指定 */
-.col-1 { width: 3.0%; }  /* 操作 */
-.col-2 { width: 6.0%; }  /* 日付/種別 */
-.col-3 { width: 9.0%; }  /* YJ/JAN */
-.col-4 { width: 14.0%; } /* 製品名/包装 */
-.col-5 { width: 10.0%; } /* 製品名/メーカー */
-.col-6 { width: 4.0%; }  /* 個数/剤型 */
-.col-7 { width: 6.5%; }  /* YJ数量/JAN数量 */
-.col-8 { width: 6.5%; }  /* YJ包装数/JAN包装数 */
-.col-9 { width: 4.5%; }  /* YJ単位/JAN単位 */
-.col-10 { width: 6.5%; } /* 単価/金額 */
-.col-11 { width: 4.5%; } /* 税額/税率 */
-.col-12 { width: 6.0%; } /* 期限/ロット */
-.col-13 { width: 9.0%; } /* 得意先/伝票番号 */
-.col-14 { width: 3.5%; } /* 行/MA */
+.agg-yj-header { background-color: #343a40; color: white; padding: 8px; margin-top: 20px; font-weight: bold; font-size: 16px; display: flex; align-items: center; }
+.agg-yj-header .product-name { margin-left: 20px; flex-grow: 1; }
+.agg-yj-header .balance-info { font-size: 14px; font-weight: normal; }
+.agg-pkg-header { background-color: #e9ecef; padding: 6px 8px; border: 1px solid #ccc; border-bottom: none; font-weight: bold; }
+

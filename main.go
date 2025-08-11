@@ -9,6 +9,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"wasabi/aggregation" // ★ aggregationパッケージのインポートを追加
 	"wasabi/backup"
 	"wasabi/dat"
 	"wasabi/db"
@@ -39,19 +40,19 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// --- All API Endpoints for DAT, USAGE, and INOUT ---
+	// API Endpoints
 	mux.HandleFunc("/api/dat/upload", dat.UploadDatHandler(conn))
 	mux.HandleFunc("/api/usage/upload", usage.UploadUsageHandler(conn))
 	mux.HandleFunc("/api/inout/save", inout.SaveInOutHandler(conn))
+	mux.HandleFunc("/api/inventory/upload", inventory.UploadInventoryHandler(conn))
+	mux.HandleFunc("/api/aggregation", aggregation.GetAggregationHandler(conn)) // ★ この行を追加
+
 	mux.HandleFunc("/api/clients", db.GetAllClientsHandler(conn))
 	mux.HandleFunc("/api/products/search", db.SearchJcshmsByNameHandler(conn))
 	mux.HandleFunc("/api/units/map", units.GetTaniMapHandler())
 	mux.HandleFunc("/api/receipts", transaction.GetReceiptsHandler(conn))
 	mux.HandleFunc("/api/transaction/", transaction.GetTransactionHandler(conn))
 	mux.HandleFunc("/api/transaction/delete/", transaction.DeleteTransactionHandler(conn))
-
-	// Other handlers from the original source
-	mux.HandleFunc("/api/inventory/upload", inventory.UploadInventoryHandler(conn))
 	mux.HandleFunc("/api/masters/editable", masteredit.GetEditableMastersHandler(conn))
 	mux.HandleFunc("/api/master/update", masteredit.UpdateMasterHandler(conn))
 	mux.HandleFunc("/api/clients/export", backup.ExportClientsHandler(conn))

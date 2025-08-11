@@ -3,7 +3,6 @@ CREATE TABLE IF NOT EXISTS client_master (
   client_code TEXT PRIMARY KEY,
   client_name TEXT NOT NULL UNIQUE
 );
-
 -- 製品マスタ (WASABIの新しい仕様)
 CREATE TABLE IF NOT EXISTS product_master (
     product_code TEXT PRIMARY KEY,
@@ -30,7 +29,6 @@ CREATE TABLE IF NOT EXISTS product_master (
     purchase_price REAL,
     supplier_wholesale TEXT
 );
-
 -- トランザクションレコード (最終版)
 CREATE TABLE IF NOT EXISTS transaction_records (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,7 +71,6 @@ CREATE TABLE IF NOT EXISTS transaction_records (
   process_flag_ma TEXT,
   processing_status TEXT
 );
-
 -- JCSHMSマスタ
 CREATE TABLE IF NOT EXISTS jcshms (
   JC000 TEXT, JC001 TEXT, JC002 TEXT, JC003 TEXT, JC004 TEXT, JC005 TEXT, JC006 TEXT, JC007 TEXT, JC008 TEXT, JC009 TEXT,
@@ -91,7 +88,6 @@ CREATE TABLE IF NOT EXISTS jcshms (
   JC120 TEXT, JC121 TEXT, JC122 TEXT, JC123 TEXT, JC124 TEXT,
   PRIMARY KEY(JC000)
 );
-
 -- JANCODEマスタ
 CREATE TABLE IF NOT EXISTS jancode (
   JA000 TEXT, JA001 TEXT, JA002 TEXT, JA003 TEXT, JA004 TEXT, JA005 TEXT, JA006 REAL, JA007 TEXT, JA008 REAL, JA009 TEXT,
@@ -99,12 +95,16 @@ CREATE TABLE IF NOT EXISTS jancode (
   JA020 TEXT, JA021 TEXT, JA022 TEXT, JA023 TEXT, JA024 TEXT, JA025 TEXT, JA026 TEXT, JA027 TEXT, JA028 TEXT, JA029 TEXT,
   PRIMARY KEY(JA001)
 );
-
 -- 自動採番シーケンス
 CREATE TABLE IF NOT EXISTS code_sequences (
   name TEXT PRIMARY KEY,
   last_no INTEGER NOT NULL
 );
-
 INSERT OR IGNORE INTO code_sequences(name, last_no) VALUES ('MA2Y', 0);
 INSERT OR IGNORE INTO code_sequences(name, last_no) VALUES ('CL', 0);
+
+-- ▼▼▼ [修正点] 検索を高速化するためのインデックスを追加 ▼▼▼
+CREATE INDEX IF NOT EXISTS idx_transactions_jan_code ON transaction_records (jan_code);
+CREATE INDEX IF NOT EXISTS idx_transactions_date ON transaction_records (transaction_date);
+CREATE INDEX IF NOT EXISTS idx_transactions_flag ON transaction_records (flag);
+CREATE INDEX IF NOT EXISTS idx_product_master_kana_name ON product_master (kana_name);
