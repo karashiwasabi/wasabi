@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>WASABI</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <link rel="stylesheet" href="/static/css/inout.css">
+</head>
+<body>
+
+<header id="main-header">
+    <button id="inOutViewBtn" class="btn">入庫・出庫</button>
+    <button id="datBtn" class="btn">納品・返品 (DAT)</button>
+    <button id="usageBtn" class="btn">処方 (USAGE)</button>
+    <button id="inventoryBtn" class="btn">棚卸</button>
+</header>
+
+<main>
+    <input type="file" id="datFileInput" multiple style="display:none;">
+    <input type="file" id="usageFileInput" style="display:none;">
+    <input type="file" id="inventoryFileInput" style="display:none;">
+
+    <div id="in-out-view" class="inout-view-container">
+        <div class="inout-header-controls">
+            <div class="field-group"><label for="in-out-date">日付</label><input type="date" id="in-out-date"></div>
+            <div class="field-group"><label for="in-out-type">種別</label><select id="in-out-type"><option>入庫</option><option>出庫</option></select></div>
+            <div class="field-group"><label for="in-out-client">得意先</label><select id="in-out-client"></select></div>
+            <div class="field-group"><label for="in-out-receipt">伝票番号</label><select id="in-out-receipt"></select></div>
+            <div class="buttons-group"><button id="saveBtn" class="btn">保存</button><button id="deleteBtn" class="btn">伝票削除</button></div>
+        </div>
+        <div class="inout-details-header"><button id="addRowBtn" class="btn">明細を追加</button></div>
+        <div id="inout-details-container"></div>
+    </div>
+
+    <div id="upload-view" class="hidden">
+        <h3 id="upload-view-title">File Upload</h3>
+        <div id="upload-output-container"></div>
+    </div>
+    
+    <div id="inventory-view" class="hidden">
+        <h3>Inventory File Upload</h3>
+        <div id="inventory-output-container"></div>
+    </div>
+
+    <div id="search-modal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>薬品検索</h2>
+                <button id="closeModalBtn" class="close-button">&times;</button>
+            </div>
+            <div style="display: flex; gap: 5px; margin-bottom: 10px;">
+                <input type="text" id="product-search-input" placeholder="製品名またはカナ名（2文字以上）" style="flex-grow: 1; padding: 5px;">
+                <button id="product-search-btn" class="btn">検索</button>
+            </div>
+            <div class="modal-body" id="search-results-container">
+                <table id="search-results-table">
+                    <thead><tr><th>製品名</th><th>メーカー</th><th>包装</th><th>YJコード</th><th>JANコード</th><th>選択</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</main>
+
+<div id="loading-overlay" class="hidden"><div class="spinner"></div><p>Processing...</p></div>
+<div id="notification-box" class="notification-box"></div>
+
+<script type="module" src="/static/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,185 @@
+package inout
+
+import (
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"time"
+	"wasabi/db"
+	"wasabi/mappers"
+	"wasabi/mastermanager"
+	"wasabi/model"
+)
+
+// SaveRecordInput defines the minimal structure for a line item from the frontend.
+type SaveRecordInput struct {
+	ProductCode string  `json:"productCode"`
+	ProductName string  `json:"productName"` // Used as a fallback for mastermanager
+	JanQuantity float64 `json:"janQuantity"`
+	DatQuantity float64 `json:"datQuantity"` // 「個数」フィールドを追加
+	ExpiryDate  string  `json:"expiryDate"`
+	LotNumber   string  `json:"lotNumber"`
+}
+
+// SavePayload defines the structure for the entire JSON payload from the frontend.
+type SavePayload struct {
+	IsNewClient           bool              `json:"isNewClient"`
+	ClientCode            string            `json:"clientCode"`
+	ClientName            string            `json:"clientName"`
+	TransactionDate       string            `json:"transactionDate"`
+	TransactionType       string            `json:"transactionType"`
+	Records               []SaveRecordInput `json:"records"`
+	OriginalReceiptNumber string            `json:"originalReceiptNumber"`
+}
+
+// SaveInOutHandler processes the saving of an in/out transaction.
+func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var payload SavePayload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		tx, err := conn.Begin()
+		if err != nil {
+			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback()
+
+		clientCode := payload.ClientCode
+		if payload.IsNewClient {
+			exists, err := db.CheckClientExistsByName(tx, payload.ClientName)
+			if err != nil {
+				http.Error(w, "Failed to check client existence", http.StatusInternalServerError)
+				return
+			}
+			if exists {
+				http.Error(w, fmt.Sprintf("Client name '%s' already exists.", payload.ClientName), http.StatusConflict)
+				return
+			}
+			newCode, err := db.NextSequenceInTx(tx, "CL", "CL", 4)
+			if err != nil {
+				http.Error(w, "Failed to generate new client code", http.StatusInternalServerError)
+				return
+			}
+			if err := db.CreateClientInTx(tx, newCode, payload.ClientName); err != nil {
+				http.Error(w, "Failed to create new client", http.StatusInternalServerError)
+				return
+			}
+			clientCode = newCode
+		}
+
+		var receiptNumber string
+		dateStr := payload.TransactionDate
+		if dateStr == "" {
+			dateStr = time.Now().Format("20060102")
+		}
+		if payload.OriginalReceiptNumber != "" {
+			receiptNumber = payload.OriginalReceiptNumber
+			if err := db.DeleteTransactionsByReceiptNumberInTx(tx, receiptNumber); err != nil {
+				http.Error(w, "Failed to delete original slip for update", http.StatusInternalServerError)
+				return
+			}
+		} else {
+			var lastSeq int
+			q := `SELECT CAST(SUBSTR(receipt_number, 11) AS INTEGER) FROM transaction_records 
+				  WHERE receipt_number LIKE ? ORDER BY 1 DESC LIMIT 1`
+			err = tx.QueryRow(q, "io"+dateStr+"%").Scan(&lastSeq)
+			if err != nil && err != sql.ErrNoRows {
+				http.Error(w, "Failed to get last receipt number sequence", http.StatusInternalServerError)
+				return
+			}
+			newSeq := lastSeq + 1
+			receiptNumber = fmt.Sprintf("io%s%03d", dateStr, newSeq)
+		}
+
+		var finalRecords []model.TransactionRecord
+		flagMap := map[string]int{"入庫": 11, "出庫": 12}
+		flag := flagMap[payload.TransactionType]
+
+		var keyList, janList []string
+		keySet, janSet := make(map[string]struct{}), make(map[string]struct{})
+		for _, rec := range payload.Records {
+			if rec.ProductCode != "" && rec.ProductCode != "0000000000000" {
+				if _, seen := janSet[rec.ProductCode]; !seen {
+					janSet[rec.ProductCode] = struct{}{}
+					janList = append(janList, rec.ProductCode)
+				}
+			}
+			key := rec.ProductCode
+			if key == "" || key == "0000000000000" {
+				key = fmt.Sprintf("9999999999999%s", rec.ProductName)
+			}
+			if _, seen := keySet[key]; !seen {
+				keySet[key] = struct{}{}
+				keyList = append(keyList, key)
+			}
+		}
+		mastersMap, err := db.GetProductMastersByCodesMap(conn, keyList)
+		if err != nil {
+			http.Error(w, "Failed to pre-fetch product masters", http.StatusInternalServerError)
+			return
+		}
+		jcshmsMap, err := db.GetJcshmsByCodesMap(conn, janList)
+		if err != nil {
+			http.Error(w, "Failed to pre-fetch JCSHMS data", http.StatusInternalServerError)
+			return
+		}
+
+		for i, rec := range payload.Records {
+			if rec.ProductCode == "" {
+				continue
+			}
+			master, err := mastermanager.FindOrCreate(tx, rec.ProductCode, rec.ProductName, mastersMap, jcshmsMap)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Failed to resolve master for %s: %v", rec.ProductName, err), http.StatusInternalServerError)
+				return
+			}
+
+			yjQuantity := rec.JanQuantity * master.JanPackInnerQty
+			subtotal := yjQuantity * master.NhiPrice
+
+			tr := model.TransactionRecord{
+				TransactionDate:  dateStr,
+				ClientCode:       clientCode,
+				ReceiptNumber:    receiptNumber,
+				LineNumber:       fmt.Sprintf("%d", i+1),
+				Flag:             flag,
+				JanCode:          master.ProductCode,
+				JanQuantity:      rec.JanQuantity,
+				DatQuantity:      rec.DatQuantity, // 「個数」をセット
+				YjQuantity:       yjQuantity,
+				Subtotal:         subtotal,
+				ExpiryDate:       rec.ExpiryDate,
+				LotNumber:        rec.LotNumber,
+				ProcessFlagMA:    "COMPLETE",
+				ProcessingStatus: sql.NullString{String: "completed", Valid: true},
+			}
+			mappers.MapProductMasterToTransaction(&tr, master)
+			finalRecords = append(finalRecords, tr)
+		}
+
+		if len(finalRecords) > 0 {
+			if err := db.PersistTransactionRecordsInTx(tx, finalRecords); err != nil {
+				log.Printf("Failed to persist records: %v", err)
+				http.Error(w, "Failed to save records to database.", http.StatusInternalServerError)
+				return
+			}
+		}
+
+		if err := tx.Commit(); err != nil {
+			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"message":       "Saved successfully",
+			"receiptNumber": receiptNumber,
+		})
+	}
+}

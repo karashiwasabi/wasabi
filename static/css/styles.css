@@ -1,0 +1,54 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: sans-serif; padding: 10px; background-color: #f4f4f4; }
+.hidden { display: none !important; }
+
+header { display: flex; align-items: center; gap: 8px; padding: 10px; border-bottom: 2px solid #ccc; margin-bottom: 15px; background-color: #ffffff; }
+.btn { font-size: 14px; padding: 8px 12px; background-color: #e9ecef; border: 1px solid #ced4da; border-radius: 4px; cursor: pointer; }
+.btn:hover { background-color: #dee2e6; }
+
+table { border-collapse: collapse; width: 100%; }
+th, td { border: 1px solid black; padding: 4px; vertical-align: middle; }
+th { text-align: center; background-color: #f0f0f0; }
+.yj-jan-code { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.left { text-align: left; }
+.right { text-align: right; }
+
+.data-table td input[type="text"],
+.data-table td input[type="number"] {
+    width: 100%;
+    border: 1px solid #999;
+    padding: 4px;
+    font-size: 11pt;
+}
+
+#loading-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 9999; color: white; }
+.spinner { border: 5px solid #f3f3f3; border-top: 5px solid #0d6efd; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin-bottom: 10px; }
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+.notification-box { position: fixed; top: -100px; left: 50%; transform: translateX(-50%); padding: 15px 25px; border-radius: 5px; color: white; font-size: 16px; z-index: 10000; transition: top 0.5s; }
+.notification-box.show { top: 20px; }
+.notification-box.success { background-color: #198754; }
+.notification-box.error { background-color: #dc3545; }
+
+.modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.6); display: flex; align-items: center; justify-content: center; z-index: 2000; }
+.modal-content { background-color: #ffffff; border: 1px solid #000000; padding: 20px; width: 80%; max-width: 900px; max-height: 90vh; display: flex; flex-direction: column; }
+.modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+.modal-header h2 { font-size: 20px; }
+.modal-body { overflow-y: auto; }
+.close-button { font-size: 24px; border: none; background: none; cursor: pointer; }
+
+/* teble.htmlから持ってきた列幅指定 */
+.col-1 { width: 3.0%; }  /* 操作 */
+.col-2 { width: 6.0%; }  /* 日付/種別 */
+.col-3 { width: 9.0%; }  /* YJ/JAN */
+.col-4 { width: 14.0%; } /* 製品名/包装 */
+.col-5 { width: 10.0%; } /* 製品名/メーカー */
+.col-6 { width: 4.0%; }  /* 個数/剤型 */
+.col-7 { width: 6.5%; }  /* YJ数量/JAN数量 */
+.col-8 { width: 6.5%; }  /* YJ包装数/JAN包装数 */
+.col-9 { width: 4.5%; }  /* YJ単位/JAN単位 */
+.col-10 { width: 6.5%; } /* 単価/金額 */
+.col-11 { width: 4.5%; } /* 税額/税率 */
+.col-12 { width: 6.0%; } /* 期限/ロット */
+.col-13 { width: 9.0%; } /* 得意先/伝票番号 */
+.col-14 { width: 3.5%; } /* 行/MA */

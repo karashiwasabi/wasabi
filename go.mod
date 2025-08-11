@@ -1,5 +1,8 @@
-module wasabi-app
+module wasabi
 
 go 1.24.3
 
-require golang.org/x/text v0.25.0 // indirect
+require (
+	github.com/mattn/go-sqlite3 v1.14.30
+	golang.org/x/text v0.28.0
+)
