@@ -1,3 +1,5 @@
+// C:\Dev\WASABI\reprocess\handler.go
+
 package reprocess
 
 import (
@@ -36,7 +38,10 @@ func ReProcessTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 }
 
 func reProcessProvisionalRecords(tx *sql.Tx, conn *sql.DB) (int, error) {
-	// 1. Get all provisional transactions.
+	// Get all provisional transactions.
+	// This read operation can remain outside the main update transaction if desired,
+	// but for full transactional integrity, it should also use the tx.
+	// For now, we only change the master lookup as per the plan.
 	provisionalRecords, err := db.GetProvisionalTransactions(conn)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get provisional transactions: %w", err)
@@ -45,7 +50,7 @@ func reProcessProvisionalRecords(tx *sql.Tx, conn *sql.DB) (int, error) {
 		return 0, nil
 	}
 
-	// 2. Get all relevant existing product masters.
+	// Get all relevant existing product masters.
 	var keyList []string
 	keySet := make(map[string]struct{})
 	for _, rec := range provisionalRecords {
@@ -58,12 +63,15 @@ func reProcessProvisionalRecords(tx *sql.Tx, conn *sql.DB) (int, error) {
 			keyList = append(keyList, key)
 		}
 	}
-	mastersMap, err := db.GetProductMastersByCodesMap(conn, keyList)
+
+	// ▼▼▼ [修正点] マスター取得をコネクション(conn)ではなくトランザクション(tx)で行う ▼▼▼
+	mastersMap, err := db.GetProductMastersByCodesMap(tx, keyList)
 	if err != nil {
 		return 0, fmt.Errorf("failed to bulk get product masters for reprocessing: %w", err)
 	}
+	// ▲▲▲ 修正ここまで ▲▲▲
 
-	// 3. Process each provisional record.
+	// Process each provisional record.
 	updatedCount := 0
 	for _, rec := range provisionalRecords {
 		key := rec.JanCode
@@ -78,7 +86,6 @@ func reProcessProvisionalRecords(tx *sql.Tx, conn *sql.DB) (int, error) {
 			mappers.MapProductMasterToTransaction(&rec, master)
 
 			// DO NOT CHANGE THE STATUS. It remains PROVISIONAL.
-
 			// Save the enriched data.
 			if err := db.UpdateFullTransactionInTx(tx, &rec); err != nil {
 				return 0, fmt.Errorf("failed to update reprocessed transaction ID %d: %w", rec.ID, err)

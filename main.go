@@ -1,3 +1,5 @@
+// C:\Dev\WASABI\main.go
+
 package main
 
 import (
@@ -9,7 +11,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"wasabi/aggregation" // ★ aggregationパッケージのインポートを追加
+	"wasabi/aggregation"
 	"wasabi/backup"
 	"wasabi/dat"
 	"wasabi/db"
@@ -28,7 +30,15 @@ func main() {
 	if err != nil {
 		log.Fatalf("db open error: %v", err)
 	}
-
+	// ▼▼▼ [修正点] データベース設定の最適化を再適用 ▼▼▼
+	// WALモード: 同時読み書き性能を向上させ、読み取りが書き込みをブロックするのを防ぐ
+	conn.Exec("PRAGMA journal_mode = WAL;")
+	// ビジータイムアウト: DBがロックされている場合に、エラーを返す前に最大5秒間待機する
+	conn.Exec("PRAGMA busy_timeout = 5000;")
+	// 接続プール設定: アプリケーション全体で接続を1つに制限することで、DBへのアクセスを直列化し、競合を根本的に防ぐ
+	conn.SetMaxOpenConns(1)
+	conn.SetMaxIdleConns(1)
+	// ▲▲▲ 修正ここまで ▲▲▲
 	defer conn.Close()
 
 	if err := loader.InitDatabase(conn); err != nil {
@@ -46,7 +56,7 @@ func main() {
 	mux.HandleFunc("/api/usage/upload", usage.UploadUsageHandler(conn))
 	mux.HandleFunc("/api/inout/save", inout.SaveInOutHandler(conn))
 	mux.HandleFunc("/api/inventory/upload", inventory.UploadInventoryHandler(conn))
-	mux.HandleFunc("/api/aggregation", aggregation.GetAggregationHandler(conn)) // ★ この行を追加
+	mux.HandleFunc("/api/aggregation", aggregation.GetAggregationHandler(conn))
 
 	mux.HandleFunc("/api/clients", db.GetAllClientsHandler(conn))
 	mux.HandleFunc("/api/products/search", db.SearchJcshmsByNameHandler(conn))

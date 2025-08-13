@@ -113,19 +113,21 @@ func UploadUsageHandler(conn *sql.DB) http.HandlerFunc {
 				keyList = append(keyList, key)
 			}
 		}
-		// Note: These lookups are done outside the batching transaction for efficiency.
-		mastersMap, err := db.GetProductMastersByCodesMap(conn, keyList)
+
+		// ▼▼▼ [修正点] マスター取得をコネクション(conn)ではなくトランザクション(tx)で行う ▼▼▼
+		mastersMap, err := db.GetProductMastersByCodesMap(tx, keyList)
 		if err != nil {
 			tx.Rollback()
 			http.Error(w, "Failed to pre-fetch product masters", http.StatusInternalServerError)
 			return
 		}
-		jcshmsMap, err := db.GetJcshmsByCodesMap(conn, janList)
+		jcshmsMap, err := db.GetJcshmsByCodesMap(tx, janList)
 		if err != nil {
 			tx.Rollback()
 			http.Error(w, "Failed to pre-fetch JCSHMS data", http.StatusInternalServerError)
 			return
 		}
+		// ▲▲▲ 修正ここまで ▲▲▲
 
 		stmt, err := tx.Prepare(insertTransactionQuery)
 		if err != nil {

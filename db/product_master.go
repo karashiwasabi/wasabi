@@ -1,3 +1,5 @@
+// C:\Dev\WASABI\db\product_master.go
+
 package db
 
 import (
@@ -41,7 +43,7 @@ func CreateProductMasterInTx(tx *sql.Tx, rec model.ProductMasterInput) error {
 		flag_poison, flag_deleterious, flag_narcotic, flag_psychotropic,
 		flag_stimulant, flag_stimulant_raw, jan_pack_inner_qty, jan_unit_code,
 		jan_pack_unit_qty, nhi_price, purchase_price, supplier_wholesale
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` // Corrected to 23 placeholders
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err := tx.Exec(q,
 		rec.ProductCode, rec.YjCode, rec.ProductName, rec.Origin, rec.KanaName, rec.MakerName,
@@ -64,7 +66,7 @@ func UpsertProductMasterInTx(tx *sql.Tx, rec model.ProductMasterInput) error {
 		flag_poison, flag_deleterious, flag_narcotic, flag_psychotropic,
 		flag_stimulant, flag_stimulant_raw, jan_pack_inner_qty, jan_unit_code,
 		jan_pack_unit_qty, nhi_price, purchase_price, supplier_wholesale
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) -- Corrected to 23 placeholders
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(product_code) DO UPDATE SET
 		yj_code=excluded.yj_code, product_name=excluded.product_name, origin=excluded.origin, 
 		kana_name=excluded.kana_name, maker_name=excluded.maker_name, 
@@ -76,7 +78,7 @@ func UpsertProductMasterInTx(tx *sql.Tx, rec model.ProductMasterInput) error {
 		flag_stimulant_raw=excluded.flag_stimulant_raw, jan_pack_inner_qty=excluded.jan_pack_inner_qty, 
 		jan_unit_code=excluded.jan_unit_code, jan_pack_unit_qty=excluded.jan_pack_unit_qty, 
 		nhi_price=excluded.nhi_price, purchase_price=excluded.purchase_price, 
-		supplier_wholesale=excluded.supplier_wholesale` // Corrected to include the last column
+		supplier_wholesale=excluded.supplier_wholesale`
 
 	_, err := tx.Exec(q,
 		rec.ProductCode, rec.YjCode, rec.ProductName, rec.Origin, rec.KanaName, rec.MakerName,
@@ -96,7 +98,7 @@ func GetProductMasterByCode(conn *sql.DB, code string) (*model.ProductMaster, er
 	q := `SELECT ` + selectColumns + ` FROM product_master WHERE product_code = ? LIMIT 1`
 	m, err := scanProductMaster(conn.QueryRow(q, code))
 	if err == sql.ErrNoRows {
-		return nil, nil // 見つからない場合はエラーではなくnilを返す
+		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("GetProductMasterByCode failed: %w", err)
@@ -104,8 +106,9 @@ func GetProductMasterByCode(conn *sql.DB, code string) (*model.ProductMaster, er
 	return m, nil
 }
 
+// ▼▼▼ [修正点] 引数を conn *sql.DB から tx *sql.Tx に変更 ▼▼▼
 // GetProductMastersByCodesMap は複数の製品コードをキーに製品マスターをマップで取得します。
-func GetProductMastersByCodesMap(conn *sql.DB, codes []string) (map[string]*model.ProductMaster, error) {
+func GetProductMastersByCodesMap(tx *sql.Tx, codes []string) (map[string]*model.ProductMaster, error) {
 	if len(codes) == 0 {
 		return make(map[string]*model.ProductMaster), nil
 	}
@@ -116,7 +119,7 @@ func GetProductMastersByCodesMap(conn *sql.DB, codes []string) (map[string]*mode
 		args[i] = code
 	}
 
-	rows, err := conn.Query(q, args...)
+	rows, err := tx.Query(q, args...) // conn.Query から tx.Query に変更
 	if err != nil {
 		return nil, fmt.Errorf("query for masters by codes failed: %w", err)
 	}
@@ -132,6 +135,8 @@ func GetProductMastersByCodesMap(conn *sql.DB, codes []string) (map[string]*mode
 	}
 	return mastersMap, nil
 }
+
+// ▲▲▲ 修正ここまで ▲▲▲
 
 // GetEditableProductMasters fetches all non-JCSHMS product masters for the edit screen.
 func GetEditableProductMasters(conn *sql.DB) ([]model.ProductMasterView, error) {
@@ -150,7 +155,6 @@ func GetEditableProductMasters(conn *sql.DB) ([]model.ProductMasterView, error) 
 			return nil, err
 		}
 
-		// Create a temporary JCShms-like struct to use the existing formatting function
 		tempJcshms := model.JCShms{
 			JC037: m.PackageSpec,
 			JC039: m.YjUnitName,

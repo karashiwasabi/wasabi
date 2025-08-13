@@ -30,7 +30,6 @@ INSERT OR REPLACE INTO transaction_records (
 // UploadDatHandler はDATファイルのアップロードを処理します。
 func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// ▼▼▼ [修正点] パフォーマンス向上のため、処理中だけDB設定を一時的に変更 ▼▼▼
 		var originalJournalMode string
 		conn.QueryRow("PRAGMA journal_mode").Scan(&originalJournalMode)
 
@@ -42,7 +41,6 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 			conn.Exec(fmt.Sprintf("PRAGMA journal_mode = %s;", originalJournalMode))
 			log.Println("Database settings restored for DAT handler.")
 		}()
-		// ▲▲▲ 修正ここまで ▲▲▲
 
 		if err := r.ParseMultipartForm(32 << 20); err != nil {
 			http.Error(w, "File upload error: "+err.Error(), http.StatusBadRequest)
@@ -50,7 +48,6 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer r.MultipartForm.RemoveAll()
 
-		// 1. Parse all uploaded files
 		var allParsedRecords []model.UnifiedInputRecord
 		for _, fileHeader := range r.MultipartForm.File["file"] {
 			file, err := fileHeader.Open()
@@ -67,7 +64,6 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 			allParsedRecords = append(allParsedRecords, parsed...)
 		}
 
-		// 2. Remove duplicates
 		filteredRecords := removeDatDuplicates(allParsedRecords)
 
 		if len(filteredRecords) == 0 {
@@ -79,14 +75,12 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// ▼▼▼ [修正点] バッチ処理の導入 ▼▼▼
 		tx, err := conn.Begin()
 		if err != nil {
 			http.Error(w, "Failed to begin transaction", http.StatusInternalServerError)
 			return
 		}
 
-		// 3. Pre-fetch master data
 		var keyList, janList []string
 		keySet, janSet := make(map[string]struct{}), make(map[string]struct{})
 		for _, rec := range filteredRecords {
@@ -105,20 +99,22 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 				keyList = append(keyList, key)
 			}
 		}
-		mastersMap, err := db.GetProductMastersByCodesMap(conn, keyList)
+
+		// ▼▼▼ [修正点] マスター取得をコネクション(conn)ではなくトランザクション(tx)で行う ▼▼▼
+		mastersMap, err := db.GetProductMastersByCodesMap(tx, keyList)
 		if err != nil {
 			tx.Rollback()
 			http.Error(w, "Failed to pre-fetch product masters", http.StatusInternalServerError)
 			return
 		}
-		jcshmsMap, err := db.GetJcshmsByCodesMap(conn, janList)
+		jcshmsMap, err := db.GetJcshmsByCodesMap(tx, janList)
 		if err != nil {
 			tx.Rollback()
 			http.Error(w, "Failed to pre-fetch JCSHMS data", http.StatusInternalServerError)
 			return
 		}
+		// ▲▲▲ 修正ここまで ▲▲▲
 
-		// 4. Prepare statement for batch insert
 		stmt, err := tx.Prepare(insertTransactionQuery)
 		if err != nil {
 			tx.Rollback()
@@ -127,7 +123,6 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer stmt.Close()
 
-		// 5. Process records in batches
 		const batchSize = 500
 		var finalRecords []model.TransactionRecord
 
@@ -204,7 +199,6 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -214,7 +208,6 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// removeDatDuplicates はDATレコードの重複を削除します。
 func removeDatDuplicates(records []model.UnifiedInputRecord) []model.UnifiedInputRecord {
 	seen := make(map[string]struct{})
 	var result []model.UnifiedInputRecord

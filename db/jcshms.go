@@ -1,3 +1,5 @@
+// C:\Dev\WASABI\db\jcshms.go
+
 package db
 
 import (
@@ -8,8 +10,9 @@ import (
 	"wasabi/model"
 )
 
+// ▼▼▼ [修正点] 引数を conn *sql.DB から tx *sql.Tx に変更 ▼▼▼
 // GetJcshmsByCodesMap gets JCSHMS/JANCODE master info for multiple JAN codes.
-func GetJcshmsByCodesMap(conn *sql.DB, jans []string) (map[string]*model.JCShms, error) {
+func GetJcshmsByCodesMap(tx *sql.Tx, jans []string) (map[string]*model.JCShms, error) {
 	if len(jans) == 0 {
 		return make(map[string]*model.JCShms), nil
 	}
@@ -18,6 +21,7 @@ func GetJcshmsByCodesMap(conn *sql.DB, jans []string) (map[string]*model.JCShms,
 	args := make([]interface{}, len(jans))
 	for i, jan := range jans {
 		args[i] = jan
+		// Initialize the map entry to avoid nil pointer issues later
 		results[jan] = &model.JCShms{}
 	}
 
@@ -27,7 +31,7 @@ func GetJcshmsByCodesMap(conn *sql.DB, jans []string) (map[string]*model.JCShms,
 	q1 := `SELECT JC000, JC009, JC013, JC018, JC022, JC030, JC037, JC039, JC044, JC050,
 	              JC061, JC062, JC063, JC064, JC065, JC066
 	       FROM jcshms WHERE JC000 IN ` + inClause
-	rows1, err := conn.Query(q1, args...)
+	rows1, err := tx.Query(q1, args...) // conn.Query から tx.Query に変更
 	if err != nil {
 		return nil, fmt.Errorf("jcshms bulk search failed: %w", err)
 	}
@@ -61,7 +65,7 @@ func GetJcshmsByCodesMap(conn *sql.DB, jans []string) (map[string]*model.JCShms,
 
 	// Query jancode table
 	q2 := `SELECT JA001, JA006, JA007, JA008 FROM jancode WHERE JA001 IN ` + inClause
-	rows2, err := conn.Query(q2, args...)
+	rows2, err := tx.Query(q2, args...) // conn.Query から tx.Query に変更
 	if err != nil {
 		return nil, fmt.Errorf("jancode bulk search failed: %w", err)
 	}
@@ -84,3 +88,5 @@ func GetJcshmsByCodesMap(conn *sql.DB, jans []string) (map[string]*model.JCShms,
 
 	return results, nil
 }
+
+// ▲▲▲ 修正ここまで ▲▲▲

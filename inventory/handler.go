@@ -30,7 +30,6 @@ INSERT OR REPLACE INTO transaction_records (
 // UploadInventoryHandler handles the inventory file upload process.
 func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// ▼▼▼ [修正点] パフォーマンス向上のため、処理中だけDB設定を一時的に変更 ▼▼▼
 		var originalJournalMode string
 		conn.QueryRow("PRAGMA journal_mode").Scan(&originalJournalMode)
 
@@ -42,7 +41,6 @@ func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 			conn.Exec(fmt.Sprintf("PRAGMA journal_mode = %s;", originalJournalMode))
 			log.Println("Database settings restored for Inventory handler.")
 		}()
-		// ▲▲▲ 修正ここまで ▲▲▲
 
 		file, _, err := r.FormFile("file")
 		if err != nil {
@@ -51,7 +49,6 @@ func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer file.Close()
 
-		// 1. Parse the inventory file
 		parsedData, err := parsers.ParseInventoryFile(file)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Failed to parse file: %v", err), http.StatusBadRequest)
@@ -77,21 +74,18 @@ func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 			recordsToProcess[i].YjQuantity = recordsToProcess[i].JanQuantity * recordsToProcess[i].JanPackInnerQty
 		}
 
-		// ▼▼▼ [修正点] バッチ処理の導入 ▼▼▼
 		tx, err := conn.Begin()
 		if err != nil {
 			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
 			return
 		}
 
-		// 2. Delete existing inventory data for the date
 		if err := db.DeleteTransactionsByFlagAndDate(tx, 0, date); err != nil { // Flag 0 for inventory
 			tx.Rollback()
 			http.Error(w, "Failed to delete existing inventory data for date "+date, http.StatusInternalServerError)
 			return
 		}
 
-		// 3. Pre-fetch master data
 		var keyList, janList []string
 		keySet, janSet := make(map[string]struct{}), make(map[string]struct{})
 		for _, rec := range recordsToProcess {
@@ -110,20 +104,22 @@ func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 				keyList = append(keyList, key)
 			}
 		}
-		mastersMap, err := db.GetProductMastersByCodesMap(conn, keyList)
+
+		// ▼▼▼ [修正点] マスター取得をコネクション(conn)ではなくトランザクション(tx)で行う ▼▼▼
+		mastersMap, err := db.GetProductMastersByCodesMap(tx, keyList)
 		if err != nil {
 			tx.Rollback()
 			http.Error(w, "Failed to pre-fetch product masters", http.StatusInternalServerError)
 			return
 		}
-		jcshmsMap, err := db.GetJcshmsByCodesMap(conn, janList)
+		jcshmsMap, err := db.GetJcshmsByCodesMap(tx, janList)
 		if err != nil {
 			tx.Rollback()
 			http.Error(w, "Failed to pre-fetch JCSHMS data", http.StatusInternalServerError)
 			return
 		}
+		// ▲▲▲ 修正ここまで ▲▲▲
 
-		// 4. Prepare statement for batch insert
 		stmt, err := tx.Prepare(insertTransactionQuery)
 		if err != nil {
 			tx.Rollback()
@@ -132,7 +128,6 @@ func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer stmt.Close()
 
-		// 5. Process records in batches
 		const batchSize = 500
 		var finalRecords []model.TransactionRecord
 		receiptNumber := fmt.Sprintf("INV%s", date)
@@ -205,7 +200,6 @@ func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
