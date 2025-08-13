@@ -1,7 +1,6 @@
 package backup
 
 import (
-	"bytes"
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
@@ -11,9 +10,6 @@ import (
 	"strconv"
 	"wasabi/db"
 	"wasabi/model"
-
-	"golang.org/x/text/encoding/japanese"
-	"golang.org/x/text/transform"
 )
 
 // ExportClientsHandler handles exporting the client master to a CSV file.
@@ -25,9 +21,11 @@ func ExportClientsHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		var buf bytes.Buffer
-		sjisWriter := transform.NewWriter(&buf, japanese.ShiftJIS.NewEncoder())
-		csvWriter := csv.NewWriter(sjisWriter)
+		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="client_master.csv"`)
+		w.Write([]byte{0xEF, 0xBB, 0xBF})
+
+		csvWriter := csv.NewWriter(w)
 
 		if err := csvWriter.Write([]string{"client_code", "client_name"}); err != nil {
 			http.Error(w, "Failed to write CSV header", http.StatusInternalServerError)
@@ -40,10 +38,6 @@ func ExportClientsHandler(conn *sql.DB) http.HandlerFunc {
 			}
 		}
 		csvWriter.Flush()
-
-		w.Header().Set("Content-Type", "text/csv")
-		w.Header().Set("Content-Disposition", `attachment; filename="client_master.csv"`)
-		w.Write(buf.Bytes())
 	}
 }
 
@@ -57,8 +51,7 @@ func ImportClientsHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer file.Close()
 
-		sjisReader := transform.NewReader(file, japanese.ShiftJIS.NewDecoder())
-		csvReader := csv.NewReader(sjisReader)
+		csvReader := csv.NewReader(file)
 		records, err := csvReader.ReadAll()
 		if err != nil {
 			http.Error(w, "Failed to parse CSV file", http.StatusBadRequest)
@@ -81,7 +74,7 @@ func ImportClientsHandler(conn *sql.DB) http.HandlerFunc {
 
 		var importedCount int
 		for i, row := range records {
-			if i == 0 { // Skip header
+			if i == 0 {
 				continue
 			}
 			if len(row) < 2 {
@@ -113,19 +106,20 @@ func ImportClientsHandler(conn *sql.DB) http.HandlerFunc {
 // ExportProductsHandler handles exporting the product master to a CSV file.
 func ExportProductsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Note: Using a direct DB call here as GetEditableProductMasters is for the view.
-		// A new DB function could be made, but for simplicity, we query directly.
-		products, err := db.GetAllProductMasters(conn) // Assuming you'll create this simple getter
+		// ▼▼▼ [修正点] 全件取得ではなく、編集可能なマスターのみを取得する関数に変更 ▼▼▼
+		products, err := db.GetEditableProductMasters(conn)
 		if err != nil {
 			http.Error(w, "Failed to get products", http.StatusInternalServerError)
 			return
 		}
+		// ▲▲▲ 修正ここまで ▲▲▲
 
-		var buf bytes.Buffer
-		sjisWriter := transform.NewWriter(&buf, japanese.ShiftJIS.NewEncoder())
-		csvWriter := csv.NewWriter(sjisWriter)
+		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="product_master_editable.csv"`)
+		w.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM
 
-		// Updated header for WASABI schema
+		csvWriter := csv.NewWriter(w)
+
 		header := []string{
 			"product_code", "yj_code", "product_name", "origin", "kana_name", "maker_name",
 			"usage_classification", "package_form", "package_spec",
@@ -138,6 +132,8 @@ func ExportProductsHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
+		// `GetEditableProductMasters`は`ProductMasterView`のスライスを返すため、
+		// `p.ProductMaster`を通じて各フィールドにアクセスするか、そのままアクセスする（Goの埋め込みのため）
 		for _, p := range products {
 			row := []string{
 				p.ProductCode, p.YjCode, p.ProductName, p.Origin, p.KanaName, p.MakerName,
@@ -155,10 +151,6 @@ func ExportProductsHandler(conn *sql.DB) http.HandlerFunc {
 			}
 		}
 		csvWriter.Flush()
-
-		w.Header().Set("Content-Type", "text/csv")
-		w.Header().Set("Content-Disposition", `attachment; filename="product_master.csv"`)
-		w.Write(buf.Bytes())
 	}
 }
 
@@ -172,8 +164,7 @@ func ImportProductsHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer file.Close()
 
-		sjisReader := transform.NewReader(file, japanese.ShiftJIS.NewDecoder())
-		csvReader := csv.NewReader(sjisReader)
+		csvReader := csv.NewReader(file)
 		records, err := csvReader.ReadAll()
 		if err != nil {
 			http.Error(w, "Failed to parse CSV file", http.StatusBadRequest)
@@ -189,14 +180,13 @@ func ImportProductsHandler(conn *sql.DB) http.HandlerFunc {
 
 		var importedCount int
 		for i, row := range records {
-			if i == 0 { // Skip header
+			if i == 0 {
 				continue
 			}
-			if len(row) < 23 { // Ensure row has enough columns for WASABI schema
+			if len(row) < 23 {
 				continue
 			}
 
-			// Parse values from row based on new WASABI CSV format
 			yjPackUnitQty, _ := strconv.ParseFloat(row[10], 64)
 			flagPoison, _ := strconv.Atoi(row[11])
 			flagDeleterious, _ := strconv.Atoi(row[12])

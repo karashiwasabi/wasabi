@@ -8,11 +8,13 @@ import (
 )
 
 func MapProductMasterToTransaction(ar *model.TransactionRecord, master *model.ProductMaster) {
-	// Only set the unit price from the master's NHI price if the transaction
-	// does not already have a unit price (e.g., from a DAT file).
 	if ar.UnitPrice == 0 {
 		ar.UnitPrice = master.NhiPrice
 	}
+
+	// ▼▼▼ [修正点] JanCodeのコピー処理を追加 ▼▼▼
+	ar.JanCode = master.ProductCode
+	// ▲▲▲ 修正ここまで ▲▲▲
 
 	ar.YjCode = master.YjCode
 	ar.ProductName = master.ProductName

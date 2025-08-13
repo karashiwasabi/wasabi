@@ -4,14 +4,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"wasabi/db"
 	"wasabi/mappers"
-	"wasabi/mastermanager"
 )
 
-// ReProcessTransactionsHandler is the HTTP handler that triggers the reprocessing logic.
 func ReProcessTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tx, err := conn.Begin()
@@ -33,14 +30,13 @@ func ReProcessTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
-			"message": fmt.Sprintf("%d 件の仮登録データを更新しました。", count),
+			"message": fmt.Sprintf("%d 件の仮登録データの情報を更新しました。", count),
 		})
 	}
 }
 
-// reProcessProvisionalRecords contains the core logic for reprocessing.
 func reProcessProvisionalRecords(tx *sql.Tx, conn *sql.DB) (int, error) {
-	// 1. Get all provisional records
+	// 1. Get all provisional transactions.
 	provisionalRecords, err := db.GetProvisionalTransactions(conn)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get provisional transactions: %w", err)
@@ -49,16 +45,10 @@ func reProcessProvisionalRecords(tx *sql.Tx, conn *sql.DB) (int, error) {
 		return 0, nil
 	}
 
-	// 2. Prepare necessary data (masters and JCSHMS) in bulk
-	var keyList, janList []string
-	keySet, janSet := make(map[string]struct{}), make(map[string]struct{})
+	// 2. Get all relevant existing product masters.
+	var keyList []string
+	keySet := make(map[string]struct{})
 	for _, rec := range provisionalRecords {
-		if rec.JanCode != "" && rec.JanCode != "0000000000000" {
-			if _, seen := janSet[rec.JanCode]; !seen {
-				janSet[rec.JanCode] = struct{}{}
-				janList = append(janList, rec.JanCode)
-			}
-		}
 		key := rec.JanCode
 		if key == "" || key == "0000000000000" {
 			key = fmt.Sprintf("9999999999999%s", rec.ProductName)
@@ -72,33 +62,28 @@ func reProcessProvisionalRecords(tx *sql.Tx, conn *sql.DB) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to bulk get product masters for reprocessing: %w", err)
 	}
-	jcshmsMap, err := db.GetJcshmsByCodesMap(conn, janList)
-	if err != nil {
-		return 0, fmt.Errorf("failed to bulk get jcshms for reprocessing: %w", err)
-	}
 
-	// 3. Loop through each provisional record and try to resolve it
+	// 3. Process each provisional record.
 	updatedCount := 0
 	for _, rec := range provisionalRecords {
-		// Call mastermanager to find or create a master. This uses the newly added JCSHMS data.
-		master, err := mastermanager.FindOrCreate(tx, rec.JanCode, rec.ProductName, mastersMap, jcshmsMap)
-		if err != nil {
-			// Log the error but continue processing other records
-			log.Printf("Reprocess: mastermanager failed for jan %s, skipping: %v", rec.JanCode, err)
-			continue
+		key := rec.JanCode
+		if key == "" || key == "0000000000000" {
+			key = fmt.Sprintf("9999999999999%s", rec.ProductName)
 		}
 
-		// If the master is no longer provisional, the reprocessing was successful.
-		if master.Origin != "PROVISIONAL" {
+		// Check if a definitive master (MANUAL or JCSHMS) exists.
+		if master, ok := mastersMap[key]; ok && master.Origin != "PROVISIONAL" {
+			// A definitive master was found.
+			// Enrich the transaction's data with the master's data.
 			mappers.MapProductMasterToTransaction(&rec, master)
-			rec.ProcessFlagMA = "COMPLETE"
-			rec.ProcessingStatus = sql.NullString{String: "completed", Valid: true}
 
-			// Save the updated record to the database
+			// DO NOT CHANGE THE STATUS. It remains PROVISIONAL.
+
+			// Save the enriched data.
 			if err := db.UpdateFullTransactionInTx(tx, &rec); err != nil {
 				return 0, fmt.Errorf("failed to update reprocessed transaction ID %d: %w", rec.ID, err)
 			}
-			updatedCount++
+			updatedCount++ // Count any record that had its data enriched.
 		}
 	}
 

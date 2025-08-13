@@ -136,9 +136,10 @@ func GetProvisionalTransactions(conn *sql.DB) ([]model.TransactionRecord, error)
 
 // UpdateFullTransactionInTx updates an existing transaction record with enriched master data.
 func UpdateFullTransactionInTx(tx *sql.Tx, record *model.TransactionRecord) error {
+	// ▼▼▼ [修正点] UPDATE文に jan_code を追加 ▼▼▼
 	const q = `
 		UPDATE transaction_records SET
-			yj_code = ?, product_name = ?, kana_name = ?, usage_classification = ?, package_form = ?, 
+			jan_code = ?, yj_code = ?, product_name = ?, kana_name = ?, usage_classification = ?, package_form = ?, 
 			package_spec = ?, maker_name = ?, jan_pack_inner_qty = ?, jan_pack_unit_qty = ?, 
 			jan_unit_name = ?, jan_unit_code = ?, yj_pack_unit_qty = ?, yj_unit_name = ?,
 			unit_price = ?, purchase_price = ?, supplier_wholesale = ?,
@@ -148,7 +149,8 @@ func UpdateFullTransactionInTx(tx *sql.Tx, record *model.TransactionRecord) erro
 		WHERE id = ?`
 
 	_, err := tx.Exec(q,
-		record.YjCode, record.ProductName, record.KanaName, record.UsageClassification, record.PackageForm,
+		// ▼▼▼ [修正点] 更新する値のリストに record.JanCode を追加 ▼▼▼
+		record.JanCode, record.YjCode, record.ProductName, record.KanaName, record.UsageClassification, record.PackageForm,
 		record.PackageSpec, record.MakerName, record.JanPackInnerQty, record.JanPackUnitQty,
 		record.JanUnitName, record.JanUnitCode, record.YjPackUnitQty, record.YjUnitName,
 		record.UnitPrice, record.PurchasePrice, record.SupplierWholesale,

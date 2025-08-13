@@ -14,6 +14,12 @@
     <button id="usageBtn" class="btn">処方 (USAGE)</button>
     <button id="inventoryBtn" class="btn">棚卸</button>
     <button id="aggregationBtn" class="btn">集計</button>
+    <button id="masterEditViewBtn" class="btn">マスター</button>
+    <button id="reprocessBtn" class="btn">仮登録を再計算</button>
+    <button id="exportClientsBtn" class="btn">得意先エクスポート</button>
+    <button id="importClientsBtn" class="btn">得意先インポート</button>
+    <button id="exportProductsBtn" class="btn">製品エクスポート</button>
+    <button id="importProductsBtn" class="btn">製品インポート</button>
 </header>
 
 <main>
@@ -43,7 +49,7 @@
         <div id="inventory-output-container"></div>
     </div>
 
-        <div id="aggregation-view" class="hidden">
+    <div id="aggregation-view" class="hidden">
         <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
             <div class="field-group"><label for="startDate">開始日</label><input type="date" id="startDate"></div>
             <div class="field-group"><label for="endDate">終了日</label><input type="date" id="endDate"></div>
@@ -56,11 +62,13 @@
                     <label><input type="checkbox" name="drugType" value="poison">毒</label>
                     <label><input type="checkbox" name="drugType" value="deleterious">劇</label>
                     <label><input type="checkbox" name="drugType" value="narcotic">麻</label>
-                    <label><input type="checkbox" name="drugType" value="psychotropic">向</label>
+                    <label><input type="checkbox" name="drugType" value="psychotropic1">向1</label>
+                    <label><input type="checkbox" name="drugType" value="psychotropic2">向2</label>
+                    <label><input type="checkbox" name="drugType" value="psychotropic3">向3</label>
                     <label><input type="checkbox" name="drugType" value="stimulant">覚</label>
                     <label><input type="checkbox" name="drugType" value="stimulant_raw">覚原</label>
                 </div>
-            </div>
+                </div>
             <div class="field-group"><label><input type="checkbox" id="reorder-needed-filter"> 不足品のみ</label></div>
             <div class="buttons-group" style="margin-left: auto;">
                 <button id="run-aggregation-btn" class="btn">集計実行</button>
@@ -88,6 +96,19 @@
             </div>
         </div>
     </div>
+
+        <div id="master-edit-view" class="hidden">
+        <div class="inout-header-controls" style="justify-content: flex-end;">
+            <div class="buttons-group">
+                <button id="addMasterRowBtn" class="btn">新規行を追加</button>
+                <button id="refreshMastersBtn" class="btn">一覧を更新</button>
+            </div>
+        </div>
+        <div id="master-edit-container"></div>
+    </div>
+
+    <input type="file" id="importClientsInput" style="display:none;" accept=".csv">
+    <input type="file" id="importProductsInput" style="display:none;" accept=".csv">
 </main>
 
 <div id="loading-overlay" class="hidden"><div class="spinner"></div><p>Processing...</p></div>
