@@ -1,3 +1,5 @@
+// C:\Dev\WASABI\static\js\app.js
+
 import { initInOut, resetInOutView } from './inout.js';
 import { initDatUpload } from './dat.js';
 import { initUsageUpload } from './usage.js';
@@ -5,7 +7,7 @@ import { initInventoryUpload } from './inventory.js';
 import { initAggregation } from './aggregation.js';
 import { initMasterEdit, resetMasterEditView } from './master_edit.js';
 import { initReprocessButton } from './reprocess.js';
-import { initBackupButtons } from './backup.js'; // ★インポート追加
+import { initBackupButtons } from './backup.js';
 
 // (Global UI Elements and helper functions are unchanged)
 window.showLoading = () => document.getElementById('loading-overlay').classList.remove('hidden');
@@ -30,6 +32,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const datFileInput = document.getElementById('datFileInput');
     const usageFileInput = document.getElementById('usageFileInput');
     const inventoryFileInput = document.getElementById('inventoryFileInput');
+    const uploadOutputContainer = document.getElementById('upload-output-container');
+    const inventoryOutputContainer = document.getElementById('inventory-output-container');
+    const aggregationOutputContainer = document.getElementById('aggregation-output-container');
 
     // --- Initialize all modules ---
     initInOut();
@@ -39,7 +44,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initAggregation();
     initMasterEdit();
     initReprocessButton();
-    initBackupButtons(); // ★初期化
+    initBackupButtons();
 
     // (View Switching Logic and Event Listeners are unchanged)
     function showView(viewIdToShow) {
@@ -47,24 +52,38 @@ document.addEventListener('DOMContentLoaded', () => {
             view.classList.toggle('hidden', view.id !== viewIdToShow);
         });
     }
+
     inOutBtn.addEventListener('click', () => { showView('in-out-view'); resetInOutView(); });
+
     datBtn.addEventListener('click', () => {
         showView('upload-view');
         document.getElementById('upload-view-title').textContent = `DAT File Upload`;
+        if (uploadOutputContainer) uploadOutputContainer.innerHTML = '';
         datFileInput.click();
     });
+
     usageBtn.addEventListener('click', () => {
         showView('upload-view');
         document.getElementById('upload-view-title').textContent = `USAGE File Upload`;
+        if (uploadOutputContainer) uploadOutputContainer.innerHTML = '';
         usageFileInput.click();
     });
+
     inventoryBtn.addEventListener('click', () => {
         showView('inventory-view');
+        if (inventoryOutputContainer) inventoryOutputContainer.innerHTML = '';
         inventoryFileInput.click();
     });
-    aggregationBtn.addEventListener('click', () => { showView('aggregation-view'); });
-    masterEditBtn.addEventListener('click', () => { showView('master-edit-view'); resetMasterEditView(); });
+    
+    // ▼▼▼ [修正点] 集計ボタンクリック時に前回の結果をクリアする ▼▼▼
+    aggregationBtn.addEventListener('click', () => {
+        if (aggregationOutputContainer) aggregationOutputContainer.innerHTML = '';
+        showView('aggregation-view');
+    });
+    // ▲▲▲ 修正ここまで ▲▲▲
 
+    masterEditBtn.addEventListener('click', () => { showView('master-edit-view'); resetMasterEditView(); });
+    
     // --- Initial State ---
     showView('in-out-view');
     resetInOutView();

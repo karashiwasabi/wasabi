@@ -121,7 +121,6 @@ type TransactionRecord struct {
 	ProcessingStatus    sql.NullString `json:"processingStatus"`
 }
 
-// ▼▼▼ [修正点] 在庫計算のためのヘルパーメソッドを追加 ▼▼▼
 // SignedYjQty returns the transaction's YjQuantity with a sign based on its flag (in/out).
 func (t *TransactionRecord) SignedYjQty() float64 {
 	switch t.Flag {
@@ -133,8 +132,6 @@ func (t *TransactionRecord) SignedYjQty() float64 {
 		return 0
 	}
 }
-
-// ▲▲▲ 修正ここまで ▲▲▲
 
 // ProductMasterView is a data structure for the master edit screen, including formatted fields.
 type ProductMasterView struct {
@@ -164,9 +161,9 @@ type StockLedgerYJGroup struct {
 	ProductName       string                    `json:"productName"`
 	YjUnitName        string                    `json:"yjUnitName"`
 	PackageLedgers    []StockLedgerPackageGroup `json:"packageLedgers"`
-	StartingBalance   float64                   `json:"startingBalance"`
+	StartingBalance   interface{}               `json:"startingBalance"`
 	NetChange         float64                   `json:"netChange"`
-	EndingBalance     float64                   `json:"endingBalance"`
+	EndingBalance     interface{}               `json:"endingBalance"`
 	TotalReorderPoint float64                   `json:"totalReorderPoint"`
 	IsReorderNeeded   bool                      `json:"isReorderNeeded"`
 }
@@ -175,10 +172,10 @@ type StockLedgerYJGroup struct {
 type StockLedgerPackageGroup struct {
 	PackageKey      string              `json:"packageKey"`
 	JanUnitName     string              `json:"janUnitName"`
-	StartingBalance float64             `json:"startingBalance"`
+	StartingBalance interface{}         `json:"startingBalance"`
 	Transactions    []LedgerTransaction `json:"transactions"`
 	NetChange       float64             `json:"netChange"`
-	EndingBalance   float64             `json:"endingBalance"`
+	EndingBalance   interface{}         `json:"endingBalance"`
 	MaxUsage        float64             `json:"maxUsage"`
 	ReorderPoint    float64             `json:"reorderPoint"`
 	IsReorderNeeded bool                `json:"isReorderNeeded"`

@@ -1,17 +1,49 @@
+// C:\Dev\WASABI\inventory\handler.go
+
 package inventory
 
 import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"wasabi/db"
-	"wasabi/parsers" // <-- IMPORT ADDED
+	"wasabi/mappers"
+	"wasabi/mastermanager"
+	"wasabi/model"
+	"wasabi/parsers"
 )
+
+// insertTransactionQuery defines the SQL statement for inserting transaction records.
+const insertTransactionQuery = `
+INSERT OR REPLACE INTO transaction_records (
+    transaction_date, client_code, receipt_number, line_number, flag,
+    jan_code, yj_code, product_name, kana_name, usage_classification, package_form, package_spec, maker_name,
+    dat_quantity, jan_pack_inner_qty, jan_quantity, jan_pack_unit_qty, jan_unit_name, jan_unit_code,
+    yj_quantity, yj_pack_unit_qty, yj_unit_name, unit_price, purchase_price, supplier_wholesale,
+    subtotal, tax_amount, tax_rate, expiry_date, lot_number, flag_poison,
+    flag_deleterious, flag_narcotic, flag_psychotropic, flag_stimulant,
+    flag_stimulant_raw, process_flag_ma, processing_status
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 
 // UploadInventoryHandler handles the inventory file upload process.
 func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// ▼▼▼ [修正点] パフォーマンス向上のため、処理中だけDB設定を一時的に変更 ▼▼▼
+		var originalJournalMode string
+		conn.QueryRow("PRAGMA journal_mode").Scan(&originalJournalMode)
+
+		conn.Exec("PRAGMA journal_mode = MEMORY;")
+		conn.Exec("PRAGMA synchronous = OFF;")
+
+		defer func() {
+			conn.Exec("PRAGMA synchronous = FULL;")
+			conn.Exec(fmt.Sprintf("PRAGMA journal_mode = %s;", originalJournalMode))
+			log.Println("Database settings restored for Inventory handler.")
+		}()
+		// ▲▲▲ 修正ここまで ▲▲▲
+
 		file, _, err := r.FormFile("file")
 		if err != nil {
 			http.Error(w, "File upload error", http.StatusBadRequest)
@@ -20,7 +52,7 @@ func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 		defer file.Close()
 
 		// 1. Parse the inventory file
-		parsedData, err := parsers.ParseInventoryFile(file) // <-- CORRECTED
+		parsedData, err := parsers.ParseInventoryFile(file)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Failed to parse file: %v", err), http.StatusBadRequest)
 			return
@@ -31,55 +63,150 @@ func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// 2. Pre-process records for the processor
 		recordsToProcess := parsedData.Records
+		if len(recordsToProcess) == 0 {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"message": "No records to process.",
+				"details": []model.TransactionRecord{},
+			})
+			return
+		}
+
 		for i := range recordsToProcess {
-			// YjQuantity is a required input for the processor
 			recordsToProcess[i].YjQuantity = recordsToProcess[i].JanQuantity * recordsToProcess[i].JanPackInnerQty
 		}
 
-		// 3. Start transaction and delete existing inventory data for the date
+		// ▼▼▼ [修正点] バッチ処理の導入 ▼▼▼
 		tx, err := conn.Begin()
 		if err != nil {
 			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
 			return
 		}
-		defer tx.Rollback()
 
+		// 2. Delete existing inventory data for the date
 		if err := db.DeleteTransactionsByFlagAndDate(tx, 0, date); err != nil { // Flag 0 for inventory
+			tx.Rollback()
 			http.Error(w, "Failed to delete existing inventory data for date "+date, http.StatusInternalServerError)
 			return
 		}
 
-		// 4. Call the processor to create transaction records
-		finalRecords, err := ProcessInventoryRecords(tx, conn, recordsToProcess)
+		// 3. Pre-fetch master data
+		var keyList, janList []string
+		keySet, janSet := make(map[string]struct{}), make(map[string]struct{})
+		for _, rec := range recordsToProcess {
+			if rec.JanCode != "" && rec.JanCode != "0000000000000" {
+				if _, seen := janSet[rec.JanCode]; !seen {
+					janSet[rec.JanCode] = struct{}{}
+					janList = append(janList, rec.JanCode)
+				}
+			}
+			key := rec.JanCode
+			if key == "" || key == "0000000000000" {
+				key = fmt.Sprintf("9999999999999%s", rec.ProductName)
+			}
+			if _, seen := keySet[key]; !seen {
+				keySet[key] = struct{}{}
+				keyList = append(keyList, key)
+			}
+		}
+		mastersMap, err := db.GetProductMastersByCodesMap(conn, keyList)
 		if err != nil {
-			http.Error(w, "Failed to process inventory records", http.StatusInternalServerError)
+			tx.Rollback()
+			http.Error(w, "Failed to pre-fetch product masters", http.StatusInternalServerError)
+			return
+		}
+		jcshmsMap, err := db.GetJcshmsByCodesMap(conn, janList)
+		if err != nil {
+			tx.Rollback()
+			http.Error(w, "Failed to pre-fetch JCSHMS data", http.StatusInternalServerError)
 			return
 		}
 
-		// 5. Finalize transaction records with date, receipt, and line numbers
-		receiptNumber := fmt.Sprintf("INV%s", date)
-		for i := range finalRecords {
-			finalRecords[i].TransactionDate = date
-			finalRecords[i].ReceiptNumber = receiptNumber
-			finalRecords[i].LineNumber = fmt.Sprintf("%d", i+1)
+		// 4. Prepare statement for batch insert
+		stmt, err := tx.Prepare(insertTransactionQuery)
+		if err != nil {
+			tx.Rollback()
+			http.Error(w, "Failed to prepare statement", http.StatusInternalServerError)
+			return
 		}
+		defer stmt.Close()
 
-		// 6. Persist records to the database
-		if len(finalRecords) > 0 {
-			if err := db.PersistTransactionRecordsInTx(tx, finalRecords); err != nil {
-				http.Error(w, "Failed to save inventory records to transaction", http.StatusInternalServerError)
+		// 5. Process records in batches
+		const batchSize = 500
+		var finalRecords []model.TransactionRecord
+		receiptNumber := fmt.Sprintf("INV%s", date)
+
+		for i, rec := range recordsToProcess {
+			tr := model.TransactionRecord{
+				Flag: 0, JanCode: rec.JanCode, ProductName: rec.ProductName, YjQuantity: rec.YjQuantity,
+				TransactionDate: date, ReceiptNumber: receiptNumber, LineNumber: fmt.Sprintf("%d", i+1),
+			}
+
+			master, err := mastermanager.FindOrCreate(tx, rec.JanCode, rec.ProductName, mastersMap, jcshmsMap)
+			if err != nil {
+				tx.Rollback()
+				http.Error(w, fmt.Sprintf("mastermanager failed for jan %s: %v", rec.JanCode, err), http.StatusInternalServerError)
 				return
+			}
+
+			if master.JanPackInnerQty > 0 {
+				tr.JanQuantity = tr.YjQuantity / master.JanPackInnerQty
+			}
+			mappers.MapProductMasterToTransaction(&tr, master)
+
+			if master.Origin == "JCSHMS" {
+				tr.ProcessFlagMA = "COMPLETE"
+				tr.ProcessingStatus = sql.NullString{String: "completed", Valid: true}
+			} else {
+				tr.ProcessFlagMA = "PROVISIONAL"
+				tr.ProcessingStatus = sql.NullString{String: "provisional", Valid: true}
+			}
+
+			_, err = stmt.Exec(
+				tr.TransactionDate, tr.ClientCode, tr.ReceiptNumber, tr.LineNumber, tr.Flag,
+				tr.JanCode, tr.YjCode, tr.ProductName, tr.KanaName, tr.UsageClassification, tr.PackageForm, tr.PackageSpec, tr.MakerName,
+				tr.DatQuantity, tr.JanPackInnerQty, tr.JanQuantity, tr.JanPackUnitQty, tr.JanUnitName, tr.JanUnitCode,
+				tr.YjQuantity, tr.YjPackUnitQty, tr.YjUnitName, tr.UnitPrice, tr.PurchasePrice, tr.SupplierWholesale,
+				tr.Subtotal, tr.TaxAmount, tr.TaxRate, tr.ExpiryDate, tr.LotNumber, tr.FlagPoison,
+				tr.FlagDeleterious, tr.FlagNarcotic, tr.FlagPsychotropic, tr.FlagStimulant,
+				tr.FlagStimulantRaw, tr.ProcessFlagMA, tr.ProcessingStatus,
+			)
+			if err != nil {
+				tx.Rollback()
+				http.Error(w, fmt.Sprintf("Failed to insert record for JAN %s: %v", tr.JanCode, err), http.StatusInternalServerError)
+				return
+			}
+
+			finalRecords = append(finalRecords, tr)
+
+			if (i+1)%batchSize == 0 && i < len(recordsToProcess)-1 {
+				if err := tx.Commit(); err != nil {
+					log.Printf("transaction commit error (batch): %v", err)
+					http.Error(w, "internal server error", http.StatusInternalServerError)
+					return
+				}
+				tx, err = conn.Begin()
+				if err != nil {
+					http.Error(w, "Failed to begin next transaction", http.StatusInternalServerError)
+					return
+				}
+				stmt, err = tx.Prepare(insertTransactionQuery)
+				if err != nil {
+					tx.Rollback()
+					http.Error(w, "Failed to re-prepare statement", http.StatusInternalServerError)
+					return
+				}
 			}
 		}
 
 		if err := tx.Commit(); err != nil {
-			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
+			log.Printf("transaction commit error (final): %v", err)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
+		// ▲▲▲ 修正ここまで ▲▲▲
 
-		// 7. Render the result as a JSON response
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"message": fmt.Sprintf("%d件の棚卸データを登録しました。", len(finalRecords)),

@@ -1,12 +1,23 @@
 import { transactionTypeMap, createUploadTableHTML, renderUploadTableRows } from './common_table.js';
-
 let view, runBtn, printBtn, outputContainer, startDateInput, endDateInput, kanaNameInput, dosageFormInput, coefficientInput, drugTypeCheckboxes, reorderNeededCheckbox;
 let lastData = []; // サーバーから受け取った元のデータを保持
 
-function renderResults() {
-    let dataToRender = lastData;
+/**
+ * 在庫数をフォーマットするヘルパー関数
+ * @param {number | string} balance - 在庫数（数値または "期間棚卸なし" の文字列）
+ * @returns {string} 表示用にフォーマットされた文字列
+ */
+function formatBalance(balance) {
+    // 渡された値が数値の場合のみ、小数点以下2桁にフォーマットする
+    if (typeof balance === 'number') {
+        return balance.toFixed(2);
+    }
+    // 文字列（"期間棚卸なし" など）の場合は、そのまま返す
+    return balance;
+}
 
-    // 「不足品のみ表示」フィルターを適用
+function renderResults() {
+    let dataToRender = lastData; // 「不足品のみ表示」フィルターを適用
     if (reorderNeededCheckbox.checked) {
         dataToRender = lastData.filter(yjGroup => yjGroup.isReorderNeeded)
             .map(yjGroup => ({
@@ -22,26 +33,29 @@ function renderResults() {
 
     let html = '';
     dataToRender.forEach((yjGroup, yjIndex) => {
+        // formatBalance ヘルパー関数を使用して、数値・文字列の両方に対応
         html += `
             <div class="agg-yj-header" ${yjGroup.isReorderNeeded ? 'style="background-color: #f8d7da;"' : ''}>
                 <span>YJ: ${yjGroup.yjCode}</span>
                 <span class="product-name">${yjGroup.productName}</span>
                 <span class="balance-info">
-                    在庫: ${yjGroup.endingBalance.toFixed(2)} | 
-                    発注点: ${yjGroup.totalReorderPoint.toFixed(2)} | 
-                    変動: ${yjGroup.netChange.toFixed(2)}
+                    在庫: ${formatBalance(yjGroup.endingBalance)} | 
+                    発注点: ${formatBalance(yjGroup.totalReorderPoint)} | 
+                    変動: ${formatBalance(yjGroup.netChange)}
                 </span>
             </div>
         `;
+     
         yjGroup.packageLedgers.forEach((pkg, pkgIndex) => {
             const tableId = `agg-table-${yjIndex}-${pkgIndex}`;
+            // formatBalance ヘルパー関数を使用して、数値・文字列の両方に対応
             html += `
                 <div class="agg-pkg-header" ${pkg.isReorderNeeded ? 'style="background-color: #fff3cd;"' : ''}>
                     <span>包装: ${pkg.packageKey}</span>
                     <span class="balance-info">
-                        在庫: ${pkg.endingBalance.toFixed(2)} | 
-                        発注点: ${pkg.reorderPoint.toFixed(2)} | 
-                        変動: ${pkg.netChange.toFixed(2)}
+                        在庫: ${formatBalance(pkg.endingBalance)} |
+                        発注点: ${formatBalance(pkg.reorderPoint)} | 
+                        変動: ${formatBalance(pkg.netChange)}
                     </span>
                 </div>
                 <div id="${tableId}-container"></div>`;
@@ -63,9 +77,7 @@ function renderResults() {
 
 export function initAggregation() {
     view = document.getElementById('aggregation-view');
-    if (!view) return;
-
-    // 新しいフィルター要素を取得
+    if (!view) return; // 新しいフィルター要素を取得
     runBtn = document.getElementById('run-aggregation-btn');
     printBtn = document.getElementById('print-aggregation-btn');
     outputContainer = document.getElementById('aggregation-output-container');
@@ -75,9 +87,7 @@ export function initAggregation() {
     dosageFormInput = document.getElementById('dosageForm');
     coefficientInput = document.getElementById('reorder-coefficient');
     drugTypeCheckboxes = document.querySelectorAll('input[name="drugType"]');
-    reorderNeededCheckbox = document.getElementById('reorder-needed-filter');
-
-    // 日付のデフォルト値を設定
+    reorderNeededCheckbox = document.getElementById('reorder-needed-filter'); // 日付のデフォルト値を設定
     const today = new Date();
     const threeMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 3, today.getDate());
     endDateInput.value = today.toISOString().slice(0, 10);
@@ -85,7 +95,6 @@ export function initAggregation() {
 
     printBtn.addEventListener('click', () => window.print());
     reorderNeededCheckbox.addEventListener('change', () => renderResults());
-
     runBtn.addEventListener('click', async () => {
         window.showLoading();
 

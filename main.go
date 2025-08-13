@@ -28,6 +28,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("db open error: %v", err)
 	}
+
 	defer conn.Close()
 
 	if err := loader.InitDatabase(conn); err != nil {
