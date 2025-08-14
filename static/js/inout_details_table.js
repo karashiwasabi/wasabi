@@ -1,12 +1,15 @@
-import { initModal, showModal } from './inout_modal.js';
+// C:\Dev\WASABI\static\js\inout_details_table.js
+
+import { showModal } from './inout_modal.js';
 import { transactionTypeMap, createUploadTableHTML } from './common_table.js';
 
 let tableBody, addRowBtn, tableContainer;
 
+// ▼▼▼ [修正点] 「個数」をINPUTから表示用のセルに変更 ▼▼▼
 function createInoutRowsHTML(record = {}) {
     const rowId = record.lineNumber || `new-${Date.now()}`;
     const janQuantity = record.janQuantity ?? 1;
-    const datQuantity = record.datQuantity ?? 1;
+    const datQuantity = record.datQuantity ?? 1; // Default value, will be recalculated
     const nhiPrice = record.nhiPrice || 0;
     const janPackInnerQty = record.janPackInnerQty || 0;
     const yjQuantity = janQuantity * janPackInnerQty;
@@ -19,7 +22,7 @@ function createInoutRowsHTML(record = {}) {
             <td>${record.transactionDate || ''}</td>
             <td class="yj-jan-code display-yj-code">${record.yjCode || ''}</td>
             <td colspan="2" class="product-name-cell left" style="cursor: pointer; text-decoration: underline; color: blue;">${record.productName || 'ここをクリックして製品を検索'}</td>
-            <td class="right"><input type="number" name="datQuantity" value="${datQuantity}" step="any"></td>
+            <td class="right display-dat-quantity">${datQuantity.toFixed(2)}</td>
             <td class="right display-yj-quantity">${yjQuantity.toFixed(2)}</td>
             <td class="right display-yj-pack-unit-qty">${record.yjPackUnitQty || ''}</td>
             <td class="display-yj-unit-name">${record.yjUnitName || ''}</td>
@@ -63,6 +66,7 @@ export function populateDetailsTable(records) {
             delete masterData.id;
             delete masterData.runningBalance;
             row.dataset.product = JSON.stringify(masterData);
+            recalculateRow(row); // Recalculate to set the initial datQuantity correctly
         }
     });
 }
@@ -82,12 +86,18 @@ export function getDetailsData() {
         const productData = JSON.parse(productDataString);
         const lowerRow = row.nextElementSibling;
         
+        const janQuantity = parseFloat(lowerRow.querySelector('input[name="janQuantity"]').value) || 0;
+        let datQuantity = 0;
+        if(productData.janPackUnitQty > 0) {
+            datQuantity = janQuantity / productData.janPackUnitQty;
+        }
+
         const record = {
             productCode: productData.productCode,
             productName: productData.productName,
-            datQuantity: parseFloat(row.querySelector('input[name="datQuantity"]').value) || 0,
+            datQuantity: datQuantity,
             expiryDate: row.querySelector('input[name="expiryDate"]').value,
-            janQuantity: parseFloat(lowerRow.querySelector('input[name="janQuantity"]').value) || 0,
+            janQuantity: janQuantity,
             lotNumber: lowerRow.querySelector('input[name="lotNumber"]').value,
         };
         records.push(record);
@@ -105,12 +115,20 @@ function recalculateRow(upperRow) {
     const janQuantity = parseFloat(lowerRow.querySelector('[name="janQuantity"]').value) || 0;
     const nhiPrice = parseFloat(product.nhiPrice) || 0;
     const janPackInnerQty = parseFloat(product.janPackInnerQty) || 0;
+    const janPackUnitQty = parseFloat(product.janPackUnitQty) || 0;
+
+    let datQuantity = 0;
+    if(janPackUnitQty > 0) {
+        datQuantity = janQuantity / janPackUnitQty;
+    }
     const yjQuantity = janQuantity * janPackInnerQty;
     const subtotal = yjQuantity * nhiPrice;
 
+    upperRow.querySelector('.display-dat-quantity').textContent = datQuantity.toFixed(2);
     upperRow.querySelector('.display-yj-quantity').textContent = yjQuantity.toFixed(2);
     lowerRow.querySelector('.display-subtotal').textContent = subtotal.toFixed(2);
 }
+// ▲▲▲ 修正ここまで ▲▲▲
 
 export function initDetailsTable() {
     tableContainer = document.getElementById('inout-details-container');
@@ -119,32 +137,7 @@ export function initDetailsTable() {
     
     tableContainer.innerHTML = createUploadTableHTML('inout-details-table');
     tableBody = document.querySelector('#inout-details-table tbody');
-
-    initModal((selectedProduct, activeRow) => {
-        activeRow.dataset.product = JSON.stringify(selectedProduct);
-        const lowerRow = activeRow.nextElementSibling;
-        
-        // Populate upper row
-        activeRow.querySelector('.display-yj-code').textContent = selectedProduct.yjCode;
-        activeRow.querySelector('.product-name-cell').textContent = selectedProduct.productName;
-        activeRow.querySelector('.display-yj-pack-unit-qty').textContent = selectedProduct.yjPackUnitQty || '';
-        activeRow.querySelector('.display-yj-unit-name').textContent = selectedProduct.yjUnitName || '';
-        activeRow.querySelector('.display-unit-price').textContent = (selectedProduct.nhiPrice || 0).toFixed(4);
-        
-        // Populate lower row
-        lowerRow.querySelector('.display-jan-code').textContent = selectedProduct.productCode;
-        lowerRow.querySelector('.display-package-spec').textContent = selectedProduct.formattedPackageSpec || '';
-        lowerRow.querySelector('.display-maker-name').textContent = selectedProduct.makerName;
-        lowerRow.querySelector('.display-usage-classification').textContent = selectedProduct.usageClassification || ''; // 剤型
-        lowerRow.querySelector('.display-jan-pack-unit-qty').textContent = selectedProduct.janPackUnitQty || '';
-        lowerRow.querySelector('.display-jan-unit-name').textContent = selectedProduct.janUnitName || '';
-        
-        const quantityInput = lowerRow.querySelector('input[name="janQuantity"]');
-        quantityInput.focus();
-        quantityInput.select();
-        recalculateRow(activeRow);
-    });
-
+    
     addRowBtn.addEventListener('click', () => {
         if (tableBody.querySelector('td[colspan="14"]')) {
             tableBody.innerHTML = '';
@@ -162,9 +155,33 @@ export function initDetailsTable() {
                  clearDetailsTable();
             }
         }
+        // ▼▼▼ [修正点] モーダル呼び出し時に、実行したい処理（コールバック）を直接渡す ▼▼▼
         if (e.target.classList.contains('product-name-cell')) {
-            showModal(e.target.closest('tr'));
+            const activeRow = e.target.closest('tr');
+            showModal(activeRow, (selectedProduct, targetRow) => {
+                targetRow.dataset.product = JSON.stringify(selectedProduct);
+                const lowerRow = targetRow.nextElementSibling;
+                
+                targetRow.querySelector('.display-yj-code').textContent = selectedProduct.yjCode;
+                targetRow.querySelector('.product-name-cell').textContent = selectedProduct.productName;
+                targetRow.querySelector('.display-yj-pack-unit-qty').textContent = selectedProduct.yjPackUnitQty || '';
+                targetRow.querySelector('.display-yj-unit-name').textContent = selectedProduct.yjUnitName || '';
+                targetRow.querySelector('.display-unit-price').textContent = (selectedProduct.nhiPrice || 0).toFixed(4);
+                
+                lowerRow.querySelector('.display-jan-code').textContent = selectedProduct.productCode;
+                lowerRow.querySelector('.display-package-spec').textContent = selectedProduct.formattedPackageSpec || '';
+                lowerRow.querySelector('.display-maker-name').textContent = selectedProduct.makerName;
+                lowerRow.querySelector('.display-usage-classification').textContent = selectedProduct.usageClassification || '';
+                lowerRow.querySelector('.display-jan-pack-unit-qty').textContent = selectedProduct.janPackUnitQty || '';
+                lowerRow.querySelector('.display-jan-unit-name').textContent = selectedProduct.janUnitName || '';
+                
+                const quantityInput = lowerRow.querySelector('input[name="janQuantity"]');
+                quantityInput.focus();
+                quantityInput.select();
+                recalculateRow(targetRow);
+            });
         }
+        // ▲▲▲ 修正ここまで ▲▲▲
     });
 
     tableBody.addEventListener('input', (e) => {

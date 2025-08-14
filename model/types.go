@@ -1,8 +1,10 @@
+// C:\Dev\WASABI\model\types.go
+
 package model
 
 import "database/sql"
 
-// ProductMaster はデータベースから読み込んだ製品マスターのデータを表します。
+// (Struct definitions up to DeadStockFilters are unchanged)
 type ProductMaster struct {
 	ProductCode         string  `json:"productCode"`
 	YjCode              string  `json:"yjCode"`
@@ -28,8 +30,6 @@ type ProductMaster struct {
 	PurchasePrice       float64 `json:"purchasePrice"`
 	SupplierWholesale   string  `json:"supplierWholesale"`
 }
-
-// ProductMasterInput はデータベースへの書き込み（作成・更新）に使用する製品マスターのデータを表します。
 type ProductMasterInput struct {
 	ProductCode         string  `json:"productCode"`
 	YjCode              string  `json:"yjCode"`
@@ -55,11 +55,9 @@ type ProductMasterInput struct {
 	PurchasePrice       float64 `json:"purchasePrice"`
 	SupplierWholesale   string  `json:"supplierWholesale"`
 }
-
-// JCShms はJCSHMSマスタとJANCODEマスタから必要な情報をまとめた構造体です。
 type JCShms struct {
 	JC009 string
-	JC013 string // 内外区分
+	JC013 string
 	JC018 string
 	JC022 string
 	JC030 string
@@ -77,8 +75,6 @@ type JCShms struct {
 	JA007 sql.NullString
 	JA008 sql.NullFloat64
 }
-
-// TransactionRecord はデータベースに保存される個々の取引の全情報を表します。
 type TransactionRecord struct {
 	ID                  int            `json:"id"`
 	TransactionDate     string         `json:"transactionDate"`
@@ -90,7 +86,7 @@ type TransactionRecord struct {
 	YjCode              string         `json:"yjCode"`
 	ProductName         string         `json:"productName"`
 	KanaName            string         `json:"kanaName"`
-	UsageClassification string         `json:"usageClassification"` // <-- New
+	UsageClassification string         `json:"usageClassification"`
 	PackageForm         string         `json:"packageForm"`
 	PackageSpec         string         `json:"packageSpec"`
 	MakerName           string         `json:"makerName"`
@@ -103,9 +99,9 @@ type TransactionRecord struct {
 	YjQuantity          float64        `json:"yjQuantity"`
 	YjPackUnitQty       float64        `json:"yjPackUnitQty"`
 	YjUnitName          string         `json:"yjUnitName"`
-	UnitPrice           float64        `json:"unitPrice"`         // Corresponds to nhi_price
-	PurchasePrice       float64        `json:"purchasePrice"`     // <-- New
-	SupplierWholesale   string         `json:"supplierWholesale"` // <-- New
+	UnitPrice           float64        `json:"unitPrice"`
+	PurchasePrice       float64        `json:"purchasePrice"`
+	SupplierWholesale   string         `json:"supplierWholesale"`
 	Subtotal            float64        `json:"subtotal"`
 	TaxAmount           float64        `json:"taxAmount"`
 	TaxRate             float64        `json:"taxRate"`
@@ -121,41 +117,45 @@ type TransactionRecord struct {
 	ProcessingStatus    sql.NullString `json:"processingStatus"`
 }
 
-// SignedYjQty returns the transaction's YjQuantity with a sign based on its flag (in/out).
 func (t *TransactionRecord) SignedYjQty() float64 {
 	switch t.Flag {
-	case 1, 4, 11: // 入庫・納品・棚卸増
+	case 1, 4, 11:
 		return t.YjQuantity
-	case 2, 3, 5, 12: // 出庫・返品・処方・棚卸減
+	case 2, 3, 5, 12:
 		return -t.YjQuantity
-	default: // 棚卸(0)など、直接変動させないものは0を返す
+	default:
 		return 0
 	}
 }
+func (t *TransactionRecord) ToProductMaster() *ProductMaster {
+	return &ProductMaster{
+		ProductCode:         t.JanCode,
+		YjCode:              t.YjCode,
+		ProductName:         t.ProductName,
+		KanaName:            t.KanaName,
+		UsageClassification: t.UsageClassification,
+		PackageForm:         t.PackageForm,
+		JanPackInnerQty:     t.JanPackInnerQty,
+		YjUnitName:          t.YjUnitName,
+	}
+}
 
-// ProductMasterView is a data structure for the master edit screen, including formatted fields.
 type ProductMasterView struct {
 	ProductMaster
 	FormattedPackageSpec string `json:"formattedPackageSpec"`
 }
-
-// Client is a data structure for a client record.
 type Client struct {
 	Code string `json:"code"`
 	Name string `json:"name"`
 }
-
-// AggregationFilters holds the filter criteria for the stock ledger report.
 type AggregationFilters struct {
 	StartDate   string
 	EndDate     string
 	KanaName    string
 	DrugTypes   []string
-	DosageForm  string // 「剤型」フィルター用のフィールドを追加
+	DosageForm  string
 	Coefficient float64
 }
-
-// StockLedgerYJGroup represents a top-level grouping by YJ code in the stock ledger.
 type StockLedgerYJGroup struct {
 	YjCode            string                    `json:"yjCode"`
 	ProductName       string                    `json:"productName"`
@@ -167,8 +167,6 @@ type StockLedgerYJGroup struct {
 	TotalReorderPoint float64                   `json:"totalReorderPoint"`
 	IsReorderNeeded   bool                      `json:"isReorderNeeded"`
 }
-
-// StockLedgerPackageGroup represents a sub-grouping by package specification.
 type StockLedgerPackageGroup struct {
 	PackageKey      string              `json:"packageKey"`
 	JanUnitName     string              `json:"janUnitName"`
@@ -179,40 +177,60 @@ type StockLedgerPackageGroup struct {
 	MaxUsage        float64             `json:"maxUsage"`
 	ReorderPoint    float64             `json:"reorderPoint"`
 	IsReorderNeeded bool                `json:"isReorderNeeded"`
-	Master          *ProductMaster      `json:"-"` // Not marshalled to JSON
+	Master          *ProductMaster      `json:"-"`
 }
-
-// LedgerTransaction is a transaction record that includes a running balance.
 type LedgerTransaction struct {
 	TransactionRecord
 	RunningBalance float64 `json:"runningBalance"`
 }
-
-// UnifiedInputRecord is a superset structure that can hold data from any input source (DAT, USAGE, INV).
-// The parsers' job is to create slices of this struct.
 type UnifiedInputRecord struct {
-	// Common Fields
-	Date        string `json:"date"`
-	JanCode     string `json:"janCode"`
-	YjCode      string `json:"yjCode"`
-	ProductName string `json:"productName"`
-
-	// Quantity Fields
+	Date            string  `json:"date"`
+	JanCode         string  `json:"janCode"`
+	YjCode          string  `json:"yjCode"`
+	ProductName     string  `json:"productName"`
 	DatQuantity     float64 `json:"datQuantity"`
 	JanPackInnerQty float64 `json:"janPackInnerQty"`
 	JanQuantity     float64 `json:"janQuantity"`
 	YjQuantity      float64 `json:"yjQuantity"`
-
-	// Unit/Spec Fields
-	YjUnitName string `json:"yjUnitName"`
-
-	// DAT-specific Fields
-	ClientCode    string  `json:"clientCode"`
-	ReceiptNumber string  `json:"receiptNumber"`
-	LineNumber    string  `json:"lineNumber"`
-	Flag          int     `json:"flag"`
-	UnitPrice     float64 `json:"unitPrice"`
-	Subtotal      float64 `json:"subtotal"`
-	ExpiryDate    string  `json:"expiryDate"`
-	LotNumber     string  `json:"lotNumber"`
+	YjUnitName      string  `json:"yjUnitName"`
+	ClientCode      string  `json:"clientCode"`
+	ReceiptNumber   string  `json:"receiptNumber"`
+	LineNumber      string  `json:"lineNumber"`
+	Flag            int     `json:"flag"`
+	UnitPrice       float64 `json:"unitPrice"`
+	Subtotal        float64 `json:"subtotal"`
+	ExpiryDate      string  `json:"expiryDate"`
+	LotNumber       string  `json:"lotNumber"`
 }
+type DeadStockGroup struct {
+	YjCode      string             `json:"yjCode"`
+	ProductName string             `json:"productName"`
+	TotalStock  float64            `json:"totalStock"`
+	Packages    []DeadStockPackage `json:"packages"`
+}
+type DeadStockPackage struct {
+	ProductMaster
+	CurrentStock float64           `json:"currentStock"`
+	SavedRecords []DeadStockRecord `json:"savedRecords"`
+}
+type DeadStockRecord struct {
+	ID               int     `json:"id"`
+	ProductCode      string  `json:"productCode"`
+	YjCode           string  `json:"yjCode"`
+	PackageForm      string  `json:"packageForm"`
+	JanPackInnerQty  float64 `json:"janPackInnerQty"`
+	YjUnitName       string  `json:"yjUnitName"`
+	StockQuantityJan float64 `json:"stockQuantityJan"`
+	ExpiryDate       string  `json:"expiryDate"`
+	LotNumber        string  `json:"lotNumber"`
+}
+
+// ▼▼▼ [修正点] DeadStockFiltersにCoefficientを追加 ▼▼▼
+type DeadStockFilters struct {
+	StartDate        string
+	EndDate          string
+	ExcludeZeroStock bool
+	Coefficient      float64
+}
+
+// ▲▲▲ 修正ここまで ▲▲▲

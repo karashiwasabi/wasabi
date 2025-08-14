@@ -1,4 +1,6 @@
-let onProductSelectCallback = null;
+// C:\Dev\WASABI\static\js\inout_modal.js
+
+let activeCallback = null;
 let activeRowElement = null;
 
 const modal = document.getElementById('search-modal');
@@ -10,8 +12,8 @@ const searchResultsBody = document.querySelector('#search-results-table tbody');
 function handleResultClick(event) {
   if (event.target && event.target.classList.contains('select-product-btn')) {
     const product = JSON.parse(event.target.dataset.product);
-    if (typeof onProductSelectCallback === 'function') {
-      onProductSelectCallback(product, activeRowElement);
+    if (typeof activeCallback === 'function') {
+      activeCallback(product, activeRowElement);
     }
     modal.classList.add('hidden');
   }
@@ -45,7 +47,6 @@ function renderSearchResults(products) {
   let html = '';
   products.forEach(p => {
     const productData = JSON.stringify(p);
-
     html += `
       <tr>
         <td class="left">${p.productName || ''}</td>
@@ -60,13 +61,12 @@ function renderSearchResults(products) {
   searchResultsBody.innerHTML = html;
 }
 
-export function initModal(onSelect) {
+// ▼▼▼ [修正点] 起動時に一度だけイベントリスナーを設定するinit関数に変更 ▼▼▼
+export function initModal() {
   if (!modal || !closeModalBtn || !searchInput || !searchBtn || !searchResultsBody) {
     console.error("薬品検索モーダルの必須要素が見つかりません。");
     return;
   }
-  onProductSelectCallback = onSelect;
-
   closeModalBtn.addEventListener('click', () => modal.classList.add('hidden'));
   searchBtn.addEventListener('click', performSearch);
   searchInput.addEventListener('keypress', (e) => {
@@ -77,13 +77,17 @@ export function initModal(onSelect) {
   });
   searchResultsBody.addEventListener('click', handleResultClick);
 }
+// ▲▲▲ 修正ここまで ▲▲▲
 
-export function showModal(rowElement) {
+// ▼▼▼ [修正点] showModalが実行するべきコールバック関数を引数で受け取るように変更 ▼▼▼
+export function showModal(rowElement, callback) {
   if (modal) {
     activeRowElement = rowElement;
+    activeCallback = callback; // 実行する処理をセット
     modal.classList.remove('hidden');
     searchInput.value = '';
     searchInput.focus();
     searchResultsBody.innerHTML = '<tr><td colspan="6" class="center">製品名を入力して検索してください。</td></tr>';
   }
 }
+// ▲▲▲ 修正ここまで ▲▲▲

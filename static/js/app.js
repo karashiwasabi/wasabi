@@ -8,6 +8,8 @@ import { initAggregation } from './aggregation.js';
 import { initMasterEdit, resetMasterEditView } from './master_edit.js';
 import { initReprocessButton } from './reprocess.js';
 import { initBackupButtons } from './backup.js';
+import { initModal } from './inout_modal.js'; 
+import { initDeadStock } from './deadstock.js'; 
 
 // (Global UI Elements and helper functions are unchanged)
 window.showLoading = () => document.getElementById('loading-overlay').classList.remove('hidden');
@@ -35,6 +37,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const uploadOutputContainer = document.getElementById('upload-output-container');
     const inventoryOutputContainer = document.getElementById('inventory-output-container');
     const aggregationOutputContainer = document.getElementById('aggregation-output-container');
+    const deadStockBtn = document.getElementById('deadStockBtn'); // ▼▼▼ [修正点] 追加 ▼▼▼
+    const deadstockOutputContainer = document.getElementById('deadstock-output-container'); // ▼▼▼ [修正点] 追加 ▼▼▼
 
     // --- Initialize all modules ---
     initInOut();
@@ -45,6 +49,8 @@ document.addEventListener('DOMContentLoaded', () => {
     initMasterEdit();
     initReprocessButton();
     initBackupButtons();
+    initModal(); // ▼▼▼ [修正点] モーダルをここで一度だけ初期化 ▼▼▼
+    initDeadStock(); // ▼▼▼ [修正点] この一行が抜けていました ▼▼▼
 
     // (View Switching Logic and Event Listeners are unchanged)
     function showView(viewIdToShow) {
@@ -54,34 +60,31 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     inOutBtn.addEventListener('click', () => { showView('in-out-view'); resetInOutView(); });
-
     datBtn.addEventListener('click', () => {
         showView('upload-view');
         document.getElementById('upload-view-title').textContent = `DAT File Upload`;
         if (uploadOutputContainer) uploadOutputContainer.innerHTML = '';
         datFileInput.click();
     });
-
     usageBtn.addEventListener('click', () => {
         showView('upload-view');
         document.getElementById('upload-view-title').textContent = `USAGE File Upload`;
         if (uploadOutputContainer) uploadOutputContainer.innerHTML = '';
         usageFileInput.click();
     });
-
     inventoryBtn.addEventListener('click', () => {
         showView('inventory-view');
         if (inventoryOutputContainer) inventoryOutputContainer.innerHTML = '';
         inventoryFileInput.click();
     });
-    
-    // ▼▼▼ [修正点] 集計ボタンクリック時に前回の結果をクリアする ▼▼▼
     aggregationBtn.addEventListener('click', () => {
         if (aggregationOutputContainer) aggregationOutputContainer.innerHTML = '';
         showView('aggregation-view');
     });
-    // ▲▲▲ 修正ここまで ▲▲▲
-
+    deadStockBtn.addEventListener('click', () => {
+        if(deadstockOutputContainer) deadstockOutputContainer.innerHTML = '';
+        showView('deadstock-view');
+    });
     masterEditBtn.addEventListener('click', () => { showView('master-edit-view'); resetMasterEditView(); });
     
     // --- Initial State ---

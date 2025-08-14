@@ -15,6 +15,7 @@ import (
 	"wasabi/backup"
 	"wasabi/dat"
 	"wasabi/db"
+	"wasabi/deadstock"
 	"wasabi/inout"
 	"wasabi/inventory"
 	"wasabi/loader"
@@ -71,6 +72,11 @@ func main() {
 	mux.HandleFunc("/api/products/export", backup.ExportProductsHandler(conn))
 	mux.HandleFunc("/api/products/import", backup.ImportProductsHandler(conn))
 	mux.HandleFunc("/api/transactions/reprocess", reprocess.ReProcessTransactionsHandler(conn))
+
+	// ▼▼▼ [修正点] デッドストック用APIを追加 ▼▼▼
+	mux.HandleFunc("/api/deadstock/list", deadstock.GetDeadStockHandler(conn))
+	mux.HandleFunc("/api/deadstock/save", deadstock.SaveDeadStockHandler(conn))
+	// ▲▲▲ 修正ここまで ▲▲▲
 
 	// Serve Frontend
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))

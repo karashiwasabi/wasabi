@@ -108,3 +108,18 @@ CREATE INDEX IF NOT EXISTS idx_transactions_jan_code ON transaction_records (jan
 CREATE INDEX IF NOT EXISTS idx_transactions_date ON transaction_records (transaction_date);
 CREATE INDEX IF NOT EXISTS idx_transactions_flag ON transaction_records (flag);
 CREATE INDEX IF NOT EXISTS idx_product_master_kana_name ON product_master (kana_name);
+
+-- デッドストックリストテーブル
+CREATE TABLE IF NOT EXISTS dead_stock_list (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  product_code TEXT NOT NULL,
+  yj_code TEXT,
+  package_form TEXT,
+  jan_pack_inner_qty REAL,
+  yj_unit_name TEXT,
+  stock_quantity_jan REAL NOT NULL,
+  expiry_date TEXT,
+  lot_number TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE(product_code, expiry_date, lot_number)
+);

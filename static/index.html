@@ -14,6 +14,7 @@
     <button id="usageBtn" class="btn">処方 (USAGE)</button>
     <button id="inventoryBtn" class="btn">棚卸</button>
     <button id="aggregationBtn" class="btn">集計</button>
+    <button id="deadStockBtn" class="btn">デッドストック</button>
     <button id="masterEditViewBtn" class="btn">マスター</button>
     <button id="reprocessBtn" class="btn">仮登録を再計算</button>
     <button id="exportClientsBtn" class="btn">得意先エクスポート</button>
@@ -106,6 +107,26 @@
         </div>
         <div id="master-edit-container"></div>
     </div>
+
+    <div id="deadstock-view" class="hidden">
+        <h1>デッドストックリスト</h1>
+        <div class="filter-container">
+            <div class="field-group">
+                <label for="ds-startDate">開始日</label>
+                <input type="date" id="ds-startDate">
+            </div>
+            <div class="field-group">
+                <label for="ds-endDate">終了日</label>
+                <input type="date" id="ds-endDate">
+            </div>
+            <div class="field-group">
+                <label><input type="checkbox" id="ds-exclude-zero-stock"> 在庫が0の品目を除外</label>
+            </div>
+            <div class="buttons-group">
+                <button id="run-dead-stock-btn" class="btn">リスト作成</button>
+            </div>
+        </div>
+        <div id="deadstock-output-container"></div>
 
     <input type="file" id="importClientsInput" style="display:none;" accept=".csv">
     <input type="file" id="importProductsInput" style="display:none;" accept=".csv">
