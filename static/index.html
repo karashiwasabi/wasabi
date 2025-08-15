@@ -10,6 +10,7 @@
 
 <header id="main-header">
     <button id="inOutViewBtn" class="btn">入庫・出庫</button>
+    <button id="precompBtn" class="btn">予製</button>
     <button id="datBtn" class="btn">納品・返品 (DAT)</button>
     <button id="usageBtn" class="btn">処方 (USAGE)</button>
     <button id="inventoryBtn" class="btn">棚卸(ファイル)</button>
@@ -126,6 +127,39 @@
         <div id="master-edit-container"></div>
     </div>
 
+        <div id="precomp-view" class="hidden">
+        <h1>予製管理</h1>
+        <div class="inout-header-controls">
+            <div class="field-group">
+                <label for="precomp-patient-number">患者番号</label>
+                <input type="text" id="precomp-patient-number" placeholder="患者番号を入力">
+            </div>
+            <button id="precomp-load-btn" class="btn">呼び出し</button>
+            <div class="buttons-group">
+                <button id="precomp-clear-btn" class="btn" style="background-color: #dc3545; color: white;">中断</button>
+                <button id="precomp-save-btn" class="btn" style="background-color: #0d6efd; color: white;">保存</button>
+            </div>
+        </div>
+        <div class="inout-details-header">
+            <button id="precomp-add-row-btn" class="btn">明細を追加</button>
+        </div>
+        <div id="precomp-details-container">
+            <table id="precomp-details-table" class="data-table">
+                <thead>
+                    <tr>
+                        <th style="width: 40%;">製品名</th>
+                        <th style="width: 20%;">JANコード</th>
+                        <th style="width: 15%;">単位</th>
+                        <th style="width: 15%;">数量(JAN単位)</th>
+                        <th style="width: 10%;">削除</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr class="no-data-row"><td colspan="5">患者番号を入力し、「行追加」してください。</td></tr>
+                </tbody>
+            </table>
+        </div>
+
     <div id="settings-view" class="hidden">
         <h1>設定</h1>
         <div class="settings-form-container">
@@ -167,6 +201,7 @@
             </div>
         </div>
         <div id="deadstock-output-container"></div>
+    </div>
 
     <input type="file" id="importClientsInput" style="display:none;" accept=".csv">
     <input type="file" id="importProductsInput" style="display:none;" accept=".csv">

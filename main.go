@@ -23,6 +23,7 @@ import (
 	"wasabi/loader"
 	"wasabi/masteredit"
 	"wasabi/medrec" // ▼▼▼ [修正点] 追加 ▼▼▼
+	"wasabi/precomp"
 	"wasabi/reprocess"
 	"wasabi/transaction"
 	"wasabi/units"
@@ -83,7 +84,11 @@ func main() {
 	mux.HandleFunc("/api/deadstock/save", deadstock.SaveDeadStockHandler(conn))
 	mux.HandleFunc("/api/settings/get", settings.GetSettingsHandler(conn))
 	mux.HandleFunc("/api/settings/save", settings.SaveSettingsHandler(conn))
-	mux.HandleFunc("/api/medrec/download", medrec.DownloadHandler(conn)) // ▼▼▼ [修正点] 追加 ▼▼▼
+	mux.HandleFunc("/api/medrec/download", medrec.DownloadHandler(conn))        // ▼▼▼ [修正点] 追加 ▼▼▼
+	mux.HandleFunc("/api/masters/search_all", db.SearchAllMastersHandler(conn)) // 予製用の製品検索
+	mux.HandleFunc("/api/precomp/save", precomp.SavePrecompHandler(conn))       // 予製データの保存
+	mux.HandleFunc("/api/precomp/load", precomp.LoadPrecompHandler(conn))       // 予製データの呼び出し
+	mux.HandleFunc("/api/precomp/clear", precomp.ClearPrecompHandler(conn))
 
 	// Serve Frontend
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))

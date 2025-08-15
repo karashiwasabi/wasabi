@@ -157,27 +157,31 @@ type AggregationFilters struct {
 	Coefficient float64
 }
 type StockLedgerYJGroup struct {
-	YjCode            string                    `json:"yjCode"`
-	ProductName       string                    `json:"productName"`
-	YjUnitName        string                    `json:"yjUnitName"`
-	PackageLedgers    []StockLedgerPackageGroup `json:"packageLedgers"`
-	StartingBalance   interface{}               `json:"startingBalance"`
-	NetChange         float64                   `json:"netChange"`
-	EndingBalance     interface{}               `json:"endingBalance"`
-	TotalReorderPoint float64                   `json:"totalReorderPoint"`
-	IsReorderNeeded   bool                      `json:"isReorderNeeded"`
+	YjCode                string                    `json:"yjCode"`
+	ProductName           string                    `json:"productName"`
+	YjUnitName            string                    `json:"yjUnitName"`
+	PackageLedgers        []StockLedgerPackageGroup `json:"packageLedgers"`
+	StartingBalance       interface{}               `json:"startingBalance"`
+	NetChange             float64                   `json:"netChange"`
+	EndingBalance         interface{}               `json:"endingBalance"`
+	TotalReorderPoint     float64                   `json:"totalReorderPoint"`
+	IsReorderNeeded       bool                      `json:"isReorderNeeded"`
+	TotalBaseReorderPoint float64                   `json:"totalBaseReorderPoint"`
+	TotalPrecompounded    float64                   `json:"totalPrecompounded"`
 }
 type StockLedgerPackageGroup struct {
-	PackageKey      string              `json:"packageKey"`
-	JanUnitName     string              `json:"janUnitName"`
-	StartingBalance interface{}         `json:"startingBalance"`
-	Transactions    []LedgerTransaction `json:"transactions"`
-	NetChange       float64             `json:"netChange"`
-	EndingBalance   interface{}         `json:"endingBalance"`
-	MaxUsage        float64             `json:"maxUsage"`
-	ReorderPoint    float64             `json:"reorderPoint"`
-	IsReorderNeeded bool                `json:"isReorderNeeded"`
-	Master          *ProductMaster      `json:"-"`
+	PackageKey         string              `json:"packageKey"`
+	JanUnitName        string              `json:"janUnitName"`
+	StartingBalance    interface{}         `json:"startingBalance"`
+	Transactions       []LedgerTransaction `json:"transactions"`
+	NetChange          float64             `json:"netChange"`
+	EndingBalance      interface{}         `json:"endingBalance"`
+	MaxUsage           float64             `json:"maxUsage"`
+	ReorderPoint       float64             `json:"reorderPoint"`
+	IsReorderNeeded    bool                `json:"isReorderNeeded"`
+	Master             *ProductMaster      `json:"-"`
+	BaseReorderPoint   float64             `json:"baseReorderPoint"`
+	PrecompoundedTotal float64             `json:"precompoundedTotal"`
 }
 type LedgerTransaction struct {
 	TransactionRecord
@@ -234,3 +238,10 @@ type DeadStockFilters struct {
 }
 
 // ▲▲▲ 修正ここまで ▲▲▲
+type PreCompoundingRecord struct {
+	ID            int     `json:"id"`
+	PatientNumber string  `json:"patientNumber"`
+	ProductCode   string  `json:"productCode"`
+	Quantity      float64 `json:"quantity"` // YJ Quantity
+	CreatedAt     string  `json:"createdAt"`
+}

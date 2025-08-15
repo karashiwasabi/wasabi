@@ -3,6 +3,7 @@
 let activeCallback = null;
 let activeRowElement = null;
 
+const DEFAULT_SEARCH_API = '/api/products/search';
 const modal = document.getElementById('search-modal');
 const closeModalBtn = document.getElementById('closeModalBtn');
 const searchInput = document.getElementById('product-search-input');
@@ -25,9 +26,10 @@ async function performSearch() {
     alert('2文字以上入力してください。');
     return;
   }
+  const searchApi = modal.dataset.searchApi || DEFAULT_SEARCH_API; // 保存したAPIエンドポイントを取得
   searchResultsBody.innerHTML = '<tr><td colspan="6" class="center">検索中...</td></tr>';
   try {
-    const res = await fetch(`/api/products/search?q=${encodeURIComponent(query)}`);
+    const res = await fetch(`${searchApi}?q=${encodeURIComponent(query)}`);
     if (!res.ok) {
         throw new Error(`サーバーエラー: ${res.status}`);
     }
@@ -79,15 +81,14 @@ export function initModal() {
 }
 // ▲▲▲ 修正ここまで ▲▲▲
 
-// ▼▼▼ [修正点] showModalが実行するべきコールバック関数を引数で受け取るように変更 ▼▼▼
-export function showModal(rowElement, callback) {
+export function showModal(rowElement, callback, searchApi = DEFAULT_SEARCH_API) {
   if (modal) {
     activeRowElement = rowElement;
-    activeCallback = callback; // 実行する処理をセット
+    activeCallback = callback; 
+    modal.dataset.searchApi = searchApi; // APIエンドポイントを保存
     modal.classList.remove('hidden');
     searchInput.value = '';
     searchInput.focus();
     searchResultsBody.innerHTML = '<tr><td colspan="6" class="center">製品名を入力して検索してください。</td></tr>';
   }
 }
-// ▲▲▲ 修正ここまで ▲▲▲

@@ -13,6 +13,7 @@ import { initDeadStock } from './deadstock.js';
 import { initSettings, onViewShow as onSettingsViewShow } from './settings.js';
 import { initMedrec } from './medrec.js'; // ▼▼▼ [修正点] 追加 ▼▼▼
 import { initManualInventory } from './manual_inventory.js'; // ▼▼▼ [修正点] 追加 ▼▼▼
+import { initPrecomp } from './precomp.js';
 
 
 // (Global UI Elements and helper functions are unchanged)
@@ -44,6 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const aggregationOutputContainer = document.getElementById('aggregation-output-container');
     const deadStockBtn = document.getElementById('deadStockBtn'); // ▼▼▼ [修正点] 追加 ▼▼▼
     const deadstockOutputContainer = document.getElementById('deadstock-output-container'); // ▼▼▼ [修正点] 追加 ▼▼▼
+    const precompBtn = document.getElementById('precompBtn');
 
     // --- Initialize all modules ---
     initInOut();
@@ -59,6 +61,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initSettings(); // ▼▼▼ [修正点] 追加 ▼▼▼
     initMedrec(); // ▼▼▼ [修正点] 追加 ▼▼▼
     initManualInventory(); // ▼▼▼ [修正点] 追加 ▼▼▼
+    initPrecomp();
 
     // (View Switching Logic and Event Listeners are unchanged)
     function showView(viewIdToShow) {
@@ -106,6 +109,8 @@ document.addEventListener('DOMContentLoaded', () => {
         showView('settings-view');
         onSettingsViewShow(); // 画面表示時に設定を読み込む
     });
+
+    precompBtn.addEventListener('click', () => showView('precomp-view'));
     // ▲▲▲ 修正ここまで ▲▲▲
     // --- Initial State ---
     showView('in-out-view');

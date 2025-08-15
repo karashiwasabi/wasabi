@@ -33,14 +33,17 @@ function renderResults() {
 
     let html = '';
     dataToRender.forEach((yjGroup, yjIndex) => {
-        // formatBalance ヘルパー関数を使用して、数値・文字列の両方に対応
+        let yjReorderPointText = formatBalance(yjGroup.totalReorderPoint);
+        if (yjGroup.totalPrecompounded > 0) {
+            yjReorderPointText = `${formatBalance(yjGroup.totalBaseReorderPoint)} + 予${formatBalance(yjGroup.totalPrecompounded)} = ${formatBalance(yjGroup.totalReorderPoint)}`;
+        }
         html += `
             <div class="agg-yj-header" ${yjGroup.isReorderNeeded ? 'style="background-color: #f8d7da;"' : ''}>
                 <span>YJ: ${yjGroup.yjCode}</span>
                 <span class="product-name">${yjGroup.productName}</span>
                 <span class="balance-info">
                     在庫: ${formatBalance(yjGroup.endingBalance)} | 
-                    発注点: ${formatBalance(yjGroup.totalReorderPoint)} | 
+                    発注点: ${yjReorderPointText} | 
                     変動: ${formatBalance(yjGroup.netChange)}
                 </span>
             </div>
@@ -48,13 +51,16 @@ function renderResults() {
      
         yjGroup.packageLedgers.forEach((pkg, pkgIndex) => {
             const tableId = `agg-table-${yjIndex}-${pkgIndex}`;
-            // formatBalance ヘルパー関数を使用して、数値・文字列の両方に対応
+            let pkgReorderPointText = formatBalance(pkg.reorderPoint);
+            if (pkg.precompoundedTotal > 0) {
+                pkgReorderPointText = `${formatBalance(pkg.baseReorderPoint)} + 予${formatBalance(pkg.precompoundedTotal)} = ${formatBalance(pkg.reorderPoint)}`;
+            }
             html += `
                 <div class="agg-pkg-header" ${pkg.isReorderNeeded ? 'style="background-color: #fff3cd;"' : ''}>
                     <span>包装: ${pkg.packageKey}</span>
                     <span class="balance-info">
                         在庫: ${formatBalance(pkg.endingBalance)} |
-                        発注点: ${formatBalance(pkg.reorderPoint)} | 
+                        発注点: ${pkgReorderPointText} |  
                         変動: ${formatBalance(pkg.netChange)}
                     </span>
                 </div>

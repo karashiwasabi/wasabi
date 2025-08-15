@@ -126,3 +126,15 @@ CREATE TABLE IF NOT EXISTS dead_stock_list (
 
 CREATE INDEX IF NOT EXISTS idx_tx_jan_date
   ON transaction_records(jan_code, transaction_date);
+
+-- 予製レコードテーブル
+CREATE TABLE IF NOT EXISTS pre_compounding_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  patient_number TEXT NOT NULL,
+  product_code TEXT NOT NULL,
+  quantity REAL NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (product_code) REFERENCES product_master(product_code)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pre_compounding_product_code ON pre_compounding_records (product_code);

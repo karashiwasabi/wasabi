@@ -86,3 +86,29 @@ func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterVi
 	}
 	return results, nil
 }
+
+// SearchAllProductMastersByName は製品名またはカナ名（部分一致）でproduct_masterテーブル全体を検索します。
+func SearchAllProductMastersByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterView, error) {
+	q := `SELECT ` + selectColumns + ` FROM product_master 
+		  WHERE kana_name LIKE ? OR product_name LIKE ? 
+		  ORDER BY kana_name LIMIT 500`
+
+	rows, err := conn.Query(q, "%"+nameQuery+"%", "%"+nameQuery+"%")
+	if err != nil {
+		return nil, fmt.Errorf("SearchAllProductMastersByName failed: %w", err)
+	}
+	defer rows.Close()
+
+	var mastersView []model.ProductMasterView
+	for rows.Next() {
+		m, err := scanProductMaster(rows)
+		if err != nil {
+			return nil, err
+		}
+		mastersView = append(mastersView, model.ProductMasterView{
+			ProductMaster:        *m,
+			FormattedPackageSpec: m.PackageSpec, // Simplified for now
+		})
+	}
+	return mastersView, nil
+}

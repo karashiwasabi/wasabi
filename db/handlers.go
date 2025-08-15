@@ -36,3 +36,21 @@ func SearchJcshmsByNameHandler(conn *sql.DB) http.HandlerFunc {
 		json.NewEncoder(w).Encode(results)
 	}
 }
+
+// SearchAllMastersHandler は /api/masters/search_all のリクエストを処理します。
+func SearchAllMastersHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query().Get("q")
+		if len(query) < 2 {
+			http.Error(w, "Query must be at least 2 characters", http.StatusBadRequest)
+			return
+		}
+		results, err := SearchAllProductMastersByName(conn, query)
+		if err != nil {
+			http.Error(w, "Failed to search masters", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(results)
+	}
+}
