@@ -12,10 +12,12 @@
     <button id="inOutViewBtn" class="btn">入庫・出庫</button>
     <button id="datBtn" class="btn">納品・返品 (DAT)</button>
     <button id="usageBtn" class="btn">処方 (USAGE)</button>
-    <button id="inventoryBtn" class="btn">棚卸</button>
+    <button id="inventoryBtn" class="btn">棚卸(ファイル)</button>
+    <button id="manualInventoryBtn" class="btn">棚卸(手入力)</button>
     <button id="aggregationBtn" class="btn">集計</button>
     <button id="deadStockBtn" class="btn">デッドストック</button>
     <button id="masterEditViewBtn" class="btn">マスター</button>
+    <button id="settingsBtn" class="btn">設定</button>
     <button id="reprocessBtn" class="btn">仮登録を再計算</button>
     <button id="exportClientsBtn" class="btn">得意先エクスポート</button>
     <button id="importClientsBtn" class="btn">得意先インポート</button>
@@ -48,6 +50,22 @@
     <div id="inventory-view" class="hidden">
         <h3>Inventory File Upload</h3>
         <div id="inventory-output-container"></div>
+    </div>
+
+        <div id="manual-inventory-view" class="hidden">
+        <h1>棚卸（手入力）</h1>
+        <div class="filter-container">
+            <div class="field-group">
+                <label for="manual-inv-date">棚卸日</label>
+                <input type="date" id="manual-inv-date">
+            </div>
+            <div class="buttons-group">
+                <button id="save-manual-inv-btn" class="btn" style="background-color: #0d6efd; color: white;">この内容で棚卸を保存</button>
+            </div>
+        </div>
+        <div id="manual-inventory-container">
+            <p>読み込み中...</p>
+        </div>
     </div>
 
     <div id="aggregation-view" class="hidden">
@@ -107,6 +125,28 @@
         </div>
         <div id="master-edit-container"></div>
     </div>
+
+    <div id="settings-view" class="hidden">
+        <h1>設定</h1>
+        <div class="settings-form-container">
+            <fieldset>
+                <legend>e-mednet 連携設定</legend>
+                <div class="field-group">
+                    <label for="emednetUserID">ユーザーID</label>
+                    <input type="text" id="emednetUserID" style="width: 300px;">
+                </div>
+                <div class="field-group">
+                    <label for="emednetPassword">パスワード</label>
+                    <input type="password" id="emednetPassword" style="width: 300px;">
+                </div>
+            </fieldset>
+            
+            <div class="buttons-group" style="margin-top: 20px;">
+                <button id="saveSettingsBtn" class="btn" style="background-color: #0d6efd; color: white;">設定を保存</button>
+            </div>
+        </div>
+    </div>
+
 
     <div id="deadstock-view" class="hidden">
         <h1>デッドストックリスト</h1>

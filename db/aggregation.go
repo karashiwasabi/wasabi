@@ -5,21 +5,14 @@ package db
 import (
 	"database/sql"
 	"fmt"
-	"log" // ▼▼▼ [修正点] logパッケージをインポート ▼▼▼
 	"sort"
 	"strings"
 	"wasabi/model"
 	"wasabi/units"
 )
 
-// (inventoryInfo struct and GetStockLedger function up to the sort are unchanged)
-type inventoryInfo struct {
-	Date     string
-	Quantity float64
-}
-
+// GetStockLedger generates the stock ledger report with the new, simplified calculation logic.
 func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.StockLedgerYJGroup, error) {
-	// (Function body from line 17 to 337 is unchanged)
 	masterQuery := `SELECT ` + selectColumns + ` FROM product_master p WHERE 1=1 `
 	var masterArgs []interface{}
 	if filters.KanaName != "" {
@@ -27,7 +20,8 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		masterArgs = append(masterArgs, "%"+filters.KanaName+"%")
 	}
 	if filters.DosageForm != "" {
-		masterQuery += " AND p.package_form LIKE ? "
+		// 【修正点】検索対象を package_form から usage_classification に変更
+		masterQuery += " AND p.usage_classification LIKE ? "
 		masterArgs = append(masterArgs, "%"+filters.DosageForm+"%")
 	}
 	if len(filters.DrugTypes) > 0 && filters.DrugTypes[0] != "" {
@@ -73,56 +67,24 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 	for _, pc := range productCodes {
 		txArgs = append(txArgs, pc)
 	}
-	txQuery := `SELECT ` + TransactionColumns + ` FROM transaction_records WHERE jan_code IN (?` + strings.Repeat(",?", len(productCodes)-1) + `) AND transaction_date >= ? AND transaction_date <= ? ORDER BY transaction_date, id`
-	txArgs = append(txArgs, filters.StartDate, filters.EndDate)
-
-	txRows, err := conn.Query(txQuery, txArgs...)
-	if err != nil {
-		return nil, err
-	}
-	defer txRows.Close()
 
 	transactionsByProductCode := make(map[string][]*model.TransactionRecord)
-	for txRows.Next() {
-		t, err := ScanTransactionRecord(txRows)
+	if len(productCodes) > 0 {
+		txQuery := `SELECT ` + TransactionColumns + ` FROM transaction_records WHERE jan_code IN (?` + strings.Repeat(",?", len(productCodes)-1) + `) AND transaction_date >= ? AND transaction_date <= ? ORDER BY transaction_date, id`
+		txArgsWithDate := append(txArgs, filters.StartDate, filters.EndDate)
+
+		txRows, err := conn.Query(txQuery, txArgsWithDate...)
 		if err != nil {
 			return nil, err
 		}
-		transactionsByProductCode[t.JanCode] = append(transactionsByProductCode[t.JanCode], t)
-	}
+		defer txRows.Close()
 
-	latestInventoryMap := make(map[string]inventoryInfo)
-	if len(productCodes) > 0 {
-		invQueryArgs := make([]interface{}, len(productCodes))
-		copy(invQueryArgs, txArgs[:len(productCodes)])
-		invQueryArgs = append(invQueryArgs, filters.StartDate, filters.EndDate)
-		invQuery := `
-			SELECT product_code, transaction_date, yj_quantity
-			FROM (
-				SELECT
-					jan_code AS product_code,
-					transaction_date,
-					SUM(yj_quantity) AS yj_quantity,
-					ROW_NUMBER() OVER(PARTITION BY jan_code ORDER BY transaction_date DESC) as rn
-				FROM transaction_records
-				WHERE jan_code IN (?` + strings.Repeat(",?", len(productCodes)-1) + `) AND flag = 0 AND transaction_date BETWEEN ? AND ?
-				GROUP BY jan_code, transaction_date
-			)
-			WHERE rn = 1
-		`
-		invRows, err := conn.Query(invQuery, invQueryArgs...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to bulk query inventory: %w", err)
-		}
-		defer invRows.Close()
-
-		for invRows.Next() {
-			var pCode, date string
-			var qty float64
-			if err := invRows.Scan(&pCode, &date, &qty); err != nil {
+		for txRows.Next() {
+			t, err := ScanTransactionRecord(txRows)
+			if err != nil {
 				return nil, err
 			}
-			latestInventoryMap[pCode] = inventoryInfo{Date: date, Quantity: qty}
+			transactionsByProductCode[t.JanCode] = append(transactionsByProductCode[t.JanCode], t)
 		}
 	}
 
@@ -319,26 +281,29 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		}
 	}
 
+	// ▼▼▼ [修正点] 診断用ログを削除し、最終的なソートロジックを確定 ▼▼▼
 	sort.Slice(result, func(i, j int) bool {
-		prio := map[string]int{"内": 1, "外": 2, "注": 3}
+		// 【修正点】キーに日本語の文字を追加し、両方に対応させる
+		prio := map[string]int{
+			"1": 1, "内": 1,
+			"2": 2, "外": 2,
+			"3": 3, "歯": 3,
+			"4": 4, "注": 4,
+			"5": 5, "機": 5, // 「機」という文字にも対応
+			"6": 6, "他": 6, // 「他」という文字にも対応
+		}
 
 		masterI := mastersByYjCode[result[i].YjCode][0]
 		masterJ := mastersByYjCode[result[j].YjCode][0]
 
-		// ▼▼▼ [修正点] 診断用のログ出力を追加 ▼▼▼
-		log.Printf("AGGREGATION SORT: Comparing A: '%s' (prio: %d) with B: '%s' (prio: %d)",
-			masterI.UsageClassification, prio[masterI.UsageClassification],
-			masterJ.UsageClassification, prio[masterJ.UsageClassification])
-		// ▲▲▲ 修正ここまで ▲▲▲
-
-		prioI, okI := prio[masterI.UsageClassification]
+		prioI, okI := prio[strings.TrimSpace(masterI.UsageClassification)]
 		if !okI {
-			prioI = 4
+			prioI = 6 // その他のデフォルト優先順位
 		}
 
-		prioJ, okJ := prio[masterJ.UsageClassification]
+		prioJ, okJ := prio[strings.TrimSpace(masterJ.UsageClassification)]
 		if !okJ {
-			prioJ = 4
+			prioJ = 6 // その他のデフォルト優先順位
 		}
 
 		if prioI != prioJ {
@@ -346,6 +311,7 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		}
 		return masterI.KanaName < masterJ.KanaName
 	})
+	// ▲▲▲ 修正ここまで ▲▲▲
 
 	return result, nil
 }

@@ -119,11 +119,23 @@ export function initAggregation() {
                 throw new Error(errText || 'Aggregation failed');
             }
             lastData = await res.json(); // 元データを保持
-            renderResults(); // フィルターを適用して描画
+
+         renderResults();       // ← 既存：DOM 更新
+         // ← DOM 更新後、次のペイント直前に発火するカスタムイベント
+        requestAnimationFrame(() => {
+        window.dispatchEvent(new Event('aggregationRendered'));
+        });
+
         } catch (err) {
             outputContainer.innerHTML = `<p style="color:red;">エラー: ${err.message}</p>`;
         } finally {
             window.hideLoading();
         }
     });
+
+  // ← ここでリスナー登録
+  window.addEventListener('aggregationRendered', () => {
+    console.log('集計描画完了！');
+    // たとえばボタンを有効化するとか、別コンポーネントに通知するとか
+  });
 }

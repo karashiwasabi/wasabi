@@ -12,7 +12,6 @@ import (
 )
 
 func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadStockGroup, error) {
-	// 1. Get all transactions to build a master list and for stock calculation
 	rows, err := tx.Query(`SELECT ` + TransactionColumns + ` FROM transaction_records ORDER BY transaction_date, id`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get all transactions: %w", err)
@@ -32,7 +31,6 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 		}
 	}
 
-	// 2. Group masters by YjCode (Major Group)
 	groups := make(map[string][]*model.ProductMaster)
 	for _, m := range masters {
 		if m.YjCode != "" {
@@ -40,11 +38,8 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 		}
 	}
 
-	// ▼▼▼ [修正点] ご指示の最終ロジックに書き換え ▼▼▼
-	// 3. Determine which major groups are dead stock candidates
 	deadStockMajorGroups := make(map[string]bool)
 	for yjCode, masterList := range groups {
-		// Group masters by minor key (package) to calculate maxUsage per package
 		packagesByMinorGroupKey := make(map[string][]*model.ProductMaster)
 		for _, m := range masterList {
 			key := fmt.Sprintf("%s|%g|%s", m.PackageForm, m.JanPackInnerQty, m.YjUnitName)
@@ -64,7 +59,6 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 				}
 			}
 
-			// If reorder point is 0 for any minor group, the whole major group is a candidate
 			if maxUsage*filters.Coefficient == 0 {
 				isDeadStockCandidate = true
 				break
@@ -76,7 +70,6 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 		}
 	}
 
-	// 4. Build the final result for the candidate groups
 	var result []model.DeadStockGroup
 	for yjCode, masterList := range groups {
 		if !deadStockMajorGroups[yjCode] {
@@ -140,8 +133,16 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 		}
 	}
 
+	// ▼▼▼ [修正点] 診断用ログを削除し、最終的なソートロジックを確定 ▼▼▼
 	sort.Slice(result, func(i, j int) bool {
-		prio := map[string]int{"内": 1, "外": 2, "注": 3}
+		prio := map[string]int{
+			"1": 1, "内": 1,
+			"2": 2, "外": 2,
+			"3": 3, "歯": 3,
+			"4": 4, "注": 4,
+			"5": 5, "機": 5, // 「機」という文字にも対応
+			"6": 6, "他": 6, // 「他」という文字にも対応
+		}
 
 		if len(result[i].Packages) == 0 || len(result[j].Packages) == 0 {
 			return false
@@ -149,15 +150,14 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 		masterI := result[i].Packages[0].ProductMaster
 		masterJ := result[j].Packages[0].ProductMaster
 
-		// Trim space before lookup for robustness
 		prioI, okI := prio[strings.TrimSpace(masterI.UsageClassification)]
 		if !okI {
-			prioI = 4
+			prioI = 6
 		}
 
 		prioJ, okJ := prio[strings.TrimSpace(masterJ.UsageClassification)]
-		if !okJ {
-			prioJ = 4
+		if !okJ { // ← この部分を `!okJ` に正しく修正します
+			prioJ = 6
 		}
 
 		if prioI != prioJ {

@@ -1,3 +1,5 @@
+// C:\Dev\WASABI\db\transaction_records.go
+
 package db
 
 import (
@@ -55,7 +57,7 @@ INSERT OR REPLACE INTO transaction_records (
 	defer stmt.Close()
 
 	for _, rec := range records {
-		_, err := stmt.Exec(
+		_, err = stmt.Exec( // ここは再宣言ではないので = を使用
 			rec.TransactionDate, rec.ClientCode, rec.ReceiptNumber, rec.LineNumber, rec.Flag,
 			rec.JanCode, rec.YjCode, rec.ProductName, rec.KanaName, rec.UsageClassification, rec.PackageForm, rec.PackageSpec, rec.MakerName,
 			rec.DatQuantity, rec.JanPackInnerQty, rec.JanQuantity,
@@ -86,7 +88,7 @@ func GetReceiptNumbersByDate(conn *sql.DB, date string) ([]string, error) {
 	var numbers []string
 	for rows.Next() {
 		var number string
-		if err := rows.Scan(&number); err != nil {
+		if err = rows.Scan(&number); err != nil { // ここは再宣言ではないので = を使用
 			return nil, err
 		}
 		numbers = append(numbers, number)
@@ -115,9 +117,9 @@ func GetTransactionsByReceiptNumber(conn *sql.DB, receiptNumber string) ([]model
 }
 
 // GetProvisionalTransactions retrieves all records marked as 'provisional'.
-func GetProvisionalTransactions(conn *sql.DB) ([]model.TransactionRecord, error) {
+func GetProvisionalTransactions(tx *sql.Tx) ([]model.TransactionRecord, error) {
 	q := `SELECT ` + TransactionColumns + ` FROM transaction_records WHERE processing_status = 'provisional'`
-	rows, err := conn.Query(q)
+	rows, err := tx.Query(q)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get provisional transactions: %w", err)
 	}
@@ -136,7 +138,6 @@ func GetProvisionalTransactions(conn *sql.DB) ([]model.TransactionRecord, error)
 
 // UpdateFullTransactionInTx updates an existing transaction record with enriched master data.
 func UpdateFullTransactionInTx(tx *sql.Tx, record *model.TransactionRecord) error {
-	// ▼▼▼ [修正点] UPDATE文に jan_code を追加 ▼▼▼
 	const q = `
 		UPDATE transaction_records SET
 			jan_code = ?, yj_code = ?, product_name = ?, kana_name = ?, usage_classification = ?, package_form = ?, 
@@ -149,7 +150,6 @@ func UpdateFullTransactionInTx(tx *sql.Tx, record *model.TransactionRecord) erro
 		WHERE id = ?`
 
 	_, err := tx.Exec(q,
-		// ▼▼▼ [修正点] 更新する値のリストに record.JanCode を追加 ▼▼▼
 		record.JanCode, record.YjCode, record.ProductName, record.KanaName, record.UsageClassification, record.PackageForm,
 		record.PackageSpec, record.MakerName, record.JanPackInnerQty, record.JanPackUnitQty,
 		record.JanUnitName, record.JanUnitCode, record.YjPackUnitQty, record.YjUnitName,
@@ -178,7 +178,8 @@ func DeleteTransactionsByReceiptNumberInTx(tx *sql.Tx, receiptNumber string) err
 // DeleteTransactionsByFlagAndDate deletes transactions with a specific flag on a specific date.
 func DeleteTransactionsByFlagAndDate(tx *sql.Tx, flag int, date string) error {
 	const q = `DELETE FROM transaction_records WHERE flag = ? AND transaction_date = ?`
-	if _, err := tx.Exec(q, flag, date); err != nil {
+	_, err := tx.Exec(q, flag, date)
+	if err != nil {
 		return fmt.Errorf("failed to delete transactions for flag %d, date %s: %w", flag, date, err)
 	}
 	return nil

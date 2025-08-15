@@ -10,6 +10,10 @@ import { initReprocessButton } from './reprocess.js';
 import { initBackupButtons } from './backup.js';
 import { initModal } from './inout_modal.js'; 
 import { initDeadStock } from './deadstock.js'; 
+import { initSettings, onViewShow as onSettingsViewShow } from './settings.js';
+import { initMedrec } from './medrec.js'; // ▼▼▼ [修正点] 追加 ▼▼▼
+import { initManualInventory } from './manual_inventory.js'; // ▼▼▼ [修正点] 追加 ▼▼▼
+
 
 // (Global UI Elements and helper functions are unchanged)
 window.showLoading = () => document.getElementById('loading-overlay').classList.remove('hidden');
@@ -31,6 +35,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const inventoryBtn = document.getElementById('inventoryBtn');
     const aggregationBtn = document.getElementById('aggregationBtn');
     const masterEditBtn = document.getElementById('masterEditViewBtn');
+    const settingsBtn = document.getElementById('settingsBtn'); // ▼▼▼ [修正点] 追加 ▼▼▼
     const datFileInput = document.getElementById('datFileInput');
     const usageFileInput = document.getElementById('usageFileInput');
     const inventoryFileInput = document.getElementById('inventoryFileInput');
@@ -51,6 +56,9 @@ document.addEventListener('DOMContentLoaded', () => {
     initBackupButtons();
     initModal(); // ▼▼▼ [修正点] モーダルをここで一度だけ初期化 ▼▼▼
     initDeadStock(); // ▼▼▼ [修正点] この一行が抜けていました ▼▼▼
+    initSettings(); // ▼▼▼ [修正点] 追加 ▼▼▼
+    initMedrec(); // ▼▼▼ [修正点] 追加 ▼▼▼
+    initManualInventory(); // ▼▼▼ [修正点] 追加 ▼▼▼
 
     // (View Switching Logic and Event Listeners are unchanged)
     function showView(viewIdToShow) {
@@ -77,6 +85,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (inventoryOutputContainer) inventoryOutputContainer.innerHTML = '';
         inventoryFileInput.click();
     });
+        // ▼▼▼ [修正点] 手入力棚卸ボタンのリスナーを追加 ▼▼▼
+    manualInventoryBtn.addEventListener('click', () => {
+        showView('manual-inventory-view');
+        // Dispatch a custom event to trigger loading
+        document.getElementById('manual-inventory-view').dispatchEvent(new Event('show'));
+    });
+    // ▲▲▲ 修正ここまで ▲▲▲
     aggregationBtn.addEventListener('click', () => {
         if (aggregationOutputContainer) aggregationOutputContainer.innerHTML = '';
         showView('aggregation-view');
@@ -86,7 +101,12 @@ document.addEventListener('DOMContentLoaded', () => {
         showView('deadstock-view');
     });
     masterEditBtn.addEventListener('click', () => { showView('master-edit-view'); resetMasterEditView(); });
-    
+        // ▼▼▼ [修正点] 設定ボタンのリスナーを追加 ▼▼▼
+    settingsBtn.addEventListener('click', () => {
+        showView('settings-view');
+        onSettingsViewShow(); // 画面表示時に設定を読み込む
+    });
+    // ▲▲▲ 修正ここまで ▲▲▲
     // --- Initial State ---
     showView('in-out-view');
     resetInOutView();

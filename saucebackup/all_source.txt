@@ -281,6 +281,72 @@ func ImportProductsHandler(conn *sql.DB) http.HandlerFunc {
 }
 
 
+----- C:\Dev\WASABI\config\config.go -----
+// C:\Dev\WASABI\config\config.go
+
+package config
+
+import (
+	"encoding/json"
+	"os"
+	"sync"
+)
+
+type Config struct {
+	EmednetUserID   string `json:"emednetUserId"`
+	EmednetPassword string `json:"emednetPassword"`
+}
+
+var (
+	cfg Config
+	mu  sync.RWMutex
+)
+
+const configFilePath = "./config.json"
+
+func LoadConfig() (Config, error) {
+	mu.RLock()
+	defer mu.RUnlock()
+
+	file, err := os.ReadFile(configFilePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Config{}, nil
+		}
+		return Config{}, err
+	}
+
+	var tempCfg Config
+	if err := json.Unmarshal(file, &tempCfg); err != nil {
+		return Config{}, err
+	}
+	cfg = tempCfg
+	return cfg, nil
+}
+
+func SaveConfig(newCfg Config) error {
+	mu.Lock()
+	defer mu.Unlock()
+
+	file, err := json.MarshalIndent(newCfg, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	if err := os.WriteFile(configFilePath, file, 0644); err != nil {
+		return err
+	}
+	cfg = newCfg
+	return nil
+}
+
+func GetConfig() Config {
+	mu.RLock()
+	defer mu.RUnlock()
+	return cfg
+}
+
+
 ----- C:\Dev\WASABI\dat\handler.go -----
 // C:\Dev\WASABI\dat\handler.go
 
@@ -521,16 +587,8 @@ import (
 	"wasabi/units"
 )
 
-// inventoryInfo stores the date and quantity of the latest inventory for a product.
-type inventoryInfo struct {
-	Date     string
-	Quantity float64
-}
-
 // GetStockLedger generates the stock ledger report with the new, simplified calculation logic.
 func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.StockLedgerYJGroup, error) {
-	// (Function body from line 17 to 337 is unchanged)
-	// 1. Get filtered product masters
 	masterQuery := `SELECT ` + selectColumns + ` FROM product_master p WHERE 1=1 `
 	var masterArgs []interface{}
 	if filters.KanaName != "" {
@@ -538,7 +596,8 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		masterArgs = append(masterArgs, "%"+filters.KanaName+"%")
 	}
 	if filters.DosageForm != "" {
-		masterQuery += " AND p.package_form LIKE ? "
+		// 【修正点】検索対象を package_form から usage_classification に変更
+		masterQuery += " AND p.usage_classification LIKE ? "
 		masterArgs = append(masterArgs, "%"+filters.DosageForm+"%")
 	}
 	if len(filters.DrugTypes) > 0 && filters.DrugTypes[0] != "" {
@@ -580,65 +639,31 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		return []model.StockLedgerYJGroup{}, nil
 	}
 
-	// 2. Fetch all transactions for the relevant products within the period
 	var txArgs []interface{}
 	for _, pc := range productCodes {
 		txArgs = append(txArgs, pc)
 	}
-	txQuery := `SELECT ` + TransactionColumns + ` FROM transaction_records WHERE jan_code IN (?` + strings.Repeat(",?", len(productCodes)-1) + `) AND transaction_date >= ? AND transaction_date <= ? ORDER BY transaction_date, id`
-	txArgs = append(txArgs, filters.StartDate, filters.EndDate)
-
-	txRows, err := conn.Query(txQuery, txArgs...)
-	if err != nil {
-		return nil, err
-	}
-	defer txRows.Close()
 
 	transactionsByProductCode := make(map[string][]*model.TransactionRecord)
-	for txRows.Next() {
-		t, err := ScanTransactionRecord(txRows)
+	if len(productCodes) > 0 {
+		txQuery := `SELECT ` + TransactionColumns + ` FROM transaction_records WHERE jan_code IN (?` + strings.Repeat(",?", len(productCodes)-1) + `) AND transaction_date >= ? AND transaction_date <= ? ORDER BY transaction_date, id`
+		txArgsWithDate := append(txArgs, filters.StartDate, filters.EndDate)
+
+		txRows, err := conn.Query(txQuery, txArgsWithDate...)
 		if err != nil {
 			return nil, err
 		}
-		transactionsByProductCode[t.JanCode] = append(transactionsByProductCode[t.JanCode], t)
-	}
+		defer txRows.Close()
 
-	// Fetch all necessary inventory info in one query
-	latestInventoryMap := make(map[string]inventoryInfo)
-	if len(productCodes) > 0 {
-		invQueryArgs := txArgs[:len(txArgs)-2] // Reuse product codes from txArgs
-		invQueryArgs = append(invQueryArgs, filters.StartDate, filters.EndDate)
-		invQuery := `
-			SELECT product_code, transaction_date, yj_quantity
-			FROM (
-				SELECT
-					jan_code AS product_code,
-					transaction_date,
-					SUM(yj_quantity) AS yj_quantity,
-					ROW_NUMBER() OVER(PARTITION BY jan_code ORDER BY transaction_date DESC) as rn
-				FROM transaction_records
-				WHERE jan_code IN (?` + strings.Repeat(",?", len(productCodes)-1) + `) AND flag = 0 AND transaction_date BETWEEN ? AND ?
-				GROUP BY jan_code, transaction_date
-			)
-			WHERE rn = 1
-		`
-		invRows, err := conn.Query(invQuery, invQueryArgs...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to bulk query inventory: %w", err)
-		}
-		defer invRows.Close()
-
-		for invRows.Next() {
-			var pCode, date string
-			var qty float64
-			if err := invRows.Scan(&pCode, &date, &qty); err != nil {
+		for txRows.Next() {
+			t, err := ScanTransactionRecord(txRows)
+			if err != nil {
 				return nil, err
 			}
-			latestInventoryMap[pCode] = inventoryInfo{Date: date, Quantity: qty}
+			transactionsByProductCode[t.JanCode] = append(transactionsByProductCode[t.JanCode], t)
 		}
 	}
 
-	// 3. Process YJ groups
 	var result []model.StockLedgerYJGroup
 	for yjCode, mastersInYjGroup := range mastersByYjCode {
 		if len(mastersInYjGroup) == 0 {
@@ -832,28 +857,35 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		}
 	}
 
-	// ▼▼▼ [修正点] ご指定の優先順位でソート ▼▼▼
-	// 4. Final sort
+	// ▼▼▼ [修正点] 診断用ログを削除し、最終的なソートロジックを確定 ▼▼▼
 	sort.Slice(result, func(i, j int) bool {
-		prio := map[string]int{"内": 1, "外": 2, "注": 3}
+		// 【修正点】キーに日本語の文字を追加し、両方に対応させる
+		prio := map[string]int{
+			"1": 1, "内": 1,
+			"2": 2, "外": 2,
+			"3": 3, "歯": 3,
+			"4": 4, "注": 4,
+			"5": 5, "機": 5, // 「機」という文字にも対応
+			"6": 6, "他": 6, // 「他」という文字にも対応
+		}
 
 		masterI := mastersByYjCode[result[i].YjCode][0]
 		masterJ := mastersByYjCode[result[j].YjCode][0]
 
-		prioI, okI := prio[masterI.UsageClassification]
+		prioI, okI := prio[strings.TrimSpace(masterI.UsageClassification)]
 		if !okI {
-			prioI = 4
-		} // その他は優先度4
+			prioI = 6 // その他のデフォルト優先順位
+		}
 
-		prioJ, okJ := prio[masterJ.UsageClassification]
+		prioJ, okJ := prio[strings.TrimSpace(masterJ.UsageClassification)]
 		if !okJ {
-			prioJ = 4
-		} // その他は優先度4
+			prioJ = 6 // その他のデフォルト優先順位
+		}
 
 		if prioI != prioJ {
 			return prioI < prioJ
 		}
-		return masterI.KanaName < masterJ.KanaName // 優先度が同じならカナ名順
+		return masterI.KanaName < masterJ.KanaName
 	})
 	// ▲▲▲ 修正ここまで ▲▲▲
 
@@ -929,7 +961,6 @@ import (
 )
 
 func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadStockGroup, error) {
-	// 1. Get all transactions to build a master list and for stock calculation
 	rows, err := tx.Query(`SELECT ` + TransactionColumns + ` FROM transaction_records ORDER BY transaction_date, id`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get all transactions: %w", err)
@@ -949,24 +980,6 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 		}
 	}
 
-	// 2. Find which products had usage in the filter period
-	usageQuery := `SELECT DISTINCT jan_code FROM transaction_records WHERE flag = 3 AND transaction_date BETWEEN ? AND ?`
-	usageRows, err := tx.Query(usageQuery, filters.StartDate, filters.EndDate)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get usage records: %w", err)
-	}
-	defer usageRows.Close()
-
-	productsWithUsage := make(map[string]struct{})
-	for usageRows.Next() {
-		var janCode string
-		if err := usageRows.Scan(&janCode); err != nil {
-			return nil, err
-		}
-		productsWithUsage[janCode] = struct{}{}
-	}
-
-	// 3. Group masters by YjCode (Major Group)
 	groups := make(map[string][]*model.ProductMaster)
 	for _, m := range masters {
 		if m.YjCode != "" {
@@ -974,22 +987,38 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 		}
 	}
 
-	// 4. Determine which major groups are potentially dead stock
 	deadStockMajorGroups := make(map[string]bool)
 	for yjCode, masterList := range groups {
-		isPotentiallyDead := false
-		for _, master := range masterList {
-			if _, ok := productsWithUsage[master.ProductCode]; !ok {
-				isPotentiallyDead = true
+		packagesByMinorGroupKey := make(map[string][]*model.ProductMaster)
+		for _, m := range masterList {
+			key := fmt.Sprintf("%s|%g|%s", m.PackageForm, m.JanPackInnerQty, m.YjUnitName)
+			packagesByMinorGroupKey[key] = append(packagesByMinorGroupKey[key], m)
+		}
+
+		isDeadStockCandidate := false
+		for _, mastersInMinorGroup := range packagesByMinorGroupKey {
+			var maxUsage float64
+			for _, master := range mastersInMinorGroup {
+				for _, t := range txsByProductCode[master.ProductCode] {
+					if t.Flag == 3 && t.TransactionDate >= filters.StartDate && t.TransactionDate <= filters.EndDate {
+						if t.YjQuantity > maxUsage {
+							maxUsage = t.YjQuantity
+						}
+					}
+				}
+			}
+
+			if maxUsage*filters.Coefficient == 0 {
+				isDeadStockCandidate = true
 				break
 			}
 		}
-		if isPotentiallyDead {
+
+		if isDeadStockCandidate {
 			deadStockMajorGroups[yjCode] = true
 		}
 	}
 
-	// 5. Build the final result
 	var result []model.DeadStockGroup
 	for yjCode, masterList := range groups {
 		if !deadStockMajorGroups[yjCode] {
@@ -1004,7 +1033,6 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 			ProductName: masterList[0].ProductName,
 		}
 
-		// ▼▼▼ [修正点] 包装情報に基づく小グループ集約を追加 ▼▼▼
 		packagesByMinorGroupKey := make(map[string][]*model.ProductMaster)
 		for _, m := range masterList {
 			key := fmt.Sprintf("%s|%g|%s", m.PackageForm, m.JanPackInnerQty, m.YjUnitName)
@@ -1022,7 +1050,6 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 			var aggregatedStock float64
 			var aggregatedSavedRecords []model.DeadStockRecord
 
-			// 小グループに属する各製品（JAN違いなど）の在庫を合算
 			for _, master := range mastersInMinorGroup {
 				stock, _ := calculateCurrentStock(txsByProductCode[master.ProductCode])
 				aggregatedStock += stock
@@ -1034,7 +1061,6 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 				aggregatedSavedRecords = append(aggregatedSavedRecords, savedRecords...)
 			}
 
-			// 代表マスターを一つ選んで表示情報を設定
 			repMaster := mastersInMinorGroup[0]
 			finalPackages = append(finalPackages, model.DeadStockPackage{
 				ProductMaster: *repMaster,
@@ -1046,7 +1072,6 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 
 		dsg.TotalStock = totalStock
 		dsg.Packages = finalPackages
-		// ▲▲▲ 修正ここまで ▲▲▲
 
 		if filters.ExcludeZeroStock && dsg.TotalStock <= 0 {
 			continue
@@ -1057,20 +1082,31 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 		}
 	}
 
+	// ▼▼▼ [修正点] 診断用ログを削除し、最終的なソートロジックを確定 ▼▼▼
 	sort.Slice(result, func(i, j int) bool {
-		prio := map[string]int{"内": 1, "外": 2, "注": 3}
+		prio := map[string]int{
+			"1": 1, "内": 1,
+			"2": 2, "外": 2,
+			"3": 3, "歯": 3,
+			"4": 4, "注": 4,
+			"5": 5, "機": 5, // 「機」という文字にも対応
+			"6": 6, "他": 6, // 「他」という文字にも対応
+		}
 
+		if len(result[i].Packages) == 0 || len(result[j].Packages) == 0 {
+			return false
+		}
 		masterI := result[i].Packages[0].ProductMaster
 		masterJ := result[j].Packages[0].ProductMaster
 
-		prioI, okI := prio[masterI.UsageClassification]
+		prioI, okI := prio[strings.TrimSpace(masterI.UsageClassification)]
 		if !okI {
-			prioI = 4
+			prioI = 6
 		}
 
-		prioJ, okJ := prio[masterJ.UsageClassification]
-		if !okJ {
-			prioJ = 4
+		prioJ, okJ := prio[strings.TrimSpace(masterJ.UsageClassification)]
+		if !okJ { // ← この部分を `!okJ` に正しく修正します
+			prioJ = 6
 		}
 
 		if prioI != prioJ {
@@ -1078,6 +1114,7 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 		}
 		return masterI.KanaName < masterJ.KanaName
 	})
+	// ▲▲▲ 修正ここまで ▲▲▲
 
 	return result, nil
 }
@@ -1500,7 +1537,19 @@ func GetEditableProductMasters(conn *sql.DB) ([]model.ProductMasterView, error) 
 
 // GetAllProductMasters retrieves all product master records.
 func GetAllProductMasters(conn *sql.DB) ([]*model.ProductMaster, error) {
-	q := `SELECT ` + selectColumns + ` FROM product_master ORDER BY kana_name`
+	// 【修正点】ORDER BY句にCASE文を追加して優先順位ソートを実装
+	q := `SELECT ` + selectColumns + ` FROM product_master 
+		ORDER BY
+			CASE
+				WHEN usage_classification = '1' OR usage_classification = '内' THEN 1
+				WHEN usage_classification = '2' OR usage_classification = '外' THEN 2
+				WHEN usage_classification = '3' OR usage_classification = '歯' THEN 3
+				WHEN usage_classification = '4' OR usage_classification = '注' THEN 4
+				WHEN usage_classification = '5' OR usage_classification = '機' THEN 5
+				WHEN usage_classification = '6' OR usage_classification = '他' THEN 6
+				ELSE 7
+			END,
+			kana_name`
 
 	rows, err := conn.Query(q)
 	if err != nil {
@@ -1712,6 +1761,8 @@ func InitializeSequenceFromMaxClientCode(conn *sql.DB) error {
 
 
 ----- C:\Dev\WASABI\db\transaction_records.go -----
+// C:\Dev\WASABI\db\transaction_records.go
+
 package db
 
 import (
@@ -1769,7 +1820,7 @@ INSERT OR REPLACE INTO transaction_records (
 	defer stmt.Close()
 
 	for _, rec := range records {
-		_, err := stmt.Exec(
+		_, err = stmt.Exec( // ここは再宣言ではないので = を使用
 			rec.TransactionDate, rec.ClientCode, rec.ReceiptNumber, rec.LineNumber, rec.Flag,
 			rec.JanCode, rec.YjCode, rec.ProductName, rec.KanaName, rec.UsageClassification, rec.PackageForm, rec.PackageSpec, rec.MakerName,
 			rec.DatQuantity, rec.JanPackInnerQty, rec.JanQuantity,
@@ -1800,7 +1851,7 @@ func GetReceiptNumbersByDate(conn *sql.DB, date string) ([]string, error) {
 	var numbers []string
 	for rows.Next() {
 		var number string
-		if err := rows.Scan(&number); err != nil {
+		if err = rows.Scan(&number); err != nil { // ここは再宣言ではないので = を使用
 			return nil, err
 		}
 		numbers = append(numbers, number)
@@ -1829,9 +1880,9 @@ func GetTransactionsByReceiptNumber(conn *sql.DB, receiptNumber string) ([]model
 }
 
 // GetProvisionalTransactions retrieves all records marked as 'provisional'.
-func GetProvisionalTransactions(conn *sql.DB) ([]model.TransactionRecord, error) {
+func GetProvisionalTransactions(tx *sql.Tx) ([]model.TransactionRecord, error) {
 	q := `SELECT ` + TransactionColumns + ` FROM transaction_records WHERE processing_status = 'provisional'`
-	rows, err := conn.Query(q)
+	rows, err := tx.Query(q)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get provisional transactions: %w", err)
 	}
@@ -1850,7 +1901,6 @@ func GetProvisionalTransactions(conn *sql.DB) ([]model.TransactionRecord, error)
 
 // UpdateFullTransactionInTx updates an existing transaction record with enriched master data.
 func UpdateFullTransactionInTx(tx *sql.Tx, record *model.TransactionRecord) error {
-	// ▼▼▼ [修正点] UPDATE文に jan_code を追加 ▼▼▼
 	const q = `
 		UPDATE transaction_records SET
 			jan_code = ?, yj_code = ?, product_name = ?, kana_name = ?, usage_classification = ?, package_form = ?, 
@@ -1863,7 +1913,6 @@ func UpdateFullTransactionInTx(tx *sql.Tx, record *model.TransactionRecord) erro
 		WHERE id = ?`
 
 	_, err := tx.Exec(q,
-		// ▼▼▼ [修正点] 更新する値のリストに record.JanCode を追加 ▼▼▼
 		record.JanCode, record.YjCode, record.ProductName, record.KanaName, record.UsageClassification, record.PackageForm,
 		record.PackageSpec, record.MakerName, record.JanPackInnerQty, record.JanPackUnitQty,
 		record.JanUnitName, record.JanUnitCode, record.YjPackUnitQty, record.YjUnitName,
@@ -1892,7 +1941,8 @@ func DeleteTransactionsByReceiptNumberInTx(tx *sql.Tx, receiptNumber string) err
 // DeleteTransactionsByFlagAndDate deletes transactions with a specific flag on a specific date.
 func DeleteTransactionsByFlagAndDate(tx *sql.Tx, flag int, date string) error {
 	const q = `DELETE FROM transaction_records WHERE flag = ? AND transaction_date = ?`
-	if _, err := tx.Exec(q, flag, date); err != nil {
+	_, err := tx.Exec(q, flag, date)
+	if err != nil {
 		return fmt.Errorf("failed to delete transactions for flag %d, date %s: %w", flag, date, err)
 	}
 	return nil
@@ -1918,6 +1968,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strconv" // ▼▼▼ [修正点] 追加 ▼▼▼
 	"wasabi/db"
 	"wasabi/model"
 )
@@ -1925,33 +1976,40 @@ import (
 func GetDeadStockHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
+
+		// ▼▼▼ [修正点] coefficientを取得する処理を追加 ▼▼▼
+		coefficient, err := strconv.ParseFloat(q.Get("coefficient"), 64)
+		if err != nil {
+			coefficient = 1.5 // Default value
+		}
+
 		filters := model.DeadStockFilters{
 			StartDate:        q.Get("startDate"),
 			EndDate:          q.Get("endDate"),
 			ExcludeZeroStock: q.Get("excludeZeroStock") == "true",
+			Coefficient:      coefficient,
 		}
+		// ▲▲▲ 修正ここまで ▲▲▲
 
-		// ▼▼▼ [修正点] 処理全体をトランザクションで囲む ▼▼▼
 		tx, err := conn.Begin()
 		if err != nil {
 			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
 			return
 		}
-		defer tx.Rollback() // Read-only operation, so we can always rollback.
+		defer tx.Rollback()
 
 		results, err := db.GetDeadStockList(tx, filters)
 		if err != nil {
 			http.Error(w, "Failed to get dead stock list: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(results)
 	}
 }
 
-// SaveDeadStockHandler is unchanged
+// (SaveDeadStockHandler is unchanged)
 func SaveDeadStockHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var payload []model.DeadStockRecord
@@ -2389,6 +2447,137 @@ func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 }
 
 
+----- C:\Dev\WASABI\inventory\manual_handler.go -----
+// C:\Dev\WASABI\inventory\manual_handler.go
+
+package inventory
+
+import (
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"wasabi/db"
+	"wasabi/mappers"
+	"wasabi/model"
+)
+
+// ListInventoryProductsHandler returns all product masters for the manual inventory screen.
+func ListInventoryProductsHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		products, err := db.GetAllProductMasters(conn)
+		if err != nil {
+			http.Error(w, "Failed to get product list: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(products)
+	}
+}
+
+type ManualInventoryRecord struct {
+	ProductCode string  `json:"productCode"`
+	YjQuantity  float64 `json:"yjQuantity"`
+}
+
+type ManualInventoryPayload struct {
+	Date    string                  `json:"date"`
+	Records []ManualInventoryRecord `json:"records"`
+}
+
+// SaveManualInventoryHandler saves the manually entered inventory counts.
+func SaveManualInventoryHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var payload ManualInventoryPayload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if payload.Date == "" {
+			http.Error(w, "Date is required", http.StatusBadRequest)
+			return
+		}
+
+		tx, err := conn.Begin()
+		if err != nil {
+			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback()
+
+		if err := db.DeleteTransactionsByFlagAndDate(tx, 0, payload.Date); err != nil {
+			http.Error(w, "Failed to clear old inventory data", http.StatusInternalServerError)
+			return
+		}
+
+		var productCodes []string
+		recordsMap := make(map[string]float64)
+		for _, rec := range payload.Records {
+			// ▼▼▼ [修正点] 0以下の数量も許容する（マイナス棚卸など） ▼▼▼
+			// if rec.YjQuantity != 0 { // この行と対応する閉じ括弧を削除
+			productCodes = append(productCodes, rec.ProductCode)
+			recordsMap[rec.ProductCode] = rec.YjQuantity
+			// } // この行を削除
+			// ▲▲▲ 修正ここまで ▲▲▲
+		}
+
+		if len(productCodes) == 0 {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"message": "保存するデータがありませんでした。"})
+			return
+		}
+
+		mastersMap, err := db.GetProductMastersByCodesMap(tx, productCodes)
+		if err != nil {
+			http.Error(w, "Failed to get product masters", http.StatusInternalServerError)
+			return
+		}
+
+		var finalRecords []model.TransactionRecord
+		receiptNumber := fmt.Sprintf("INV%s", payload.Date)
+
+		for i, code := range productCodes {
+			master, ok := mastersMap[code]
+			if !ok {
+				continue
+			}
+
+			tr := model.TransactionRecord{
+				TransactionDate:  payload.Date,
+				Flag:             0, // 0 = Inventory
+				JanCode:          master.ProductCode,
+				YjQuantity:       recordsMap[code],
+				ReceiptNumber:    receiptNumber,
+				LineNumber:       fmt.Sprintf("%d", i+1),
+				ProcessFlagMA:    "COMPLETE",
+				ProcessingStatus: sql.NullString{String: "completed", Valid: true},
+			}
+
+			if master.JanPackInnerQty > 0 {
+				tr.JanQuantity = tr.YjQuantity / master.JanPackInnerQty
+			}
+
+			mappers.MapProductMasterToTransaction(&tr, master)
+			finalRecords = append(finalRecords, tr)
+		}
+
+		if err := db.PersistTransactionRecordsInTx(tx, finalRecords); err != nil {
+			http.Error(w, "Failed to save inventory records", http.StatusInternalServerError)
+			return
+		}
+
+		if err := tx.Commit(); err != nil {
+			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"message": fmt.Sprintf("%d件の棚卸データを保存しました。", len(finalRecords))})
+	}
+}
+
+
 ----- C:\Dev\WASABI\loader\loader.go -----
 package loader
 
@@ -2792,6 +2981,142 @@ func createMasterModelFromInput(input model.ProductMasterInput) model.ProductMas
 }
 
 
+----- C:\Dev\WASABI\medrec\handler.go -----
+// C:\Dev\WASABI\medrec\handler.go
+
+package medrec
+
+import (
+	"bytes"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"mime"
+	"net/http"
+	"net/http/cookiejar"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+	"wasabi/config"
+)
+
+// DownloadHandler handles the entire process of logging into e-mednet and downloading the DAT file.
+func DownloadHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cfg, err := config.LoadConfig()
+		if err != nil {
+			http.Error(w, "設定ファイルの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if cfg.EmednetUserID == "" || cfg.EmednetPassword == "" {
+			http.Error(w, "e-mednetのIDまたはパスワードが設定されていません。設定画面を確認してください。", http.StatusBadRequest)
+			return
+		}
+
+		jar, _ := cookiejar.New(nil)
+		client := &http.Client{Jar: jar}
+
+		loginURL := "https://www.e-mednet.jp/NASApp/ASP/MenuMain"
+		loginData := url.Values{}
+		// ▼▼▼ [修正点] HTMLのフォーム名と完全に一致させる ▼▼▼
+		loginData.Set("userid", cfg.EmednetUserID)
+		loginData.Set("userpsw", cfg.EmednetPassword)
+		// ▲▲▲ 修正ここまで ▲▲▲
+		loginData.Set("loginkbn", "login")
+
+		loginReq, _ := http.NewRequest("POST", loginURL, strings.NewReader(loginData.Encode()))
+		loginReq.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+
+		loginResp, err := client.Do(loginReq)
+		if err != nil {
+			http.Error(w, "e-mednetへのログインリクエストに失敗しました: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer loginResp.Body.Close()
+
+		bodyBytes, err := io.ReadAll(loginResp.Body)
+		if err != nil {
+			http.Error(w, "e-mednetからのレスポンス読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		loginResp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+		if loginResp.StatusCode != http.StatusOK || strings.Contains(string(bodyBytes), "ログインＩＤまたはパスワードに誤りがあります") {
+			log.Printf("e-mednet login failed. Server response:\n---\n%s\n---", string(bodyBytes))
+			http.Error(w, fmt.Sprintf("e-mednetへのログインに失敗しました。ID/パスワードを確認するか、サイトの仕様が変更された可能性があります。"), http.StatusUnauthorized)
+			return
+		}
+		log.Println("e-mednet login successful.")
+
+		downloadURL := "https://www.e-mednet.jp/NASApp/ASP/SrDeliveryJanDownload/downloadAll"
+		downloadData := url.Values{}
+		downloadData.Set("busi_id", "11")
+		downloadData.Set("func_id", "02")
+		downloadData.Set("sys", "310")
+		downloadData.Set("ver", "1.00")
+		downloadData.Set("type", "1")
+
+		downloadReq, _ := http.NewRequest("POST", downloadURL, strings.NewReader(downloadData.Encode()))
+		downloadReq.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+
+		downloadResp, err := client.Do(downloadReq)
+		if err != nil {
+			http.Error(w, "ダウンロードリクエストに失敗しました: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer downloadResp.Body.Close()
+		log.Println("e-mednet download request successful.")
+
+		baseDir := filepath.Join("download", "DAT")
+		if err := os.MkdirAll(baseDir, 0755); err != nil {
+			http.Error(w, "ベースディレクトリの作成に失敗しました: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		timestamp := time.Now().Format("20060102150405")
+		saveDir := filepath.Join(baseDir, timestamp)
+		if err := os.MkdirAll(saveDir, 0755); err != nil {
+			http.Error(w, "タイムスタンプディレクトリの作成に失敗しました: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		filename := "納品データ.DAT"
+		contentDisposition := downloadResp.Header.Get("Content-Disposition")
+		if contentDisposition != "" {
+			_, params, err := mime.ParseMediaType(contentDisposition)
+			if err == nil {
+				if f, ok := params["filename"]; ok {
+					filename = f
+				}
+			}
+		}
+
+		fullPath := filepath.Join(saveDir, filename)
+
+		fileBytes, err := io.ReadAll(downloadResp.Body)
+		if err != nil {
+			http.Error(w, "ダウンロードデータの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		if err := os.WriteFile(fullPath, fileBytes, 0644); err != nil {
+			http.Error(w, "ファイル保存に失敗しました: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		log.Printf("File saved to %s", fullPath)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": fmt.Sprintf("ファイルを %s に保存しました。", fullPath),
+		})
+	}
+}
+
+
 ----- C:\Dev\WASABI\model\types.go -----
 // C:\Dev\WASABI\model\types.go
 
@@ -2799,7 +3124,7 @@ package model
 
 import "database/sql"
 
-// (ProductMaster, ProductMasterInput, JCShms, TransactionRecord, and helper methods are unchanged)
+// (Struct definitions up to DeadStockFilters are unchanged)
 type ProductMaster struct {
 	ProductCode         string  `json:"productCode"`
 	YjCode              string  `json:"yjCode"`
@@ -2924,17 +3249,17 @@ func (t *TransactionRecord) SignedYjQty() float64 {
 }
 func (t *TransactionRecord) ToProductMaster() *ProductMaster {
 	return &ProductMaster{
-		ProductCode:     t.JanCode,
-		YjCode:          t.YjCode,
-		ProductName:     t.ProductName,
-		KanaName:        t.KanaName,
-		PackageForm:     t.PackageForm,
-		JanPackInnerQty: t.JanPackInnerQty,
-		YjUnitName:      t.YjUnitName,
+		ProductCode:         t.JanCode,
+		YjCode:              t.YjCode,
+		ProductName:         t.ProductName,
+		KanaName:            t.KanaName,
+		UsageClassification: t.UsageClassification,
+		PackageForm:         t.PackageForm,
+		JanPackInnerQty:     t.JanPackInnerQty,
+		YjUnitName:          t.YjUnitName,
 	}
 }
 
-// (Other structs are unchanged)
 type ProductMasterView struct {
 	ProductMaster
 	FormattedPackageSpec string `json:"formattedPackageSpec"`
@@ -2997,23 +3322,12 @@ type UnifiedInputRecord struct {
 	ExpiryDate      string  `json:"expiryDate"`
 	LotNumber       string  `json:"lotNumber"`
 }
-type DeadStockFilters struct {
-	StartDate        string
-	EndDate          string
-	ExcludeZeroStock bool
-}
-
-// ▼▼▼ [修正点] DeadStockGroupの構造を変更 ▼▼▼
-// DeadStockGroup represents a major group (by YjCode) in the dead stock list.
 type DeadStockGroup struct {
 	YjCode      string             `json:"yjCode"`
 	ProductName string             `json:"productName"`
 	TotalStock  float64            `json:"totalStock"`
 	Packages    []DeadStockPackage `json:"packages"`
 }
-
-// ▲▲▲ 修正ここまで ▲▲▲
-
 type DeadStockPackage struct {
 	ProductMaster
 	CurrentStock float64           `json:"currentStock"`
@@ -3030,6 +3344,16 @@ type DeadStockRecord struct {
 	ExpiryDate       string  `json:"expiryDate"`
 	LotNumber        string  `json:"lotNumber"`
 }
+
+// ▼▼▼ [修正点] DeadStockFiltersにCoefficientを追加 ▼▼▼
+type DeadStockFilters struct {
+	StartDate        string
+	EndDate          string
+	ExcludeZeroStock bool
+	Coefficient      float64
+}
+
+// ▲▲▲ 修正ここまで ▲▲▲
 
 
 ----- C:\Dev\WASABI\parsers\dat_parser.go -----
@@ -3234,90 +3558,131 @@ import (
 	"wasabi/mappers"
 )
 
+// ▼▼▼ [修正点] ロジック全体を書き換え、デッドロックを解消 ▼▼▼
 func ReProcessTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// 1. 最初にトランザクションを開始
 		tx, err := conn.Begin()
 		if err != nil {
-			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+			http.Error(w, "Failed to start transaction: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		defer tx.Rollback()
 
-		count, err := reProcessProvisionalRecords(tx, conn)
+		// 2. トランザクション内で、更新対象のリストを取得
+		provisionalRecords, err := db.GetProvisionalTransactions(tx)
 		if err != nil {
-			http.Error(w, "Failed to reprocess provisional records: "+err.Error(), http.StatusInternalServerError)
+			http.Error(w, "Failed to fetch provisional records: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if len(provisionalRecords) == 0 {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"message": "更新対象の仮登録データはありませんでした。"})
 			return
 		}
 
-		if err := tx.Commit(); err != nil {
-			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
+		// 3. トランザクション内で、関連マスターを一括取得
+		keyList := make([]string, 0, len(provisionalRecords))
+		keySet := map[string]struct{}{}
+		for _, rec := range provisionalRecords {
+			key := rec.JanCode
+			if key == "" || key == "0000000000000" {
+				key = fmt.Sprintf("9999999999999%s", rec.ProductName)
+			}
+			if _, seen := keySet[key]; !seen {
+				keySet[key] = struct{}{}
+				keyList = append(keyList, key)
+			}
+		}
+		mastersMap, err := db.GetProductMastersByCodesMap(tx, keyList)
+		if err != nil {
+			http.Error(w, "Failed to load product masters: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+
+		// 4. 一件ずつマッピング＆更新
+		updatedCount := 0
+		for _, rec := range provisionalRecords {
+			key := rec.JanCode
+			if key == "" || key == "0000000000000" {
+				key = fmt.Sprintf("9999999999999%s", rec.ProductName)
+			}
+			master, ok := mastersMap[key]
+
+			if !ok || master.Origin == "PROVISIONAL" {
+				continue
+			}
+
+			mappers.MapProductMasterToTransaction(&rec, master)
+			// 再計算なので、ステータスをCOMPLETEに変更
+			rec.ProcessFlagMA = "COMPLETE"
+			rec.ProcessingStatus = sql.NullString{String: "completed", Valid: true}
+
+			if err := db.UpdateFullTransactionInTx(tx, &rec); err != nil {
+				http.Error(w, fmt.Sprintf("Failed to update record ID %d: %v", rec.ID, err), http.StatusInternalServerError)
+				return
+			}
+			updatedCount++
+		}
+
+		// 5. コミットして完了
+		if err := tx.Commit(); err != nil {
+			http.Error(w, "Failed to commit: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
-			"message": fmt.Sprintf("%d 件の仮登録データの情報を更新しました。", count),
+			"message": fmt.Sprintf("%d 件の仮登録データを再計算しました。", updatedCount),
 		})
 	}
 }
 
-func reProcessProvisionalRecords(tx *sql.Tx, conn *sql.DB) (int, error) {
-	// Get all provisional transactions.
-	// This read operation can remain outside the main update transaction if desired,
-	// but for full transactional integrity, it should also use the tx.
-	// For now, we only change the master lookup as per the plan.
-	provisionalRecords, err := db.GetProvisionalTransactions(conn)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get provisional transactions: %w", err)
-	}
-	if len(provisionalRecords) == 0 {
-		return 0, nil
-	}
+// ▲▲▲ 修正ここまで ▲▲▲
 
-	// Get all relevant existing product masters.
-	var keyList []string
-	keySet := make(map[string]struct{})
-	for _, rec := range provisionalRecords {
-		key := rec.JanCode
-		if key == "" || key == "0000000000000" {
-			key = fmt.Sprintf("9999999999999%s", rec.ProductName)
+
+----- C:\Dev\WASABI\settings\handler.go -----
+// C:\Dev\WASABI\settings\handler.go
+
+package settings
+
+import (
+	"database/sql"
+	"encoding/json"
+	"net/http"
+	"wasabi/config"
+)
+
+// GetSettingsHandler returns the current settings.
+func GetSettingsHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cfg, err := config.LoadConfig()
+		if err != nil {
+			http.Error(w, "Failed to load settings: "+err.Error(), http.StatusInternalServerError)
+			return
 		}
-		if _, seen := keySet[key]; !seen {
-			keySet[key] = struct{}{}
-			keyList = append(keyList, key)
-		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(cfg)
 	}
+}
 
-	// ▼▼▼ [修正点] マスター取得をコネクション(conn)ではなくトランザクション(tx)で行う ▼▼▼
-	mastersMap, err := db.GetProductMastersByCodesMap(tx, keyList)
-	if err != nil {
-		return 0, fmt.Errorf("failed to bulk get product masters for reprocessing: %w", err)
-	}
-	// ▲▲▲ 修正ここまで ▲▲▲
-
-	// Process each provisional record.
-	updatedCount := 0
-	for _, rec := range provisionalRecords {
-		key := rec.JanCode
-		if key == "" || key == "0000000000000" {
-			key = fmt.Sprintf("9999999999999%s", rec.ProductName)
+// SaveSettingsHandler saves the settings.
+func SaveSettingsHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var payload config.Config
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
 		}
 
-		// Check if a definitive master (MANUAL or JCSHMS) exists.
-		if master, ok := mastersMap[key]; ok && master.Origin != "PROVISIONAL" {
-			// A definitive master was found.
-			// Enrich the transaction's data with the master's data.
-			mappers.MapProductMasterToTransaction(&rec, master)
-
-			// DO NOT CHANGE THE STATUS. It remains PROVISIONAL.
-			// Save the enriched data.
-			if err := db.UpdateFullTransactionInTx(tx, &rec); err != nil {
-				return 0, fmt.Errorf("failed to update reprocessed transaction ID %d: %w", rec.ID, err)
-			}
-			updatedCount++ // Count any record that had its data enriched.
+		if err := config.SaveConfig(payload); err != nil {
+			http.Error(w, "Failed to save settings: "+err.Error(), http.StatusInternalServerError)
+			return
 		}
-	}
 
-	return updatedCount, nil
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"message": "設定を保存しました。"})
+	}
 }
 
 
@@ -3533,13 +3898,25 @@ export function initAggregation() {
                 throw new Error(errText || 'Aggregation failed');
             }
             lastData = await res.json(); // 元データを保持
-            renderResults(); // フィルターを適用して描画
+
+         renderResults();       // ← 既存：DOM 更新
+         // ← DOM 更新後、次のペイント直前に発火するカスタムイベント
+        requestAnimationFrame(() => {
+        window.dispatchEvent(new Event('aggregationRendered'));
+        });
+
         } catch (err) {
             outputContainer.innerHTML = `<p style="color:red;">エラー: ${err.message}</p>`;
         } finally {
             window.hideLoading();
         }
     });
+
+  // ← ここでリスナー登録
+  window.addEventListener('aggregationRendered', () => {
+    console.log('集計描画完了！');
+    // たとえばボタンを有効化するとか、別コンポーネントに通知するとか
+  });
 }
 
 ----- C:\Dev\WASABI\static\js\app.js -----
@@ -3555,6 +3932,10 @@ import { initReprocessButton } from './reprocess.js';
 import { initBackupButtons } from './backup.js';
 import { initModal } from './inout_modal.js'; 
 import { initDeadStock } from './deadstock.js'; 
+import { initSettings, onViewShow as onSettingsViewShow } from './settings.js';
+import { initMedrec } from './medrec.js'; // ▼▼▼ [修正点] 追加 ▼▼▼
+import { initManualInventory } from './manual_inventory.js'; // ▼▼▼ [修正点] 追加 ▼▼▼
+
 
 // (Global UI Elements and helper functions are unchanged)
 window.showLoading = () => document.getElementById('loading-overlay').classList.remove('hidden');
@@ -3576,6 +3957,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const inventoryBtn = document.getElementById('inventoryBtn');
     const aggregationBtn = document.getElementById('aggregationBtn');
     const masterEditBtn = document.getElementById('masterEditViewBtn');
+    const settingsBtn = document.getElementById('settingsBtn'); // ▼▼▼ [修正点] 追加 ▼▼▼
     const datFileInput = document.getElementById('datFileInput');
     const usageFileInput = document.getElementById('usageFileInput');
     const inventoryFileInput = document.getElementById('inventoryFileInput');
@@ -3596,6 +3978,9 @@ document.addEventListener('DOMContentLoaded', () => {
     initBackupButtons();
     initModal(); // ▼▼▼ [修正点] モーダルをここで一度だけ初期化 ▼▼▼
     initDeadStock(); // ▼▼▼ [修正点] この一行が抜けていました ▼▼▼
+    initSettings(); // ▼▼▼ [修正点] 追加 ▼▼▼
+    initMedrec(); // ▼▼▼ [修正点] 追加 ▼▼▼
+    initManualInventory(); // ▼▼▼ [修正点] 追加 ▼▼▼
 
     // (View Switching Logic and Event Listeners are unchanged)
     function showView(viewIdToShow) {
@@ -3622,6 +4007,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (inventoryOutputContainer) inventoryOutputContainer.innerHTML = '';
         inventoryFileInput.click();
     });
+        // ▼▼▼ [修正点] 手入力棚卸ボタンのリスナーを追加 ▼▼▼
+    manualInventoryBtn.addEventListener('click', () => {
+        showView('manual-inventory-view');
+        // Dispatch a custom event to trigger loading
+        document.getElementById('manual-inventory-view').dispatchEvent(new Event('show'));
+    });
+    // ▲▲▲ 修正ここまで ▲▲▲
     aggregationBtn.addEventListener('click', () => {
         if (aggregationOutputContainer) aggregationOutputContainer.innerHTML = '';
         showView('aggregation-view');
@@ -3631,7 +4023,12 @@ document.addEventListener('DOMContentLoaded', () => {
         showView('deadstock-view');
     });
     masterEditBtn.addEventListener('click', () => { showView('master-edit-view'); resetMasterEditView(); });
-    
+        // ▼▼▼ [修正点] 設定ボタンのリスナーを追加 ▼▼▼
+    settingsBtn.addEventListener('click', () => {
+        showView('settings-view');
+        onSettingsViewShow(); // 画面表示時に設定を読み込む
+    });
+    // ▲▲▲ 修正ここまで ▲▲▲
     // --- Initial State ---
     showView('in-out-view');
     resetInOutView();
@@ -4595,6 +4992,135 @@ export function initInventoryUpload() {
     fileInput.addEventListener('change', handleInventoryUpload);
 }
 
+----- C:\Dev\WASABI\static\js\manual_inventory.js -----
+// C:\Dev\WASABI\static\js\manual_inventory.js
+
+export function initManualInventory() {
+    const view = document.getElementById('manual-inventory-view');
+    if (!view) return;
+
+    const dateInput = document.getElementById('manual-inv-date');
+    const saveBtn = document.getElementById('save-manual-inv-btn');
+    const container = document.getElementById('manual-inventory-container');
+    let allProducts = [];
+
+    dateInput.value = new Date().toISOString().slice(0, 10);
+
+    async function loadProducts() {
+        container.innerHTML = '<p>製品マスターを読み込んでいます...</p>';
+        try {
+            const res = await fetch('/api/inventory/list');
+            if (!res.ok) throw new Error('製品リストの取得に失敗しました。');
+            allProducts = await res.json();
+            if(!allProducts) allProducts = [];
+            renderProducts();
+        } catch (err) {
+            container.innerHTML = `<p style="color:red;">${err.message}</p>`;
+        }
+    }
+
+    function renderProducts() {
+        if (allProducts.length === 0) {
+            container.innerHTML = '<p>表示する製品マスターがありません。</p>';
+            return;
+        }
+
+        const groups = allProducts.reduce((acc, p) => {
+            const key = p.yjCode || 'YJコードなし';
+            if (!acc[key]) {
+                acc[key] = {
+                    productName: p.productName,
+                    yjCode: p.yjCode,
+                    packages: []
+                };
+            }
+            acc[key].packages.push(p);
+            return acc;
+        }, {});
+
+        Object.values(groups).forEach(group => {
+            group.packages = group.packages.reduce((acc, p) => {
+                 const key = `${p.packageForm}|${p.janPackInnerQty}|${p.yjUnitName}`;
+                 if (!acc[key]) {
+                     acc[key] = {
+                         packageKey: key,
+                         masters: []
+                     };
+                 }
+                 acc[key].masters.push(p);
+                 return acc;
+            }, {});
+        });
+
+        let html = '';
+        for (const group of Object.values(groups).sort((a,b) => a.productName.localeCompare(b.productName, 'ja'))) {
+            html += `<div class="agg-yj-header"><span>YJ: ${group.yjCode}</span><span class="product-name">${group.productName}</span></div>`;
+
+            for (const pkg of Object.values(group.packages)) {
+                const firstMaster = pkg.masters[0];
+                const productCodes = pkg.masters.map(m => m.productCode).join(',');
+                html += `
+                    <div class="agg-pkg-header" style="display:flex; align-items:center; gap: 10px;">
+                        <span>包装: ${pkg.packageKey}</span>
+                        <div style="margin-left:auto;">
+                            <label for="inv-qty-${firstMaster.productCode}">在庫数:</label>
+                            <input type="number" step="any" class="manual-inv-qty" data-product-codes="${productCodes}" id="inv-qty-${firstMaster.productCode}" style="width: 100px;">
+                            <span>${firstMaster.yjUnitName || ''}</span>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+        container.innerHTML = html;
+    }
+    
+    view.addEventListener('show', loadProducts);
+
+    saveBtn.addEventListener('click', async () => {
+        const date = dateInput.value.replace(/-/g, '');
+        if (!date) {
+            window.showNotification('棚卸日を指定してください。', 'error');
+            return;
+        }
+        if (!confirm(`${dateInput.value} の棚卸データとして保存します。よろしいですか？`)) {
+            return;
+        }
+
+        const records = [];
+        container.querySelectorAll('.manual-inv-qty').forEach(input => {
+            // ▼▼▼ [修正点] 空文字は無視し、0はデータとして送信する ▼▼▼
+            if (input.value !== '') { 
+                const quantity = parseFloat(input.value);
+                if (!isNaN(quantity)) {
+                    const productCode = input.dataset.productCodes.split(',')[0];
+                    records.push({
+                        productCode: productCode,
+                        yjQuantity: quantity
+                    });
+                }
+            }
+            // ▲▲▲ 修正ここまで ▲▲▲
+        });
+
+        window.showLoading();
+        try {
+            const res = await fetch('/api/inventory/save_manual', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ date, records }),
+            });
+            const resData = await res.json();
+            if (!res.ok) throw new Error(resData.message || '保存に失敗しました。');
+            window.showNotification(resData.message, 'success');
+            loadProducts();
+        } catch (err) {
+            window.showNotification(err.message, 'error');
+        } finally {
+            window.hideLoading();
+        }
+    });
+}
+
 ----- C:\Dev\WASABI\static\js\master_edit.js -----
 // C:\Dev\WASABI\static\js\master_edit.js
 
@@ -4720,6 +5246,42 @@ export function resetMasterEditView() {
     }
 }
 
+----- C:\Dev\WASABI\static\js\medrec.js -----
+// C:\Dev\WASABI\static\js\medrec.js
+
+export function initMedrec() {
+    const downloadBtn = document.getElementById('medrecDownloadBtn');
+    if (!downloadBtn) return;
+
+    downloadBtn.addEventListener('click', async () => {
+        if (!confirm('e-mednet.jpにログインし、納品データをダウンロードします。よろしいですか？')) {
+            return;
+        }
+
+        window.showLoading();
+        try {
+            const res = await fetch('/api/medrec/download', {
+                method: 'POST',
+            });
+            
+            const resData = await res.json();
+            if (!res.ok) {
+                // res.json() failed or server returned an error message
+                throw new Error(resData.message || `ダウンロードに失敗しました (HTTP ${res.status})`);
+            }
+            window.showNotification(resData.message, 'success');
+        } catch (err) {
+            // This catches network errors or errors thrown from the !res.ok check
+            console.error('Download failed:', err);
+            // Attempt to get a more specific error message if the response was text
+            const errorMessage = err.message || 'サーバーとの通信に失敗しました。設定画面でID/パスワードが正しいか確認してください。';
+            window.showNotification(errorMessage, 'error');
+        } finally {
+            window.hideLoading();
+        }
+    });
+}
+
 ----- C:\Dev\WASABI\static\js\reprocess.js -----
 export function initReprocessButton() {
     const reprocessBtn = document.getElementById('reprocessBtn');
@@ -4747,6 +5309,60 @@ export function initReprocessButton() {
             window.hideLoading();
         }
     });
+}
+
+----- C:\Dev\WASABI\static\js\settings.js -----
+let view, userIDInput, passwordInput, saveBtn;
+
+async function loadSettings() {
+    try {
+        const res = await fetch('/api/settings/get');
+        if (!res.ok) throw new Error('設定の読み込みに失敗しました。');
+        const settings = await res.json();
+        userIDInput.value = settings.emednetUserId || '';
+        passwordInput.value = settings.emednetPassword || '';
+    } catch (err) {
+        window.showNotification(err.message, 'error');
+    }
+}
+
+async function saveSettings() {
+    const settings = {
+        emednetUserId: userIDInput.value,
+        emednetPassword: passwordInput.value,
+    };
+
+    window.showLoading();
+    try {
+        const res = await fetch('/api/settings/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(settings),
+        });
+        const resData = await res.json();
+        if (!res.ok) throw new Error(resData.message || '設定の保存に失敗しました。');
+        window.showNotification(resData.message, 'success');
+    } catch (err) {
+        window.showNotification(err.message, 'error');
+    } finally {
+        window.hideLoading();
+    }
+}
+
+export function initSettings() {
+    view = document.getElementById('settings-view');
+    if (!view) return;
+
+    userIDInput = document.getElementById('emednetUserID');
+    passwordInput = document.getElementById('emednetPassword');
+    saveBtn = document.getElementById('saveSettingsBtn');
+
+    saveBtn.addEventListener('click', saveSettings);
+}
+
+// 画面が表示されるたびに最新の設定を読み込むための関数
+export function onViewShow() {
+    loadSettings();
 }
 
 ----- C:\Dev\WASABI\static\js\upload.js -----
@@ -4854,10 +5470,12 @@ export function initUsageUpload() {
     <button id="inOutViewBtn" class="btn">入庫・出庫</button>
     <button id="datBtn" class="btn">納品・返品 (DAT)</button>
     <button id="usageBtn" class="btn">処方 (USAGE)</button>
-    <button id="inventoryBtn" class="btn">棚卸</button>
+    <button id="inventoryBtn" class="btn">棚卸(ファイル)</button>
+    <button id="manualInventoryBtn" class="btn">棚卸(手入力)</button>
     <button id="aggregationBtn" class="btn">集計</button>
     <button id="deadStockBtn" class="btn">デッドストック</button>
     <button id="masterEditViewBtn" class="btn">マスター</button>
+    <button id="settingsBtn" class="btn">設定</button>
     <button id="reprocessBtn" class="btn">仮登録を再計算</button>
     <button id="exportClientsBtn" class="btn">得意先エクスポート</button>
     <button id="importClientsBtn" class="btn">得意先インポート</button>
@@ -4890,6 +5508,22 @@ export function initUsageUpload() {
     <div id="inventory-view" class="hidden">
         <h3>Inventory File Upload</h3>
         <div id="inventory-output-container"></div>
+    </div>
+
+        <div id="manual-inventory-view" class="hidden">
+        <h1>棚卸（手入力）</h1>
+        <div class="filter-container">
+            <div class="field-group">
+                <label for="manual-inv-date">棚卸日</label>
+                <input type="date" id="manual-inv-date">
+            </div>
+            <div class="buttons-group">
+                <button id="save-manual-inv-btn" class="btn" style="background-color: #0d6efd; color: white;">この内容で棚卸を保存</button>
+            </div>
+        </div>
+        <div id="manual-inventory-container">
+            <p>読み込み中...</p>
+        </div>
     </div>
 
     <div id="aggregation-view" class="hidden">
@@ -4949,6 +5583,28 @@ export function initUsageUpload() {
         </div>
         <div id="master-edit-container"></div>
     </div>
+
+    <div id="settings-view" class="hidden">
+        <h1>設定</h1>
+        <div class="settings-form-container">
+            <fieldset>
+                <legend>e-mednet 連携設定</legend>
+                <div class="field-group">
+                    <label for="emednetUserID">ユーザーID</label>
+                    <input type="text" id="emednetUserID" style="width: 300px;">
+                </div>
+                <div class="field-group">
+                    <label for="emednetPassword">パスワード</label>
+                    <input type="password" id="emednetPassword" style="width: 300px;">
+                </div>
+            </fieldset>
+            
+            <div class="buttons-group" style="margin-top: 20px;">
+                <button id="saveSettingsBtn" class="btn" style="background-color: #0d6efd; color: white;">設定を保存</button>
+            </div>
+        </div>
+    </div>
+
 
     <div id="deadstock-view" class="hidden">
         <h1>デッドストックリスト</h1>
@@ -5429,6 +6085,8 @@ import (
 	"net/http"
 	"os/exec"
 	"runtime"
+	"wasabi/config"   // settingsの前に移動
+	"wasabi/settings" // settingsを追加
 
 	_ "github.com/mattn/go-sqlite3"
 
@@ -5441,6 +6099,7 @@ import (
 	"wasabi/inventory"
 	"wasabi/loader"
 	"wasabi/masteredit"
+	"wasabi/medrec" // ▼▼▼ [修正点] 追加 ▼▼▼
 	"wasabi/reprocess"
 	"wasabi/transaction"
 	"wasabi/units"
@@ -5452,16 +6111,17 @@ func main() {
 	if err != nil {
 		log.Fatalf("db open error: %v", err)
 	}
-	// ▼▼▼ [修正点] データベース設定の最適化を再適用 ▼▼▼
-	// WALモード: 同時読み書き性能を向上させ、読み取りが書き込みをブロックするのを防ぐ
 	conn.Exec("PRAGMA journal_mode = WAL;")
-	// ビジータイムアウト: DBがロックされている場合に、エラーを返す前に最大5秒間待機する
 	conn.Exec("PRAGMA busy_timeout = 5000;")
-	// 接続プール設定: アプリケーション全体で接続を1つに制限することで、DBへのアクセスを直列化し、競合を根本的に防ぐ
+	// ▼▼▼ [修正点] 接続数を2から1に戻す ▼▼▼
 	conn.SetMaxOpenConns(1)
 	conn.SetMaxIdleConns(1)
 	// ▲▲▲ 修正ここまで ▲▲▲
 	defer conn.Close()
+
+	if _, err := config.LoadConfig(); err != nil {
+		log.Printf("WARN: Could not load config.json: %v", err)
+	}
 
 	if err := loader.InitDatabase(conn); err != nil {
 		log.Fatalf("master data initialization failed: %v", err)
@@ -5478,8 +6138,11 @@ func main() {
 	mux.HandleFunc("/api/usage/upload", usage.UploadUsageHandler(conn))
 	mux.HandleFunc("/api/inout/save", inout.SaveInOutHandler(conn))
 	mux.HandleFunc("/api/inventory/upload", inventory.UploadInventoryHandler(conn))
+	// ▼▼▼ [修正点] 手入力棚卸用のAPIを追加 ▼▼▼
+	mux.HandleFunc("/api/inventory/list", inventory.ListInventoryProductsHandler(conn))
+	mux.HandleFunc("/api/inventory/save_manual", inventory.SaveManualInventoryHandler(conn))
+	// ▲▲▲ 修正ここまで ▲▲▲
 	mux.HandleFunc("/api/aggregation", aggregation.GetAggregationHandler(conn))
-
 	mux.HandleFunc("/api/clients", db.GetAllClientsHandler(conn))
 	mux.HandleFunc("/api/products/search", db.SearchJcshmsByNameHandler(conn))
 	mux.HandleFunc("/api/units/map", units.GetTaniMapHandler())
@@ -5493,11 +6156,11 @@ func main() {
 	mux.HandleFunc("/api/products/export", backup.ExportProductsHandler(conn))
 	mux.HandleFunc("/api/products/import", backup.ImportProductsHandler(conn))
 	mux.HandleFunc("/api/transactions/reprocess", reprocess.ReProcessTransactionsHandler(conn))
-
-	// ▼▼▼ [修正点] デッドストック用APIを追加 ▼▼▼
 	mux.HandleFunc("/api/deadstock/list", deadstock.GetDeadStockHandler(conn))
 	mux.HandleFunc("/api/deadstock/save", deadstock.SaveDeadStockHandler(conn))
-	// ▲▲▲ 修正ここまで ▲▲▲
+	mux.HandleFunc("/api/settings/get", settings.GetSettingsHandler(conn))
+	mux.HandleFunc("/api/settings/save", settings.SaveSettingsHandler(conn))
+	mux.HandleFunc("/api/medrec/download", medrec.DownloadHandler(conn)) // ▼▼▼ [修正点] 追加 ▼▼▼
 
 	// Serve Frontend
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))
@@ -5655,4 +6318,7 @@ CREATE TABLE IF NOT EXISTS dead_stock_list (
   created_at TEXT NOT NULL,
   UNIQUE(product_code, expiry_date, lot_number)
 );
+
+CREATE INDEX IF NOT EXISTS idx_tx_jan_date
+  ON transaction_records(jan_code, transaction_date);
 

@@ -123,3 +123,6 @@ CREATE TABLE IF NOT EXISTS dead_stock_list (
   created_at TEXT NOT NULL,
   UNIQUE(product_code, expiry_date, lot_number)
 );
+
+CREATE INDEX IF NOT EXISTS idx_tx_jan_date
+  ON transaction_records(jan_code, transaction_date);

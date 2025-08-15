@@ -175,7 +175,19 @@ func GetEditableProductMasters(conn *sql.DB) ([]model.ProductMasterView, error) 
 
 // GetAllProductMasters retrieves all product master records.
 func GetAllProductMasters(conn *sql.DB) ([]*model.ProductMaster, error) {
-	q := `SELECT ` + selectColumns + ` FROM product_master ORDER BY kana_name`
+	// 【修正点】ORDER BY句にCASE文を追加して優先順位ソートを実装
+	q := `SELECT ` + selectColumns + ` FROM product_master 
+		ORDER BY
+			CASE
+				WHEN usage_classification = '1' OR usage_classification = '内' THEN 1
+				WHEN usage_classification = '2' OR usage_classification = '外' THEN 2
+				WHEN usage_classification = '3' OR usage_classification = '歯' THEN 3
+				WHEN usage_classification = '4' OR usage_classification = '注' THEN 4
+				WHEN usage_classification = '5' OR usage_classification = '機' THEN 5
+				WHEN usage_classification = '6' OR usage_classification = '他' THEN 6
+				ELSE 7
+			END,
+			kana_name`
 
 	rows, err := conn.Query(q)
 	if err != nil {

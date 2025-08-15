@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os/exec"
 	"runtime"
+	"wasabi/config"   // settingsの前に移動
+	"wasabi/settings" // settingsを追加
 
 	_ "github.com/mattn/go-sqlite3"
 
@@ -20,6 +22,7 @@ import (
 	"wasabi/inventory"
 	"wasabi/loader"
 	"wasabi/masteredit"
+	"wasabi/medrec" // ▼▼▼ [修正点] 追加 ▼▼▼
 	"wasabi/reprocess"
 	"wasabi/transaction"
 	"wasabi/units"
@@ -31,16 +34,17 @@ func main() {
 	if err != nil {
 		log.Fatalf("db open error: %v", err)
 	}
-	// ▼▼▼ [修正点] データベース設定の最適化を再適用 ▼▼▼
-	// WALモード: 同時読み書き性能を向上させ、読み取りが書き込みをブロックするのを防ぐ
 	conn.Exec("PRAGMA journal_mode = WAL;")
-	// ビジータイムアウト: DBがロックされている場合に、エラーを返す前に最大5秒間待機する
 	conn.Exec("PRAGMA busy_timeout = 5000;")
-	// 接続プール設定: アプリケーション全体で接続を1つに制限することで、DBへのアクセスを直列化し、競合を根本的に防ぐ
+	// ▼▼▼ [修正点] 接続数を2から1に戻す ▼▼▼
 	conn.SetMaxOpenConns(1)
 	conn.SetMaxIdleConns(1)
 	// ▲▲▲ 修正ここまで ▲▲▲
 	defer conn.Close()
+
+	if _, err := config.LoadConfig(); err != nil {
+		log.Printf("WARN: Could not load config.json: %v", err)
+	}
 
 	if err := loader.InitDatabase(conn); err != nil {
 		log.Fatalf("master data initialization failed: %v", err)
@@ -57,8 +61,11 @@ func main() {
 	mux.HandleFunc("/api/usage/upload", usage.UploadUsageHandler(conn))
 	mux.HandleFunc("/api/inout/save", inout.SaveInOutHandler(conn))
 	mux.HandleFunc("/api/inventory/upload", inventory.UploadInventoryHandler(conn))
+	// ▼▼▼ [修正点] 手入力棚卸用のAPIを追加 ▼▼▼
+	mux.HandleFunc("/api/inventory/list", inventory.ListInventoryProductsHandler(conn))
+	mux.HandleFunc("/api/inventory/save_manual", inventory.SaveManualInventoryHandler(conn))
+	// ▲▲▲ 修正ここまで ▲▲▲
 	mux.HandleFunc("/api/aggregation", aggregation.GetAggregationHandler(conn))
-
 	mux.HandleFunc("/api/clients", db.GetAllClientsHandler(conn))
 	mux.HandleFunc("/api/products/search", db.SearchJcshmsByNameHandler(conn))
 	mux.HandleFunc("/api/units/map", units.GetTaniMapHandler())
@@ -72,11 +79,11 @@ func main() {
 	mux.HandleFunc("/api/products/export", backup.ExportProductsHandler(conn))
 	mux.HandleFunc("/api/products/import", backup.ImportProductsHandler(conn))
 	mux.HandleFunc("/api/transactions/reprocess", reprocess.ReProcessTransactionsHandler(conn))
-
-	// ▼▼▼ [修正点] デッドストック用APIを追加 ▼▼▼
 	mux.HandleFunc("/api/deadstock/list", deadstock.GetDeadStockHandler(conn))
 	mux.HandleFunc("/api/deadstock/save", deadstock.SaveDeadStockHandler(conn))
-	// ▲▲▲ 修正ここまで ▲▲▲
+	mux.HandleFunc("/api/settings/get", settings.GetSettingsHandler(conn))
+	mux.HandleFunc("/api/settings/save", settings.SaveSettingsHandler(conn))
+	mux.HandleFunc("/api/medrec/download", medrec.DownloadHandler(conn)) // ▼▼▼ [修正点] 追加 ▼▼▼
 
 	// Serve Frontend
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))
