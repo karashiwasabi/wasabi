@@ -21,6 +21,9 @@ import { initJcshmsUpdate } from './jcshms_update.js';
 // ▼▼▼ [修正点] 以下の1行を新しく追加 ▼▼▼
 import { initBackorderView } from './backorder.js';
 // ▲▲▲ 修正ここまで ▲▲▲
+// ▼▼▼ [修正点] 以下の1行を新しく追加 ▼▼▼
+import { initValuationView } from './valuation.js';
+// ▲▲▲ 修正ここまで ▲▲▲
 
 // (Global UI Elements and helper functions are unchanged)
 window.showLoading = () => document.getElementById('loading-overlay').classList.remove('hidden');
@@ -62,6 +65,9 @@ document.addEventListener('DOMContentLoaded', async () => { // ★ asyncキー�
     // ▼▼▼ [修正点] 以下の1行を新しく追加 ▼▼▼
     const backorderBtn = document.getElementById('backorderBtn');
     // ▲▲▲ 修正ここまで ▲▲▲
+    // ▼▼▼ [修正点] 以下の1行を新しく追加 ▼▼▼
+    const valuationBtn = document.getElementById('valuationBtn');
+    // ▲▲▲ 修正ここまで ▲▲▲
 
     // --- Initialize all modules ---
     initInOut();
@@ -84,6 +90,9 @@ document.addEventListener('DOMContentLoaded', async () => { // ★ asyncキー�
     // ▲▲▲ 修正ここまで ▲▲▲
     // ▼▼▼ [修正点] 以下の1行を新しく追加 ▼▼▼
     initBackorderView();
+    // ▲▲▲ 修正ここまで ▲▲▲
+    // ▼▼▼ [修正点] 以下の1行を新しく追加 ▼▼▼
+    initValuationView();
     // ▲▲▲ 修正ここまで ▲▲▲
 
     // (View Switching Logic and Event Listeners are unchanged)
@@ -144,7 +153,11 @@ document.addEventListener('DOMContentLoaded', async () => { // ★ asyncキー�
         document.getElementById('backorder-view').dispatchEvent(new Event('show'));
     });
     // ▲▲▲ 修正ここまで ▲▲▲
-
+    // ▼▼▼ [修正点] 以下の1ブロックを新しく追加 ▼▼▼
+    valuationBtn.addEventListener('click', () => {
+        showView('valuation-view');
+    });
+    // ▲▲▲ 修正ここまで ▲▲▲
     // --- Initial State ---
     showView('in-out-view');
     resetInOutView();

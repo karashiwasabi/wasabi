@@ -16,6 +16,7 @@
     <button id="inventoryBtn" class="btn">棚卸読込</button>
     <button id="manualInventoryBtn" class="btn">棚卸入力</button>
     <button id="aggregationBtn" class="btn">集計</button>
+    <button id="valuationBtn" class="btn">在庫評価</button>
     <button id="orderBtn" class="btn">発注</button>
     <button id="backorderBtn" class="btn">発注残</button>
     <button id="deadStockBtn" class="btn">デッドストック</button>
@@ -280,6 +281,21 @@
         <p class="view-subtitle" style="margin:0;">発注残一覧</p>
     </div>
     <div id="backorder-output-container"></div>
+</div>
+
+<div id="valuation-view" class="hidden">
+    <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
+        <div class="field-group">
+            <label for="valuation-date">評価基準日</label>
+            <input type="date" id="valuation-date">
+        </div>
+        <div class="buttons-group">
+            <button id="run-valuation-btn" class="btn">計算実行</button>
+        </div>
+    </div>
+    <div id="valuation-output-container">
+        <p>評価基準日を指定して「計算実行」を押してください。</p>
+    </div>
 </div>
     
 <input type="file" id="importClientsInput" style="display:none;" accept=".csv">

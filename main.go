@@ -29,6 +29,7 @@ import (
 	"wasabi/transaction"
 	"wasabi/units"
 	"wasabi/usage"
+	"wasabi/valuation" // valuationパッケージをインポートリストに追加
 )
 
 func main() {
@@ -59,6 +60,9 @@ func main() {
 	mux := http.NewServeMux()
 
 	// API Endpoints
+	// ▼▼▼ [修正点] 以下の1行を新しく追加 ▼▼▼
+	mux.HandleFunc("/api/valuation", valuation.GetValuationHandler(conn))
+	// ▲▲▲ 修正ここまで ▲▲▲
 	mux.HandleFunc("/api/dat/upload", dat.UploadDatHandler(conn))
 	mux.HandleFunc("/api/usage/upload", usage.UploadUsageHandler(conn))
 	mux.HandleFunc("/api/inout/save", inout.SaveInOutHandler(conn))
