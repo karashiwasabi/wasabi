@@ -15,6 +15,9 @@ import { initSettings, onViewShow as onSettingsViewShow } from './settings.js';
 import { initManualInventory } from './manual_inventory.js'; // ▼▼▼ [修正点] 追加 ▼▼▼
 import { initPrecomp } from './precomp.js';
 import { initOrders } from './orders.js';
+// ▼▼▼ [修正点] 以下の1行を新しく追加 ▼▼▼
+import { initJcshmsUpdate } from './jcshms_update.js';
+// ▲▲▲ 修正ここまで ▲▲
 
 // (Global UI Elements and helper functions are unchanged)
 window.showLoading = () => document.getElementById('loading-overlay').classList.remove('hidden');
@@ -70,6 +73,9 @@ document.addEventListener('DOMContentLoaded', async () => { // ★ asyncキー�
     initManualInventory(); // ▼▼▼ [修正点] 追加 ▼▼▼
     initPrecomp();
     initOrders(); // ▼▼▼ この行を追加 ▼▼▼
+    // ▼▼▼ [修正点] 以下の1行を新しく追加 ▼▼▼
+    initJcshmsUpdate();
+    // ▲▲▲ 修正ここまで ▲▲▲
 
     // (View Switching Logic and Event Listeners are unchanged)
     function showView(viewIdToShow) {

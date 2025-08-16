@@ -2730,6 +2730,42 @@ func SaveManualInventoryHandler(conn *sql.DB) http.HandlerFunc {
 }
 
 
+----- C:\Dev\WASABI\loader\handler.go -----
+package loader
+
+import (
+	"database/sql"
+	"encoding/json"
+	"log"
+	"net/http"
+)
+
+// ReloadJcshmsHandler handles the request to reload JCSHMS and JANCODE master files.
+func ReloadJcshmsHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		log.Println("Attempting to reload JCSHMS and JANCODE master files...")
+
+		if err := LoadCSV(conn, "SOU/JCSHMS.CSV", "jcshms", 125, false); err != nil {
+			log.Printf("Error reloading JCSHMS.CSV: %v", err)
+			http.Error(w, "Failed to reload JCSHMS.CSV: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		if err := LoadCSV(conn, "SOU/JANCODE.CSV", "jancode", 30, true); err != nil {
+			log.Printf("Error reloading JANCODE.CSV: %v", err)
+			http.Error(w, "Failed to reload JANCODE.CSV: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		log.Println("JCSHMS and JANCODE master files reloaded successfully.")
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": "JCSHMS・JANCODEマスターの再読み込みが完了しました。",
+		})
+	}
+}
+
+
 ----- C:\Dev\WASABI\loader\loader.go -----
 package loader
 
@@ -2746,20 +2782,16 @@ import (
 	"golang.org/x/text/transform"
 )
 
-// Defines which columns in the master CSVs should be treated as numeric types.
 var tableSchemas = map[string]map[int]string{
 	"jcshms": {
-		44: "real", // JC044
-		50: "real", // JC050 (NHI Price)
+		44: "real",
+		50: "real",
 		61: "int", 62: "int", 63: "int", 64: "int", 65: "int", 66: "int",
 	},
-	// ▼▼▼ 修正箇所 ▼▼▼
-	// 正しい列番号 (JA006は7列目、JA008は9列目) に修正
 	"jancode": {
-		7: "real", // JA006
-		9: "real", // JA008
+		7: "real",
+		9: "real",
 	},
-	// ▲▲▲ 修正箇所 ▲▲▲
 }
 
 // InitDatabase creates the schema and loads master data from CSV files.
@@ -2767,13 +2799,14 @@ func InitDatabase(db *sql.DB) error {
 	if err := applySchema(db); err != nil {
 		return fmt.Errorf("failed to apply schema.sql: %w", err)
 	}
-	// JANCODE.CSVはヘッダーがあるため、スキップするように修正
-	if err := loadCSV(db, "SOU/JCSHMS.CSV", "jcshms", 125, false); err != nil {
+	// ▼▼▼ [修正点] 関数呼び出しを loadCSV から LoadCSV に変更 ▼▼▼
+	if err := LoadCSV(db, "SOU/JCSHMS.CSV", "jcshms", 125, false); err != nil {
 		return fmt.Errorf("failed to load JCSHMS.CSV: %w", err)
 	}
-	if err := loadCSV(db, "SOU/JANCODE.CSV", "jancode", 30, true); err != nil {
+	if err := LoadCSV(db, "SOU/JANCODE.CSV", "jancode", 30, true); err != nil {
 		return fmt.Errorf("failed to load JANCODE.CSV: %w", err)
 	}
+	// ▲▲▲ 修正ここまで ▲▲▲
 	return nil
 }
 
@@ -2786,8 +2819,7 @@ func applySchema(db *sql.DB) error {
 	return err
 }
 
-// ヘッダーをスキップするための bool 型引数 `skipHeader` を追加
-func loadCSV(db *sql.DB, filepath, tablename string, columns int, skipHeader bool) error {
+func LoadCSV(db *sql.DB, filepath, tablename string, columns int, skipHeader bool) error {
 	f, err := os.Open(filepath)
 	if err != nil {
 		return err
@@ -2798,7 +2830,6 @@ func loadCSV(db *sql.DB, filepath, tablename string, columns int, skipHeader boo
 	r.LazyQuotes = true
 	r.FieldsPerRecord = -1
 
-	// skipHeaderがtrueの場合、ファイルの最初の行を読み飛ばす
 	if skipHeader {
 		if _, err := r.Read(); err != nil && err != io.EOF {
 			return err
@@ -2831,7 +2862,6 @@ func loadCSV(db *sql.DB, filepath, tablename string, columns int, skipHeader boo
 
 		args := make([]interface{}, columns)
 		for i, val := range row[:columns] {
-			// キーは1から始まる列番号なので i+1
 			if colType, ok := schema[i+1]; ok {
 				trimmedVal := strings.TrimSpace(val)
 				switch colType {
@@ -4149,9 +4179,40 @@ func WholesalersHandler(conn *sql.DB) http.HandlerFunc {
 body { font-family: sans-serif; padding: 10px; background-color: #f4f4f4; }
 .hidden { display: none !important; }
 
-header { display: flex; align-items: center; gap: 8px; padding: 10px; border-bottom: 2px solid #ccc; margin-bottom: 15px; background-color: #ffffff; }
-.btn { font-size: 14px; padding: 8px 12px; background-color: #e9ecef; border: 1px solid #ced4da; border-radius: 4px; cursor: pointer; }
+/* ▼▼▼ [修正点] ヘッダーを画面上部に固定するためのスタイルを追加 ▼▼▼ */
+header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 4px;
+    padding: 2px;
+    border-bottom: 1px solid #ccc;
+    margin-bottom: 5px;
+    background-color: #ffffff;
+    
+    /* ↓↓↓ ここから3行を追加 ↓↓↓ */
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+/* ▲▲▲ 修正ここまで ▲▲▲ */
+
+.btn {
+    font-size: 11px;
+    padding: 2px 5px;
+    background-color: #e9ecef;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
 .btn:hover { background-color: #dee2e6; }
+
+.filter-container, .inout-header-controls {
+    gap: 5px 10px;
+    padding: 5px;
+    margin-bottom: 5px;
+}
 
 table { border-collapse: collapse; width: 100%; table-layout: fixed; }
 th, td { border: 1px solid black; padding: 4px; vertical-align: middle; }
@@ -4180,94 +4241,73 @@ th { text-align: center; background-color: #f0f0f0; }
 .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.6); display: flex; align-items: center; justify-content: center; z-index: 2000; }
 .modal-content { background-color: #ffffff; border: 1px solid #000000; padding: 20px; width: 80%; max-width: 900px; max-height: 90vh; display: flex; flex-direction: column; }
 .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
-.modal-header h2 { font-size: 20px; }
-.modal-body { overflow-y: auto; }
 .close-button { font-size: 24px; border: none; background: none; cursor: pointer; }
 
-.agg-yj-header { background-color: #343a40; color: white; padding: 8px; margin-top: 20px; font-weight: bold; font-size: 16px; display: flex; align-items: center; }
+.view-title, .view-subtitle, .modal-title {
+    font-size: 1em;
+    font-weight: bold;
+    margin: 0;
+    padding: 5px 0;
+}
+
+.agg-yj-header { background-color: #343a40; color: white; padding: 4px; margin-top: 10px; font-weight: bold; font-size: 1em; display: flex; align-items: center; }
+.agg-pkg-header { background-color: #e9ecef; padding: 4px; border: 1px solid #ccc; border-bottom: none; font-weight: bold; font-size: 1em; }
 .agg-yj-header .product-name { margin-left: 20px; flex-grow: 1; }
-.agg-yj-header .balance-info { font-size: 14px; font-weight: normal; }
-.agg-pkg-header { background-color: #e9ecef; padding: 6px 8px; border: 1px solid #ccc; border-bottom: none; font-weight: bold; }
+.agg-yj-header .balance-info { font-size: 12px; font-weight: normal; }
 
 @media print {
-  /* ページ設定 */
+  /* (印刷設定は変更ありません) */
   @page {
     size: A4 landscape;
     margin: 15mm;
   }
-
-  /* 印刷不要なUI要素をすべて非表示に */
   header, .filter-container, .buttons-group, .btn, .inout-details-header, .inout-header-controls, #loading-overlay, #notification-box, .modal-overlay, .entry-controls {
     display: none !important;
   }
-
-  /* 印刷用の基本スタイル */
   body {
-    font-size: 8pt; /* 全体の文字サイズを小さく設定 */
+    font-size: 8pt;
     background: #fff;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
-
-  /* 全てのビューを一旦非表示に */
   main > div[id$="-view"] {
     display: none;
   }
-
-  /* 現在表示中のビューのみを印刷対象に */
   main > div[id$="-view"]:not(.hidden) {
     display: block;
     border: none !important;
     padding: 0 !important;
     margin: 0 !important;
   }
-  
-  /* 表示中のビュー内で、指定の出力コンテナ以外を非表示に */
   main > div[id$="-view"]:not(.hidden) > *:not(#aggregation-output-container):not(#deadstock-output-container) {
       display: none;
   }
-
-  /* 印刷対象のコンテナのスタイル */
   #aggregation-output-container, #deadstock-output-container {
     display: block !important;
     font-size: 8pt;
   }
-
-  /* h1, h2, h3, h4, h5, h6のすべてに適用 */
-h1, h2, h3, h4, h5, h6 {
-  all: unset;
-  display: block;
-}
-  
-  /* 印刷時のテーブルスタイル */
   table {
       width: 100%;
       border-collapse: collapse;
-      page-break-inside: auto; /* テーブルの途中で改ページを許可 */
+      page-break-inside: auto;
   }
-
   tr {
-      page-break-inside: avoid; /* 行の途中で改ページされないように */
+      page-break-inside: avoid;
       page-break-after: auto;
   }
-  
   th, td {
       border: 1px solid #ddd;
       padding: 2px;
   }
-
   th {
       background-color: #f2f2f2 !important;
   }
-
   .agg-yj-header, .agg-pkg-header {
       background-color: #e9ecef !important;
       border: 1px solid #ccc;
       color: #000 !important;
-      page-break-after: avoid; /* ヘッダーの直後で改ページされないように */
+      page-break-after: avoid;
   }
-  
-  /* リンクなどの不要な装飾を解除 */
   a {
       text-decoration: none;
       color: #000;
@@ -4441,6 +4481,9 @@ import { initSettings, onViewShow as onSettingsViewShow } from './settings.js';
 import { initManualInventory } from './manual_inventory.js'; // ▼▼▼ [修正点] 追加 ▼▼▼
 import { initPrecomp } from './precomp.js';
 import { initOrders } from './orders.js';
+// ▼▼▼ [修正点] 以下の1行を新しく追加 ▼▼▼
+import { initJcshmsUpdate } from './jcshms_update.js';
+// ▲▲▲ 修正ここまで ▲▲
 
 // (Global UI Elements and helper functions are unchanged)
 window.showLoading = () => document.getElementById('loading-overlay').classList.remove('hidden');
@@ -4496,6 +4539,9 @@ document.addEventListener('DOMContentLoaded', async () => { // ★ asyncキー�
     initManualInventory(); // ▼▼▼ [修正点] 追加 ▼▼▼
     initPrecomp();
     initOrders(); // ▼▼▼ この行を追加 ▼▼▼
+    // ▼▼▼ [修正点] 以下の1行を新しく追加 ▼▼▼
+    initJcshmsUpdate();
+    // ▲▲▲ 修正ここまで ▲▲▲
 
     // (View Switching Logic and Event Listeners are unchanged)
     function showView(viewIdToShow) {
@@ -5552,6 +5598,32 @@ export function initInventoryUpload() {
     fileInput.addEventListener('change', handleInventoryUpload);
 }
 
+----- C:\Dev\WASABI\static\js\jcshms_update.js -----
+export function initJcshmsUpdate() {
+    const reloadBtn = document.getElementById('reloadJcshmsBtn');
+    if (!reloadBtn) return;
+
+    reloadBtn.addEventListener('click', async () => {
+        if (!confirm('SOUフォルダ内のJCSHMS.CSVとJANCODE.CSVをデータベースに再読み込みします。\nこれには数分かかることがあり、完了するまでアプリケーションは応答しなくなります。\nよろしいですか？')) {
+            return;
+        }
+        window.showLoading();
+        try {
+            const res = await fetch('/api/masters/reload_jcshms', { method: 'POST' });
+            const resData = await res.json();
+            if (!res.ok) {
+                throw new Error(resData.message || '再読み込みに失敗しました。');
+            }
+            window.showNotification(resData.message, 'success');
+        } catch (err) {
+            console.error(err);
+            window.showNotification(`エラー: ${err.message}`, 'error');
+        } finally {
+            window.hideLoading();
+        }
+    });
+}
+
 ----- C:\Dev\WASABI\static\js\manual_inventory.js -----
 // C:\Dev\WASABI\static\js\manual_inventory.js
 
@@ -5692,70 +5764,6 @@ export const wholesalerMap = new Map();
  * 得意先マスターをサーバーから取得し、clientMapを更新する内部関数
  */
 async function fetchAndPopulateClients() {
-    const res = await fetch('/api/clients');
-    if (!res.ok) {
-        throw new Error('得意先マスターの取得に失敗しました。');
-    }
-    const clients = await res.json();
-    clientMap.clear(); // 古いデータをクリア
-    if (clients) { // APIからの応答がnullでないことを確認
-        clients.forEach(c => clientMap.set(c.code, c.name));
-    }
-}
-
-/**
- * ▼▼▼ [修正点] 新しい得意先が追加された後に呼び出すための関数を新設 ▼▼▼
- * clientMapだけを再読み込みして更新します。
- */
-export async function refreshClientMap() {
-    try {
-        await fetchAndPopulateClients();
-        console.log('得意先マップを更新しました。');
-    } catch (error) {
-        console.error("得意先マップの更新に失敗しました:", error);
-        window.showNotification('得意先リストの更新に失敗しました。', 'error');
-    }
-}
-// ▲▲▲ 修正ここまで ▲▲▲
-
-/**
- * アプリケーション起動時に一度だけ実行する関数
- */
-export async function loadMasterData() {
-    try {
-        const [wholesalerRes] = await Promise.all([
-            fetchAndPopulateClients(), // 内部関数を呼び出す
-            fetch('/api/settings/wholesalers')
-        ]);
-
-        if (!wholesalerRes.ok) {
-            throw new Error('卸業者マスターの読み込みに失敗しました。');
-        }
-
-        const wholesalers = await wholesalerRes.json();
-        wholesalerMap.clear(); // 古いデータをクリア
-        if (wholesalers) { // APIからの応答がnullでないことを確認
-            wholesalers.forEach(w => wholesalerMap.set(w.code, w.name));
-        }
-        
-        console.log('得意先と卸業者のマスターデータを読み込みました。');
-
-    } catch (error) {
-        console.error("マスターデータの読み込み中にエラーが発生しました:", error);
-        window.showNotification('マスターデータの読み込みに失敗しました。', 'error');
-    }
-}
-
------ C:\Dev\WASABI\static\js\master_edit.js -----
-// C:\Dev\WASABI\static\js\master_data.js
-
-export const clientMap = new Map();
-export const wholesalerMap = new Map();
-
-/**
- * 得意先マスターをサーバーから取得し、clientMapを更新する内部関数
- */
-async function fetchAndPopulateClients() {
 	const res = await fetch('/api/clients');
 	if (!res.ok) {
 		throw new Error('得意先マスターの取得に失敗しました。');
@@ -5786,7 +5794,7 @@ export async function refreshClientMap() {
  */
 export async function loadMasterData() {
 	try {
-		// ▼▼▼ [修正点] 先頭にカンマを追加して、1つ目の結果を無視する ▼▼▼
+		// ▼▼▼ [修正点] 先頭にカンマを追加して、1つ目の結果を無視するように修正します ▼▼▼
 		const [, wholesalerRes] = await Promise.all([
 		// ▲▲▲ 修正ここまで ▲▲▲
 			fetchAndPopulateClients(), // 内部関数を呼び出す
@@ -5809,6 +5817,220 @@ export async function loadMasterData() {
 		console.error("マスターデータの読み込み中にエラーが発生しました:", error);
 		window.showNotification('マスターデータの読み込みに失敗しました。', 'error');
 	}
+}
+
+----- C:\Dev\WASABI\static\js\master_edit.js -----
+import { showModal } from './inout_modal.js';
+
+let view, tableContainer, refreshBtn, addRowBtn;
+let unitMap = {};
+
+async function fetchUnitMap() {
+    if (Object.keys(unitMap).length > 0) return;
+    try {
+        const res = await fetch('/api/units/map');
+        if (!res.ok) throw new Error('単位マスタの取得に失敗');
+        unitMap = await res.json();
+    } catch (err) {
+        console.error(err);
+        window.showNotification(err.message, 'error');
+    }
+}
+
+function formatPackageSpecForRow(tbody) {
+    if (!tbody) return;
+    const getVal = (name) => tbody.querySelector(`[name="${name}"]`)?.value || '';
+    const packageForm = getVal('packageForm');
+    const yjPackUnitQty = getVal('yjPackUnitQty');
+    const yjUnitName = getVal('yjUnitName');
+    const janPackInnerQty = getVal('janPackInnerQty');
+    const janPackUnitQty = getVal('janPackUnitQty');
+    const janUnitCode = getVal('janUnitCode');
+    
+    let formattedSpec = `${packageForm} ${yjPackUnitQty}${yjUnitName}`;
+    if (parseFloat(janPackInnerQty) > 0 && parseFloat(janPackUnitQty) > 0) {
+        let janUnitName = (janUnitCode === '0' || janUnitCode === '') ? '' : (unitMap[janUnitCode] || '');
+        formattedSpec += ` (${janPackInnerQty}${yjUnitName}×${janPackUnitQty}${janUnitName})`;
+    }
+    const targetCell = tbody.querySelector('.formatted-spec-cell');
+    if (targetCell) targetCell.textContent = formattedSpec;
+}
+
+function createMasterRowHTML(master = {}) {
+    const isNew = !master.productCode;
+    const rowId = master.productCode || `new-${Date.now()}`;
+    const topRowFields = [
+        { key: 'productCode', ph: '製品コード(JAN)', readonly: !isNew },
+        { key: 'yjCode', ph: 'YJコード' },
+        { key: 'productName', ph: '製品名', colspan: 2 },
+        { key: 'kanaName', ph: 'カナ名' },
+        { key: 'makerName', ph: 'メーカー名' },
+        { key: 'usageClassification', ph: '剤型(JC013)' },
+    ];
+    const flags = [
+        { key: 'flagPoison', ph: '毒', opts: [0, 1] }, { key: 'flagDeleterious', ph: '劇', opts: [0, 1] },
+        { key: 'flagNarcotic', ph: '麻', opts: [0, 1] }, { key: 'flagPsychotropic', ph: '向', opts: [0, 1, 2, 3] },
+        { key: 'flagStimulant', ph: '覚', opts: [0, 1] }, { key: 'flagStimulantRaw', ph: '覚原', opts: [0, 1] },
+    ];
+    const bottomRowFields = [
+        { key: 'nhiPrice', ph: '薬価', type: 'number', step: '0.0001', value: master.nhiPrice || 0 },
+        { key: 'packageForm', ph: '包装(JC037)' }, { key: 'yjUnitName', ph: 'YJ単位' },
+        { key: 'yjPackUnitQty', ph: 'YJ包装数量', type: 'number', value: master.yjPackUnitQty || 0 },
+        { key: 'janPackInnerQty', ph: '内包装数量', type: 'number', value: master.janPackInnerQty || 0 },
+        { key: 'janUnitCode', ph: 'JAN単位', type: 'select', value: master.janUnitCode || 0 },
+        { key: 'janPackUnitQty', ph: 'JAN包装数量', type: 'number', value: master.janPackUnitQty || 0 },
+    ];
+
+    let topRowCellsHTML = topRowFields.map(f => `<td ${f.colspan ? `colspan="${f.colspan}"` : ''}><input type="${f.type || 'text'}" name="${f.key}" value="${f.value || master[f.key] || ''}" placeholder="${f.ph}" ${f.readonly ? 'readonly' : ''} ${f.step ? `step="${f.step}"` : ''}></td>`).join('');
+    topRowCellsHTML += flags.map(f => {
+        const options = f.opts.map(o => `<option value="${o}" ${o == (master[f.key] || 0) ? 'selected' : ''}>${o}</option>`).join('');
+        return `<td><select name="${f.key}">${options}</select></td>`;
+    }).join('');
+    topRowCellsHTML += `<td><button class="save-master-btn btn">保存</button></td>`;
+
+    let bottomRowCellsHTML = bottomRowFields.map(f => {
+        if (f.type === 'select') {
+            let options = `<option value="0">YJ単位と同じ</option>`;
+            for (const [code, name] of Object.entries(unitMap)) {
+                if (code !== '0') options += `<option value="${code}" ${code == f.value ? 'selected' : ''}>${name}</option>`;
+            }
+            return `<td><select name="${f.key}">${options}</select></td>`;
+        }
+        return `<td><input type="${f.type || 'text'}" name="${f.key}" value="${f.value || master[f.key] || ''}" placeholder="${f.ph}"></td>`;
+    }).join('');
+
+    bottomRowCellsHTML += `<td class="formatted-spec-cell" colspan="6"></td><td><button class="quote-jcshms-btn btn">引用</button></td>`;
+    return `<tbody data-record-id="${rowId}"><tr class="data-row-top">${topRowCellsHTML}</tr><tr class="data-row-bottom">${bottomRowCellsHTML}</tr></tbody>`;
+}
+
+async function loadAndRenderMasters() {
+    tableContainer.innerHTML = `<p>読み込み中...</p>`;
+    try {
+        const res = await fetch('/api/masters/editable');
+        if (!res.ok) throw new Error('マスターの読み込みに失敗しました。');
+        const masters = await res.json();
+        const tableHeader = `<thead>
+            <tr><th>製品コード(JAN)</th><th>YJコード</th><th colspan="2">製品名</th><th>カナ名</th><th>メーカー名</th><th>剤型</th><th>毒</th><th>劇</th><th>麻</th><th>向</th><th>覚</th><th>覚原</th><th>操作</th></tr>
+            <tr><th>薬価</th><th>包装</th><th>YJ単位</th><th>YJ包装数量</th><th>内包装数量</th><th>JAN単位</th><th>JAN包装数量</th><th colspan="6">組み立て包装</th><th>操作</th></tr>
+        </thead>`;
+        
+        const allTablesHTML = masters.map(master => {
+            const tableContent = createMasterRowHTML(master);
+            return `<table class="data-table" style="margin-bottom: 15px;">${tableHeader}${tableContent}</table>`;
+        }).join('');
+        
+        tableContainer.innerHTML = allTablesHTML;
+        tableContainer.querySelectorAll('tbody[data-record-id]').forEach(formatPackageSpecForRow);
+    } catch (err) {
+        tableContainer.innerHTML = `<p style="color:red;">${err.message}</p>`;
+    }
+}
+
+function populateFormWithJcshms(selectedProduct, tbody) {
+    if (!tbody) return;
+    const setVal = (name, value) => {
+        const el = tbody.querySelector(`[name="${name}"]`);
+        if (el) el.value = value !== undefined ? value : '';
+    };
+    const productCodeInput = tbody.querySelector('[name="productCode"]');
+    if (productCodeInput && !productCodeInput.readOnly) {
+        productCodeInput.value = selectedProduct.productCode || '';
+    }
+    setVal('yjCode', selectedProduct.yjCode); setVal('productName', selectedProduct.productName);
+    setVal('kanaName', selectedProduct.kanaName); setVal('makerName', selectedProduct.makerName);
+    setVal('usageClassification', selectedProduct.usageClassification); setVal('packageForm', selectedProduct.packageForm);
+    setVal('nhiPrice', selectedProduct.nhiPrice); setVal('flagPoison', selectedProduct.flagPoison);
+    setVal('flagDeleterious', selectedProduct.flagDeleterious); setVal('flagNarcotic', selectedProduct.flagNarcotic);
+    setVal('flagPsychotropic', selectedProduct.flagPsychotropic); setVal('flagStimulant', selectedProduct.flagStimulant);
+    setVal('flagStimulantRaw', selectedProduct.flagStimulantRaw); setVal('yjUnitName', selectedProduct.yjUnitName);
+    setVal('yjPackUnitQty', selectedProduct.yjPackUnitQty); setVal('janPackInnerQty', selectedProduct.janPackInnerQty);
+    setVal('janUnitCode', selectedProduct.janUnitCode); setVal('janPackUnitQty', selectedProduct.janPackUnitQty);
+    formatPackageSpecForRow(tbody);
+}
+
+export async function initMasterEdit() {
+    view = document.getElementById('master-edit-view');
+    if (!view) return;
+    tableContainer = document.getElementById('master-edit-container');
+    refreshBtn = document.getElementById('refreshMastersBtn');
+    addRowBtn = document.getElementById('addMasterRowBtn');
+
+    await fetchUnitMap();
+
+    refreshBtn.addEventListener('click', loadAndRenderMasters);
+    addRowBtn.addEventListener('click', () => {
+        const tableHeader = `<thead>
+            <tr><th>製品コード(JAN)</th><th>YJコード</th><th colspan="2">製品名</th><th>カナ名</th><th>メーカー名</th><th>剤型</th><th>毒</th><th>劇</th><th>麻</th><th>向</th><th>覚</th><th>覚原</th><th>操作</th></tr>
+            <tr><th>薬価</th><th>包装</th><th>YJ単位</th><th>YJ包装数量</th><th>内包装数量</th><th>JAN単位</th><th>JAN包装数量</th><th colspan="6">組み立て包装</th><th>操作</th></tr>
+        </thead>`;
+        const newRowContent = createMasterRowHTML();
+        const newTableHTML = `<table class="data-table" style="margin-bottom: 15px;">${tableHeader}${newRowContent}</table>`;
+        tableContainer.insertAdjacentHTML('beforeend', newTableHTML);
+        const newTable = tableContainer.lastElementChild;
+        if (newTable) {
+            newTable.scrollIntoView({ behavior: 'smooth', block: 'end' });
+            const firstInput = newTable.querySelector('input');
+            if (firstInput) firstInput.focus();
+        }
+    });
+
+    tableContainer.addEventListener('input', (e) => {
+        const tbody = e.target.closest('tbody[data-record-id]');
+        if (tbody) formatPackageSpecForRow(tbody);
+    });
+
+    tableContainer.addEventListener('click', async (e) => {
+        const target = e.target;
+        const tbody = target.closest('tbody[data-record-id]');
+        if (!tbody) return;
+
+        if (target.classList.contains('save-master-btn')) {
+            const data = {};
+            tbody.querySelectorAll('input, select').forEach(el => {
+                const name = el.name;
+                const value = el.value;
+                if (el.tagName === 'SELECT' || el.type === 'number') {
+                    data[name] = parseFloat(value) || 0;
+                } else {
+                    data[name] = value;
+                }
+            });
+            data.packageSpec = data.packageForm;
+            data.origin = "MANUAL";
+            data.purchasePrice = 0;
+            data.supplierWholesale = '';
+
+            if (!data.productCode) {
+                window.showNotification('製品コードは必須です。', 'error');
+                return;
+            }
+            window.showLoading();
+            try {
+                const res = await fetch('/api/master/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data),
+                });
+                const resData = await res.json();
+                if (!res.ok) throw new Error(resData.message || '保存に失敗しました。');
+                window.showNotification(resData.message, 'success');
+                loadAndRenderMasters();
+            } catch (err) {
+                window.showNotification(err.message, 'error');
+            } finally {
+                window.hideLoading();
+            }
+        }
+        if (target.classList.contains('quote-jcshms-btn')) {
+            showModal(tbody, populateFormWithJcshms);
+        }
+    });
+}
+
+export function resetMasterEditView() {
+    if (tableContainer) {
+        loadAndRenderMasters();
+    }
 }
 
 ----- C:\Dev\WASABI\static\js\medrec.js -----
@@ -6536,17 +6758,17 @@ export function initUsageUpload() {
     <div id="inout-details-container"></div>
 </div>
 <div id="upload-view" class="hidden">
-    <h3 id="upload-view-title">File Upload</h3>
+    <p id="upload-view-title" class="view-subtitle">File Upload</p>
     <div id="upload-output-container"></div>
 </div>
     
 <div id="inventory-view" class="hidden">
-    <h3>Inventory File Upload</h3>
+    <p class="view-subtitle">Inventory File Upload</p>
     <div id="inventory-output-container"></div>
 </div>
 
 <div id="manual-inventory-view" class="hidden">
-    <h1>棚卸（手入力）</h1>
+    <p class="view-title">棚卸（手入力）</p>
     <div class="filter-container">
         <div class="field-group">
             <label for="manual-inv-date">棚卸日</label>
@@ -6593,7 +6815,7 @@ export function initUsageUpload() {
 <div id="search-modal" class="modal-overlay hidden">
     <div class="modal-content">
         <div class="modal-header">
-        <h2>薬品検索</h2>
+        <p class="modal-title">薬品検索</p>
         <button id="closeModalBtn" class="close-button">&times;</button>
         </div>
         <div style="display: flex; gap: 5px; margin-bottom: 10px;">
@@ -6692,11 +6914,21 @@ export function initUsageUpload() {
             </table>
         </fieldset>
 
+        <fieldset style="margin-top: 20px;">
+            <legend>マスターデータ管理</legend>
+            <div class="buttons-group">
+                <button id="reloadJcshmsBtn" class="btn">JCSHMSマスター再読込</button>
+            </div>
+            <p style="font-size: 11px; margin-top: 5px;">SOUフォルダ内のJCSHMS.CSVとJANCODE.CSVをデータベースに再登録します。処理には数分かかる場合があります。</p>
+        </fieldset>
+
         <div class="buttons-group" style="margin-top: 20px;">
             <button id="saveSettingsBtn" class="btn" style="background-color: #0d6efd; color: white;">設定を保存</button>
         </div>
     </div>
 </div>
+
+
 
 
 <div id="deadstock-view" class="hidden">
@@ -6711,7 +6943,7 @@ export function initUsageUpload() {
         </div>
         <div class="field-group">
         <label><input type="checkbox" id="ds-exclude-zero-stock"> 在庫が0の品目を除外</label>
-         </div>
+          </div>
         <div class="buttons-group">
         <button id="run-dead-stock-btn" class="btn">リスト作成</button>
         <button id="print-deadstock-btn" class="btn">印刷</button>
@@ -7303,6 +7535,9 @@ func main() {
 	mux.HandleFunc("/api/precomp/load", precomp.LoadPrecompHandler(conn))       // 予製データの呼び出し
 	mux.HandleFunc("/api/precomp/clear", precomp.ClearPrecompHandler(conn))
 	mux.HandleFunc("/api/orders/candidates", orders.GenerateOrderCandidatesHandler(conn))
+	// ▼▼▼ [修正点] 以下の1行を新しく追加 ▼▼▼
+	mux.HandleFunc("/api/masters/reload_jcshms", loader.ReloadJcshmsHandler(conn))
+	// ▲▲▲ 修正ここまで ▲▲▲
 
 	// Serve Frontend
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))

@@ -94,6 +94,9 @@ func main() {
 	mux.HandleFunc("/api/precomp/load", precomp.LoadPrecompHandler(conn))       // 予製データの呼び出し
 	mux.HandleFunc("/api/precomp/clear", precomp.ClearPrecompHandler(conn))
 	mux.HandleFunc("/api/orders/candidates", orders.GenerateOrderCandidatesHandler(conn))
+	// ▼▼▼ [修正点] 以下の1行を新しく追加 ▼▼▼
+	mux.HandleFunc("/api/masters/reload_jcshms", loader.ReloadJcshmsHandler(conn))
+	// ▲▲▲ 修正ここまで ▲▲▲
 
 	// Serve Frontend
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))

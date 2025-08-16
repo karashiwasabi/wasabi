@@ -13,20 +13,16 @@ import (
 	"golang.org/x/text/transform"
 )
 
-// Defines which columns in the master CSVs should be treated as numeric types.
 var tableSchemas = map[string]map[int]string{
 	"jcshms": {
-		44: "real", // JC044
-		50: "real", // JC050 (NHI Price)
+		44: "real",
+		50: "real",
 		61: "int", 62: "int", 63: "int", 64: "int", 65: "int", 66: "int",
 	},
-	// ▼▼▼ 修正箇所 ▼▼▼
-	// 正しい列番号 (JA006は7列目、JA008は9列目) に修正
 	"jancode": {
-		7: "real", // JA006
-		9: "real", // JA008
+		7: "real",
+		9: "real",
 	},
-	// ▲▲▲ 修正箇所 ▲▲▲
 }
 
 // InitDatabase creates the schema and loads master data from CSV files.
@@ -34,13 +30,14 @@ func InitDatabase(db *sql.DB) error {
 	if err := applySchema(db); err != nil {
 		return fmt.Errorf("failed to apply schema.sql: %w", err)
 	}
-	// JANCODE.CSVはヘッダーがあるため、スキップするように修正
-	if err := loadCSV(db, "SOU/JCSHMS.CSV", "jcshms", 125, false); err != nil {
+	// ▼▼▼ [修正点] 関数呼び出しを loadCSV から LoadCSV に変更 ▼▼▼
+	if err := LoadCSV(db, "SOU/JCSHMS.CSV", "jcshms", 125, false); err != nil {
 		return fmt.Errorf("failed to load JCSHMS.CSV: %w", err)
 	}
-	if err := loadCSV(db, "SOU/JANCODE.CSV", "jancode", 30, true); err != nil {
+	if err := LoadCSV(db, "SOU/JANCODE.CSV", "jancode", 30, true); err != nil {
 		return fmt.Errorf("failed to load JANCODE.CSV: %w", err)
 	}
+	// ▲▲▲ 修正ここまで ▲▲▲
 	return nil
 }
 
@@ -53,8 +50,7 @@ func applySchema(db *sql.DB) error {
 	return err
 }
 
-// ヘッダーをスキップするための bool 型引数 `skipHeader` を追加
-func loadCSV(db *sql.DB, filepath, tablename string, columns int, skipHeader bool) error {
+func LoadCSV(db *sql.DB, filepath, tablename string, columns int, skipHeader bool) error {
 	f, err := os.Open(filepath)
 	if err != nil {
 		return err
@@ -65,7 +61,6 @@ func loadCSV(db *sql.DB, filepath, tablename string, columns int, skipHeader boo
 	r.LazyQuotes = true
 	r.FieldsPerRecord = -1
 
-	// skipHeaderがtrueの場合、ファイルの最初の行を読み飛ばす
 	if skipHeader {
 		if _, err := r.Read(); err != nil && err != io.EOF {
 			return err
@@ -98,7 +93,6 @@ func loadCSV(db *sql.DB, filepath, tablename string, columns int, skipHeader boo
 
 		args := make([]interface{}, columns)
 		for i, val := range row[:columns] {
-			// キーは1から始まる列番号なので i+1
 			if colType, ok := schema[i+1]; ok {
 				trimmedVal := strings.TrimSpace(val)
 				switch colType {
