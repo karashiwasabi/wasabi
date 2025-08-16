@@ -138,3 +138,9 @@ CREATE TABLE IF NOT EXISTS pre_compounding_records (
 );
 
 CREATE INDEX IF NOT EXISTS idx_pre_compounding_product_code ON pre_compounding_records (product_code);
+
+-- 卸業者マスターテーブル
+CREATE TABLE IF NOT EXISTS wholesalers (
+  wholesaler_code TEXT PRIMARY KEY,
+  wholesaler_name TEXT NOT NULL
+);

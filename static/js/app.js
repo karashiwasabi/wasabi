@@ -1,5 +1,5 @@
 // C:\Dev\WASABI\static\js\app.js
-
+import { loadMasterData } from './master_data.js'; // ★ 新しく作成したモジュールをインポート
 import { initInOut, resetInOutView } from './inout.js';
 import { initDatUpload } from './dat.js';
 import { initUsageUpload } from './usage.js';
@@ -11,10 +11,10 @@ import { initBackupButtons } from './backup.js';
 import { initModal } from './inout_modal.js'; 
 import { initDeadStock } from './deadstock.js'; 
 import { initSettings, onViewShow as onSettingsViewShow } from './settings.js';
-import { initMedrec } from './medrec.js'; // ▼▼▼ [修正点] 追加 ▼▼▼
+//import { initMedrec } from './medrec.js'; // ▼▼▼ [修正点] 追加 ▼▼▼
 import { initManualInventory } from './manual_inventory.js'; // ▼▼▼ [修正点] 追加 ▼▼▼
 import { initPrecomp } from './precomp.js';
-
+import { initOrders } from './orders.js';
 
 // (Global UI Elements and helper functions are unchanged)
 window.showLoading = () => document.getElementById('loading-overlay').classList.remove('hidden');
@@ -27,13 +27,19 @@ window.showNotification = (message, type = 'success') => {
     setTimeout(() => { notificationBox.classList.remove('show'); }, 3000);
 };
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => { // ★ asyncキーワードを追加
+    
+    // ★ 画面の初期化が始まる前に、マスターデータを一括で読み込みます
+    await loadMasterData();
     // (DOM Elements are unchanged)
     const allViews = document.querySelectorAll('main > div[id$="-view"]');
     const inOutBtn = document.getElementById('inOutViewBtn');
     const datBtn = document.getElementById('datBtn');
     const usageBtn = document.getElementById('usageBtn');
     const inventoryBtn = document.getElementById('inventoryBtn');
+        // ▼▼▼ [修正点] この行に manualInventoryBtn を追加 ▼▼▼
+    const manualInventoryBtn = document.getElementById('manualInventoryBtn');
+    // ▲▲▲ 修正ここまで ▲▲▲
     const aggregationBtn = document.getElementById('aggregationBtn');
     const masterEditBtn = document.getElementById('masterEditViewBtn');
     const settingsBtn = document.getElementById('settingsBtn'); // ▼▼▼ [修正点] 追加 ▼▼▼
@@ -46,6 +52,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const deadStockBtn = document.getElementById('deadStockBtn'); // ▼▼▼ [修正点] 追加 ▼▼▼
     const deadstockOutputContainer = document.getElementById('deadstock-output-container'); // ▼▼▼ [修正点] 追加 ▼▼▼
     const precompBtn = document.getElementById('precompBtn');
+    const orderBtn = document.getElementById('orderBtn'); // ▼▼▼ この行を追加 ▼▼▼
 
     // --- Initialize all modules ---
     initInOut();
@@ -59,9 +66,10 @@ document.addEventListener('DOMContentLoaded', () => {
     initModal(); // ▼▼▼ [修正点] モーダルをここで一度だけ初期化 ▼▼▼
     initDeadStock(); // ▼▼▼ [修正点] この一行が抜けていました ▼▼▼
     initSettings(); // ▼▼▼ [修正点] 追加 ▼▼▼
-    initMedrec(); // ▼▼▼ [修正点] 追加 ▼▼▼
+    //initMedrec(); // ▼▼▼ [修正点] 追加 ▼▼▼
     initManualInventory(); // ▼▼▼ [修正点] 追加 ▼▼▼
     initPrecomp();
+    initOrders(); // ▼▼▼ この行を追加 ▼▼▼
 
     // (View Switching Logic and Event Listeners are unchanged)
     function showView(viewIdToShow) {
@@ -111,6 +119,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     precompBtn.addEventListener('click', () => showView('precomp-view'));
+    orderBtn.addEventListener('click', () => showView('order-view')); // ▼▼▼ この行を追加 ▼▼▼
     // ▲▲▲ 修正ここまで ▲▲▲
     // --- Initial State ---
     showView('in-out-view');

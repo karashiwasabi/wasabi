@@ -38,7 +38,9 @@ func GetAllClients(conn *sql.DB) ([]model.Client, error) {
 	}
 	defer rows.Close()
 
-	var clients []model.Client
+	// ▼▼▼ [修正点] nilスライスではなく、空のスライスで初期化する ▼▼▼
+	clients := make([]model.Client, 0)
+	// ▲▲▲ 修正ここまで ▲▲▲
 	for rows.Next() {
 		var c model.Client
 		if err := rows.Scan(&c.Code, &c.Name); err != nil {

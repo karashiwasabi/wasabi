@@ -11,15 +11,16 @@
 <header id="main-header">
     <button id="inOutViewBtn" class="btn">入庫・出庫</button>
     <button id="precompBtn" class="btn">予製</button>
-    <button id="datBtn" class="btn">納品・返品 (DAT)</button>
-    <button id="usageBtn" class="btn">処方 (USAGE)</button>
-    <button id="inventoryBtn" class="btn">棚卸(ファイル)</button>
-    <button id="manualInventoryBtn" class="btn">棚卸(手入力)</button>
+    <button id="datBtn" class="btn">納品・返品</button>
+    <button id="usageBtn" class="btn">処方</button>
+    <button id="inventoryBtn" class="btn">棚卸読込</button>
+    <button id="manualInventoryBtn" class="btn">棚卸入力</button>
     <button id="aggregationBtn" class="btn">集計</button>
+    <button id="orderBtn" class="btn">発注</button>
     <button id="deadStockBtn" class="btn">デッドストック</button>
     <button id="masterEditViewBtn" class="btn">マスター</button>
     <button id="settingsBtn" class="btn">設定</button>
-    <button id="reprocessBtn" class="btn">仮登録を再計算</button>
+    <button id="reprocessBtn" class="btn">再計算</button>
     <button id="exportClientsBtn" class="btn">得意先エクスポート</button>
     <button id="importClientsBtn" class="btn">得意先インポート</button>
     <button id="exportProductsBtn" class="btn">製品エクスポート</button>
@@ -31,180 +32,244 @@
     <input type="file" id="usageFileInput" style="display:none;">
     <input type="file" id="inventoryFileInput" style="display:none;">
 
-    <div id="in-out-view" class="inout-view-container">
-        <div class="inout-header-controls">
-            <div class="field-group"><label for="in-out-date">日付</label><input type="date" id="in-out-date"></div>
-            <div class="field-group"><label for="in-out-type">種別</label><select id="in-out-type"><option>入庫</option><option>出庫</option></select></div>
-            <div class="field-group"><label for="in-out-client">得意先</label><select id="in-out-client"></select></div>
-            <div class="field-group"><label for="in-out-receipt">伝票番号</label><select id="in-out-receipt"></select></div>
-            <div class="buttons-group"><button id="saveBtn" class="btn">保存</button><button id="deleteBtn" class="btn">伝票削除</button></div>
-        </div>
-        <div class="inout-details-header"><button id="addRowBtn" class="btn">明細を追加</button></div>
-        <div id="inout-details-container"></div>
+<div id="in-out-view" class="inout-view-container">
+    <div class="inout-header-controls">
+        <div class="field-group"><label for="in-out-date">日付</label><input type="date" id="in-out-date"></div>
+        <div class="field-group"><label for="in-out-type">種別</label><select id="in-out-type"><option>入庫</option><option>出庫</option></select></div>
+        <div class="field-group"><label for="in-out-client">得意先</label><select id="in-out-client"></select></div>
+        <div class="field-group"><label for="in-out-receipt">伝票番号</label><select id="in-out-receipt"></select></div>
+        <div class="buttons-group"><button id="saveBtn" class="btn">保存</button><button id="deleteBtn" class="btn">伝票削除</button></div>
     </div>
-
-    <div id="upload-view" class="hidden">
-        <h3 id="upload-view-title">File Upload</h3>
-        <div id="upload-output-container"></div>
-    </div>
+    <div class="inout-details-header"><button id="addRowBtn" class="btn">明細を追加</button></div>
+    <div id="inout-details-container"></div>
+</div>
+<div id="upload-view" class="hidden">
+    <p id="upload-view-title" class="view-subtitle">File Upload</p>
+    <div id="upload-output-container"></div>
+</div>
     
-    <div id="inventory-view" class="hidden">
-        <h3>Inventory File Upload</h3>
-        <div id="inventory-output-container"></div>
-    </div>
+<div id="inventory-view" class="hidden">
+    <p class="view-subtitle">Inventory File Upload</p>
+    <div id="inventory-output-container"></div>
+</div>
 
-        <div id="manual-inventory-view" class="hidden">
-        <h1>棚卸（手入力）</h1>
-        <div class="filter-container">
-            <div class="field-group">
-                <label for="manual-inv-date">棚卸日</label>
-                <input type="date" id="manual-inv-date">
-            </div>
-            <div class="buttons-group">
-                <button id="save-manual-inv-btn" class="btn" style="background-color: #0d6efd; color: white;">この内容で棚卸を保存</button>
-            </div>
+<div id="manual-inventory-view" class="hidden">
+    <p class="view-title">棚卸（手入力）</p>
+    <div class="filter-container">
+        <div class="field-group">
+            <label for="manual-inv-date">棚卸日</label>
+            <input type="date" id="manual-inv-date">
         </div>
-        <div id="manual-inventory-container">
-            <p>読み込み中...</p>
+        <div class="buttons-group">
+            <button id="save-manual-inv-btn" class="btn" style="background-color: #0d6efd; color: white;">この内容で棚卸を保存</button>
         </div>
     </div>
+    <div id="manual-inventory-container">
+        <p>読み込み中...</p>
+    </div>
+</div>
 
-    <div id="aggregation-view" class="hidden">
-        <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
-            <div class="field-group"><label for="startDate">開始日</label><input type="date" id="startDate"></div>
-            <div class="field-group"><label for="endDate">終了日</label><input type="date" id="endDate"></div>
-            <div class="field-group"><label for="kanaName">カナ名</label><input type="text" id="kanaName" placeholder="（部分一致）"></div>
-            <div class="field-group"><label for="dosageForm">剤型</label><input type="text" id="dosageForm" placeholder="（部分一致）"></div>
-            <div class="field-group"><label for="reorder-coefficient">発注点係数</label><input type="number" id="reorder-coefficient" value="1.5" step="0.1" style="width: 80px;"></div>
+<div id="aggregation-view" class="hidden">
+    <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
+        <div class="field-group"><label for="startDate">開始日</label><input type="date" id="startDate"></div>
+        <div class="field-group"><label for="endDate">終了日</label><input type="date" id="endDate"></div>
+        <div class="field-group"><label for="kanaName">カナ名</label><input type="text" id="kanaName" placeholder="（部分一致）"></div>
+        <div class="field-group"><label for="dosageForm">剤型</label><input type="text" id="dosageForm" placeholder="（部分一致）"></div>
+        <div class="field-group"><label for="reorder-coefficient">発注点係数</label><input type="number" id="reorder-coefficient" value="1.5" step="0.1" style="width: 80px;"></div>
+        <div class="field-group">
+            <label>薬の種類</label>
+            <div style="display: flex; flex-wrap: wrap; gap: 5px 10px;">
+                <label><input type="checkbox" name="drugType" value="poison">毒</label>
+                <label><input type="checkbox" name="drugType" value="deleterious">劇</label>
+                <label><input type="checkbox" name="drugType" value="narcotic">麻</label>
+                <label><input type="checkbox" name="drugType" value="psychotropic1">向1</label>
+                <label><input type="checkbox" name="drugType" value="psychotropic2">向2</label>
+                <label><input type="checkbox" name="drugType" value="psychotropic3">向3</label>
+                <label><input type="checkbox" name="drugType" value="stimulant">覚</label>
+                <label><input type="checkbox" name="drugType" value="stimulant_raw">覚原</label>
+            </div>
+        </div>
+        <div class="field-group"><label><input type="checkbox" id="reorder-needed-filter"> 不足品のみ</label></div>
+        <div class="buttons-group" style="margin-left: auto;">
+            <button id="run-aggregation-btn" class="btn">集計実行</button>
+            <button id="print-aggregation-btn" class="btn">印刷</button>
+        </div>
+    </div>
+    <div id="aggregation-output-container"></div>
+</div>
+
+<div id="search-modal" class="modal-overlay hidden">
+    <div class="modal-content">
+        <div class="modal-header">
+        <p class="modal-title">薬品検索</p>
+        <button id="closeModalBtn" class="close-button">&times;</button>
+        </div>
+        <div style="display: flex; gap: 5px; margin-bottom: 10px;">
+        <input type="text" id="product-search-input" placeholder="製品名またはカナ名（2文字以上）" style="flex-grow: 1; padding: 5px;">
+        <button id="product-search-btn" class="btn">検索</button>
+        </div>
+        <div class="modal-body" id="search-results-container">
+        <table id="search-results-table">
+            <thead><tr><th>製品名</th><th>メーカー</th><th>包装</th><th>YJコード</th><th>JANコード</th><th>選択</th></tr></thead>
+            <tbody></tbody>
+        </table>
+        </div>
+    </div>
+</div>
+
+<div id="master-edit-view" class="hidden">
+    <div class="inout-header-controls" style="justify-content: flex-end;">
+        <div class="buttons-group">
+            <button id="addMasterRowBtn" class="btn">新規行を追加</button>
+            <button id="refreshMastersBtn" class="btn">一覧を更新</button>
+        </div>
+    </div>
+<div id="master-edit-container"></div>
+</div>
+
+<div id="precomp-view" class="hidden">
+    <div class="inout-header-controls">
+        <div class="field-group">
+        <label for="precomp-patient-number">患者番号</label>
+        <input type="text" id="precomp-patient-number" placeholder="患者番号を入力">
+        </div>
+        <button id="precomp-load-btn" class="btn">呼び出し</button>
+        <div class="buttons-group">
+        <button id="precomp-clear-btn" class="btn" style="background-color: #dc3545; color: white;">中断</button>
+        <button id="precomp-save-btn" class="btn" style="background-color: #0d6efd; color: white;">保存</button>
+        </div>
+    </div>
+    <div class="inout-details-header">
+        <button id="precomp-add-row-btn" class="btn">明細を追加</button>
+    </div>
+    <div id="precomp-details-container">
+        <table id="precomp-details-table" class="data-table">
+            <thead>
+                <tr>
+                    <th style="width: 40%;">製品名</th>
+                    <th style="width: 20%;">JANコード</th>
+                    <th style="width: 15%;">単位</th>
+                    <th style="width: 15%;">数量(JAN単位)</th>
+                    <th style="width: 10%;">削除</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr class="no-data-row"><td colspan="5">患者番号を入力し、「行追加」してください。</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div id="settings-view" class="hidden">
+    <div class="settings-form-container">
+        <fieldset>
+            <legend>e-mednet 連携設定</legend>
             <div class="field-group">
-                <label>薬の種類</label>
-                <div style="display: flex; flex-wrap: wrap; gap: 5px 10px;">
-                    <label><input type="checkbox" name="drugType" value="poison">毒</label>
-                    <label><input type="checkbox" name="drugType" value="deleterious">劇</label>
-                    <label><input type="checkbox" name="drugType" value="narcotic">麻</label>
-                    <label><input type="checkbox" name="drugType" value="psychotropic1">向1</label>
-                    <label><input type="checkbox" name="drugType" value="psychotropic2">向2</label>
-                    <label><input type="checkbox" name="drugType" value="psychotropic3">向3</label>
-                    <label><input type="checkbox" name="drugType" value="stimulant">覚</label>
-                    <label><input type="checkbox" name="drugType" value="stimulant_raw">覚原</label>
+                <label for="emednetUserID">ユーザーID</label>
+                <input type="text" id="emednetUserID" style="width: 300px;">
+            </div>
+            <div class="field-group">
+                <label for="emednetPassword">パスワード</label>
+                <input type="password" id="emednetPassword" style="width: 300px;">
+            </div>
+        </fieldset>
+
+        <fieldset style="margin-top: 20px;">
+            <legend>卸業者管理</legend>
+            <div style="display: flex; gap: 10px; align-items: flex-end; margin-bottom: 10px;">
+                <div class="field-group">
+                    <label for="wholesalerCode">卸コード (数字)</label>
+                    <input type="text" id="wholesalerCode" placeholder="例: 12345">
                 </div>
+                <div class="field-group">
+                    <label for="wholesalerName">卸業者名</label>
+                    <input type="text" id="wholesalerName" placeholder="例: 株式会社〇〇">
                 </div>
-            <div class="field-group"><label><input type="checkbox" id="reorder-needed-filter"> 不足品のみ</label></div>
-            <div class="buttons-group" style="margin-left: auto;">
-                <button id="run-aggregation-btn" class="btn">集計実行</button>
-                <button id="print-aggregation-btn" class="btn">印刷</button>
+                <button id="addWholesalerBtn" class="btn">追加</button>
             </div>
-        </div>
-        <div id="aggregation-output-container"></div>
-    </div>
-
-    <div id="search-modal" class="modal-overlay hidden">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>薬品検索</h2>
-                <button id="closeModalBtn" class="close-button">&times;</button>
-            </div>
-            <div style="display: flex; gap: 5px; margin-bottom: 10px;">
-                <input type="text" id="product-search-input" placeholder="製品名またはカナ名（2文字以上）" style="flex-grow: 1; padding: 5px;">
-                <button id="product-search-btn" class="btn">検索</button>
-            </div>
-            <div class="modal-body" id="search-results-container">
-                <table id="search-results-table">
-                    <thead><tr><th>製品名</th><th>メーカー</th><th>包装</th><th>YJコード</th><th>JANコード</th><th>選択</th></tr></thead>
-                    <tbody></tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-
-        <div id="master-edit-view" class="hidden">
-        <div class="inout-header-controls" style="justify-content: flex-end;">
-            <div class="buttons-group">
-                <button id="addMasterRowBtn" class="btn">新規行を追加</button>
-                <button id="refreshMastersBtn" class="btn">一覧を更新</button>
-            </div>
-        </div>
-        <div id="master-edit-container"></div>
-    </div>
-
-        <div id="precomp-view" class="hidden">
-        <h1>予製管理</h1>
-        <div class="inout-header-controls">
-            <div class="field-group">
-                <label for="precomp-patient-number">患者番号</label>
-                <input type="text" id="precomp-patient-number" placeholder="患者番号を入力">
-            </div>
-            <button id="precomp-load-btn" class="btn">呼び出し</button>
-            <div class="buttons-group">
-                <button id="precomp-clear-btn" class="btn" style="background-color: #dc3545; color: white;">中断</button>
-                <button id="precomp-save-btn" class="btn" style="background-color: #0d6efd; color: white;">保存</button>
-            </div>
-        </div>
-        <div class="inout-details-header">
-            <button id="precomp-add-row-btn" class="btn">明細を追加</button>
-        </div>
-        <div id="precomp-details-container">
-            <table id="precomp-details-table" class="data-table">
+            <table class="data-table" id="wholesalers-table">
                 <thead>
                     <tr>
-                        <th style="width: 40%;">製品名</th>
-                        <th style="width: 20%;">JANコード</th>
-                        <th style="width: 15%;">単位</th>
-                        <th style="width: 15%;">数量(JAN単位)</th>
-                        <th style="width: 10%;">削除</th>
+                        <th style="width: 30%;">卸コード</th>
+                        <th style="width: 50%;">卸業者名</th>
+                        <th style="width: 20%;">操作</th>
                     </tr>
                 </thead>
                 <tbody>
-                    <tr class="no-data-row"><td colspan="5">患者番号を入力し、「行追加」してください。</td></tr>
-                </tbody>
+                    </tbody>
             </table>
-        </div>
+        </fieldset>
 
-    <div id="settings-view" class="hidden">
-        <h1>設定</h1>
-        <div class="settings-form-container">
-            <fieldset>
-                <legend>e-mednet 連携設定</legend>
-                <div class="field-group">
-                    <label for="emednetUserID">ユーザーID</label>
-                    <input type="text" id="emednetUserID" style="width: 300px;">
-                </div>
-                <div class="field-group">
-                    <label for="emednetPassword">パスワード</label>
-                    <input type="password" id="emednetPassword" style="width: 300px;">
-                </div>
-            </fieldset>
-            
-            <div class="buttons-group" style="margin-top: 20px;">
-                <button id="saveSettingsBtn" class="btn" style="background-color: #0d6efd; color: white;">設定を保存</button>
-            </div>
+        <div class="buttons-group" style="margin-top: 20px;">
+            <button id="saveSettingsBtn" class="btn" style="background-color: #0d6efd; color: white;">設定を保存</button>
         </div>
     </div>
+</div>
 
 
-    <div id="deadstock-view" class="hidden">
-        <h1>デッドストックリスト</h1>
-        <div class="filter-container">
-            <div class="field-group">
-                <label for="ds-startDate">開始日</label>
-                <input type="date" id="ds-startDate">
-            </div>
-            <div class="field-group">
-                <label for="ds-endDate">終了日</label>
-                <input type="date" id="ds-endDate">
-            </div>
-            <div class="field-group">
-                <label><input type="checkbox" id="ds-exclude-zero-stock"> 在庫が0の品目を除外</label>
-            </div>
-            <div class="buttons-group">
-                <button id="run-dead-stock-btn" class="btn">リスト作成</button>
-            </div>
+
+
+<div id="deadstock-view" class="hidden">
+    <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
+        <div class="field-group">
+        <label for="ds-startDate">開始日</label>
+        <input type="date" id="ds-startDate">
         </div>
-        <div id="deadstock-output-container"></div>
+        <div class="field-group">
+        <label for="ds-endDate">終了日</label>
+        <input type="date" id="ds-endDate">
+        </div>
+        <div class="field-group">
+        <label><input type="checkbox" id="ds-exclude-zero-stock"> 在庫が0の品目を除外</label>
+          </div>
+        <div class="buttons-group">
+        <button id="run-dead-stock-btn" class="btn">リスト作成</button>
+        <button id="print-deadstock-btn" class="btn">印刷</button>
+        </div>
     </div>
+    <div id="deadstock-output-container"></div>
+</div>
 
-    <input type="file" id="importClientsInput" style="display:none;" accept=".csv">
-    <input type="file" id="importProductsInput" style="display:none;" accept=".csv">
+
+
+
+<div id="order-view" class="hidden">
+    <div class="controls-grid" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
+        <div class="field-group">
+            <label for="order-startDate">期間 開始</label>
+            <input type="date" id="order-startDate">
+        </div>
+        <div class="field-group">
+            <label for="order-endDate">期間 終了</label>
+            <input type="date" id="order-endDate">
+        </div>
+        <div class="field-group">
+            <label for="order-kanaName">薬品名カナ</label>
+            <input type="text" id="order-kanaName" placeholder="（前方一致）">
+        </div>
+        <div class="field-group">
+            <label for="order-dosageForm">剤形</label>
+            <input type="text" id="order-dosageForm" placeholder="（部分一致）">
+        </div>
+        <div class="field-group">
+            <label for="order-reorder-coefficient">発注点係数</label>
+            <input type="number" id="order-reorder-coefficient" value="1.3" step="0.1">
+        </div>
+        <div class="field-group">
+            <button id="generate-order-candidates-btn" class="btn">不足品リストを作成</button>
+        </div>
+                <div class="field-group">
+            <button id="createOrderCsvBtn" class="btn" style="background-color: #198754; color: white;">発注書作成 (CSVダウンロード)</button>
+        </div>
+    </div>
+    <div id="order-candidates-output">
+    </div>
+</div>
+    
+<input type="file" id="importClientsInput" style="display:none;" accept=".csv">
+
+<input type="file" id="importProductsInput" style="display:none;" accept=".csv">
+
 </main>
 
 <div id="loading-overlay" class="hidden"><div class="spinner"></div><p>Processing...</p></div>

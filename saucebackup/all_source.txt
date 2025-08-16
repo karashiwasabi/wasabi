@@ -589,6 +589,12 @@ import (
 
 // GetStockLedger generates the stock ledger report with the new, simplified calculation logic.
 func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.StockLedgerYJGroup, error) {
+	precompTotals, err := GetPreCompoundingTotals(conn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get pre-compounding totals for aggregation: %w", err)
+	}
+
+	// === ステップ1: フィルターに合致する製品マスターを取得 ===
 	masterQuery := `SELECT ` + selectColumns + ` FROM product_master p WHERE 1=1 `
 	var masterArgs []interface{}
 	if filters.KanaName != "" {
@@ -596,16 +602,20 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		masterArgs = append(masterArgs, "%"+filters.KanaName+"%")
 	}
 	if filters.DosageForm != "" {
-		// 【修正点】検索対象を package_form から usage_classification に変更
 		masterQuery += " AND p.usage_classification LIKE ? "
 		masterArgs = append(masterArgs, "%"+filters.DosageForm+"%")
 	}
 	if len(filters.DrugTypes) > 0 && filters.DrugTypes[0] != "" {
 		var conditions []string
 		flagMap := map[string]string{
-			"poison": "p.flag_poison = 1", "deleterious": "p.flag_deleterious = 1", "narcotic": "p.flag_narcotic = 1",
-			"psychotropic1": "p.flag_psychotropic = 1", "psychotropic2": "p.flag_psychotropic = 2", "psychotropic3": "p.flag_psychotropic = 3",
-			"stimulant": "p.flag_stimulant = 1", "stimulant_raw": "p.flag_stimulant_raw = 1",
+			"poison":        "p.flag_poison = 1",
+			"deleterious":   "p.flag_deleterious = 1",
+			"narcotic":      "p.flag_narcotic = 1",
+			"psychotropic1": "p.flag_psychotropic = 1",
+			"psychotropic2": "p.flag_psychotropic = 2",
+			"psychotropic3": "p.flag_psychotropic = 3",
+			"stimulant":     "p.flag_stimulant = 1",
+			"stimulant_raw": "p.flag_stimulant_raw = 1",
 		}
 		for _, dt := range filters.DrugTypes {
 			if cond, ok := flagMap[dt]; ok {
@@ -639,6 +649,7 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		return []model.StockLedgerYJGroup{}, nil
 	}
 
+	// === ステップ2: 関連する全期間のトランザクションを取得 ===
 	var txArgs []interface{}
 	for _, pc := range productCodes {
 		txArgs = append(txArgs, pc)
@@ -646,15 +657,12 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 
 	transactionsByProductCode := make(map[string][]*model.TransactionRecord)
 	if len(productCodes) > 0 {
-		txQuery := `SELECT ` + TransactionColumns + ` FROM transaction_records WHERE jan_code IN (?` + strings.Repeat(",?", len(productCodes)-1) + `) AND transaction_date >= ? AND transaction_date <= ? ORDER BY transaction_date, id`
-		txArgsWithDate := append(txArgs, filters.StartDate, filters.EndDate)
-
-		txRows, err := conn.Query(txQuery, txArgsWithDate...)
+		txQuery := `SELECT ` + TransactionColumns + ` FROM transaction_records WHERE jan_code IN (?` + strings.Repeat(",?", len(productCodes)-1) + `) ORDER BY transaction_date, id`
+		txRows, err := conn.Query(txQuery, txArgs...)
 		if err != nil {
 			return nil, err
 		}
 		defer txRows.Close()
-
 		for txRows.Next() {
 			t, err := ScanTransactionRecord(txRows)
 			if err != nil {
@@ -664,6 +672,7 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		}
 	}
 
+	// === ステップ3: YJコードごとに集計処理 ===
 	var result []model.StockLedgerYJGroup
 	for yjCode, mastersInYjGroup := range mastersByYjCode {
 		if len(mastersInYjGroup) == 0 {
@@ -671,22 +680,6 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		}
 
 		representativeProductName := mastersInYjGroup[0].ProductName
-		for _, master := range mastersInYjGroup {
-			isComplete := false
-			if txs, ok := transactionsByProductCode[master.ProductCode]; ok {
-				for _, t := range txs {
-					if t.ProcessFlagMA == "COMPLETE" {
-						isComplete = true
-						break
-					}
-				}
-			}
-			if isComplete {
-				representativeProductName = master.ProductName
-				break
-			}
-		}
-
 		yjGroup := model.StockLedgerYJGroup{
 			YjCode:      yjCode,
 			ProductName: representativeProductName,
@@ -701,193 +694,146 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 
 		var allPackageLedgers []model.StockLedgerPackageGroup
 		for key, mastersInPackageGroup := range mastersByPackageKey {
-			pkgTxs := []*model.TransactionRecord{}
+			var allTxsForPackage []*model.TransactionRecord
 			for _, m := range mastersInPackageGroup {
-				pkgTxs = append(pkgTxs, transactionsByProductCode[m.ProductCode]...)
+				allTxsForPackage = append(allTxsForPackage, transactionsByProductCode[m.ProductCode]...)
 			}
-			sort.Slice(pkgTxs, func(i, j int) bool {
-				if pkgTxs[i].TransactionDate != pkgTxs[j].TransactionDate {
-					return pkgTxs[i].TransactionDate < pkgTxs[j].TransactionDate
+			sort.Slice(allTxsForPackage, func(i, j int) bool {
+				if allTxsForPackage[i].TransactionDate != allTxsForPackage[j].TransactionDate {
+					return allTxsForPackage[i].TransactionDate < allTxsForPackage[j].TransactionDate
 				}
-				return pkgTxs[i].ID < pkgTxs[j].ID
+				return allTxsForPackage[i].ID < allTxsForPackage[j].ID
 			})
 
-			pkg := model.StockLedgerPackageGroup{PackageKey: key}
-
-			inventoryDayTotals := make(map[string]float64)
-			hasInventoryInGroup := false
-			for _, t := range pkgTxs {
-				if t.Flag == 0 {
-					inventoryDayTotals[t.TransactionDate] += t.YjQuantity
-					hasInventoryInGroup = true
+			// --- 新しい計算ロジック ---
+			// 1. 期首在庫を計算
+			var startingBalance float64
+			latestInventoryDateBeforePeriod := ""
+			var lastInventoryQty float64
+			for _, t := range allTxsForPackage {
+				if t.TransactionDate < filters.StartDate && t.Flag == 0 {
+					if t.TransactionDate > latestInventoryDateBeforePeriod {
+						latestInventoryDateBeforePeriod = t.TransactionDate
+						lastInventoryQty = t.YjQuantity
+					}
 				}
 			}
 
-			var netChange, maxUsage float64
-			var runningBalance float64
-			var transactions []model.LedgerTransaction
-
-			if !hasInventoryInGroup {
-				pkg.StartingBalance = "期間棚卸なし"
-				pkg.EndingBalance = "期間棚卸なし"
-				runningBalance = 0.0
-				for _, t := range pkgTxs {
-					runningBalance += t.SignedYjQty()
-					transactions = append(transactions, model.LedgerTransaction{TransactionRecord: *t, RunningBalance: runningBalance})
+			if latestInventoryDateBeforePeriod != "" {
+				startingBalance = lastInventoryQty
+				for _, t := range allTxsForPackage {
+					if t.TransactionDate > latestInventoryDateBeforePeriod && t.TransactionDate < filters.StartDate {
+						startingBalance += t.SignedYjQty()
+					}
 				}
 			} else {
-				runningBalance = 0.0
-				var startingBalanceQty float64
-				isStartingBalanceSet := false
-
-				for _, t := range pkgTxs {
-					if t.Flag == 0 {
-						if !isStartingBalanceSet {
-							startingBalanceQty = inventoryDayTotals[t.TransactionDate]
-							isStartingBalanceSet = true
-						}
-						break
+				for _, t := range allTxsForPackage {
+					if t.TransactionDate < filters.StartDate {
+						startingBalance += t.SignedYjQty()
 					}
 				}
+			}
 
-				for i, t := range pkgTxs {
-					_, isInventoryDay := inventoryDayTotals[t.TransactionDate]
+			// 2. 期間内のトランザクションを処理して残高を計算
+			var transactionsInPeriod []model.LedgerTransaction
+			var netChange, maxUsage float64
+			runningBalance := startingBalance
 
-					if i > 0 && t.TransactionDate != pkgTxs[i-1].TransactionDate {
-						prevDate := pkgTxs[i-1].TransactionDate
-						if invTotal, wasInvDay := inventoryDayTotals[prevDate]; wasInvDay {
-							runningBalance = invTotal
-						}
-					}
-
-					if isInventoryDay {
-						if t.Flag != 0 {
-							tempBalance := runningBalance + t.SignedYjQty()
-							transactions = append(transactions, model.LedgerTransaction{TransactionRecord: *t, RunningBalance: tempBalance})
-						} else {
-							runningBalance = inventoryDayTotals[t.TransactionDate]
-							transactions = append(transactions, model.LedgerTransaction{TransactionRecord: *t, RunningBalance: runningBalance})
-						}
-					} else {
+			for _, t := range allTxsForPackage {
+				if t.TransactionDate >= filters.StartDate && t.TransactionDate <= filters.EndDate {
+					if t.Flag == 0 { // 棚卸の場合、残高を強制補正
+						runningBalance = t.YjQuantity
+					} else { // それ以外の取引
 						runningBalance += t.SignedYjQty()
-						transactions = append(transactions, model.LedgerTransaction{TransactionRecord: *t, RunningBalance: runningBalance})
 					}
-				}
+					transactionsInPeriod = append(transactionsInPeriod, model.LedgerTransaction{TransactionRecord: *t, RunningBalance: runningBalance})
 
-				if len(pkgTxs) > 0 {
-					lastDate := pkgTxs[len(pkgTxs)-1].TransactionDate
-					if invTotal, wasInvDay := inventoryDayTotals[lastDate]; wasInvDay {
-						runningBalance = invTotal
-						for i := len(transactions) - 1; i >= 0; i-- {
-							if transactions[i].TransactionDate == lastDate {
-								transactions[i].RunningBalance = runningBalance
-							} else {
-								break
-							}
-						}
+					netChange += t.SignedYjQty()
+					if t.Flag == 3 && t.YjQuantity > maxUsage {
+						maxUsage = t.YjQuantity
 					}
-				}
-
-				if isStartingBalanceSet {
-					pkg.StartingBalance = startingBalanceQty
-				} else {
-					pkg.StartingBalance = "期間棚卸なし"
-				}
-				pkg.EndingBalance = runningBalance
-			}
-
-			for _, t := range pkgTxs {
-				netChange += t.SignedYjQty()
-				if t.Flag == 3 && t.YjQuantity > maxUsage {
-					maxUsage = t.YjQuantity
 				}
 			}
 
-			pkg.Transactions = transactions
-			pkg.NetChange = netChange
-			pkg.MaxUsage = maxUsage
-			pkg.ReorderPoint = maxUsage * filters.Coefficient
+			pkg := model.StockLedgerPackageGroup{
+				PackageKey:      key,
+				StartingBalance: startingBalance,
+				EndingBalance:   runningBalance,
+				Transactions:    transactionsInPeriod,
+				NetChange:       netChange,
+				MaxUsage:        maxUsage,
+			}
 
+			// 発注点計算
+			var precompTotalForPackage float64
+			for _, master := range mastersInPackageGroup {
+				if total, ok := precompTotals[master.ProductCode]; ok {
+					precompTotalForPackage += total
+				}
+			}
+			pkg.BaseReorderPoint = maxUsage * filters.Coefficient
+			pkg.PrecompoundedTotal = precompTotalForPackage
+			pkg.ReorderPoint = pkg.BaseReorderPoint + pkg.PrecompoundedTotal
 			if endBalanceFloat, ok := pkg.EndingBalance.(float64); ok {
 				pkg.IsReorderNeeded = endBalanceFloat < pkg.ReorderPoint && pkg.MaxUsage > 0
+			}
+			if len(mastersInPackageGroup) > 0 {
+				pkg.Masters = mastersInPackageGroup // スライス全体を新しいフィールドに設定する
 			}
 			allPackageLedgers = append(allPackageLedgers, pkg)
 		}
 
 		if len(allPackageLedgers) > 0 {
-			var yjTotalEnding, yjTotalNetChange, yjTotalReorderPoint float64
-			var yjTotalStarting interface{}
+			var yjTotalEnding, yjTotalNetChange, yjTotalReorderPoint, yjTotalBaseReorderPoint, yjTotalPrecompounded float64
+			var yjTotalStarting float64
 			isYjReorderNeeded := false
-			hasAnyInventory := false
-
 			for _, pkg := range allPackageLedgers {
 				if start, ok := pkg.StartingBalance.(float64); ok {
-					if !hasAnyInventory {
-						yjTotalStarting = float64(0)
-						hasAnyInventory = true
-					}
-					if val, ok := yjTotalStarting.(float64); ok {
-						yjTotalStarting = val + start
-					}
+					yjTotalStarting += start
 				}
-
 				if end, ok := pkg.EndingBalance.(float64); ok {
 					yjTotalEnding += end
 				}
 				yjTotalNetChange += pkg.NetChange
 				yjTotalReorderPoint += pkg.ReorderPoint
+				yjTotalBaseReorderPoint += pkg.BaseReorderPoint
+				yjTotalPrecompounded += pkg.PrecompoundedTotal
 				if pkg.IsReorderNeeded {
 					isYjReorderNeeded = true
 				}
 			}
-
-			if !hasAnyInventory {
-				yjGroup.StartingBalance = "期間棚卸なし"
-				yjGroup.EndingBalance = "期間棚卸なし"
-			} else {
-				yjGroup.StartingBalance = yjTotalStarting
-				yjGroup.EndingBalance = yjTotalEnding
-			}
-
+			yjGroup.StartingBalance = yjTotalStarting
+			yjGroup.EndingBalance = yjTotalEnding
 			yjGroup.NetChange = yjTotalNetChange
 			yjGroup.TotalReorderPoint = yjTotalReorderPoint
+			yjGroup.TotalBaseReorderPoint = yjTotalBaseReorderPoint
+			yjGroup.TotalPrecompounded = yjTotalPrecompounded
 			yjGroup.IsReorderNeeded = isYjReorderNeeded
 			yjGroup.PackageLedgers = allPackageLedgers
 			result = append(result, yjGroup)
 		}
 	}
 
-	// ▼▼▼ [修正点] 診断用ログを削除し、最終的なソートロジックを確定 ▼▼▼
 	sort.Slice(result, func(i, j int) bool {
-		// 【修正点】キーに日本語の文字を追加し、両方に対応させる
 		prio := map[string]int{
-			"1": 1, "内": 1,
-			"2": 2, "外": 2,
-			"3": 3, "歯": 3,
-			"4": 4, "注": 4,
-			"5": 5, "機": 5, // 「機」という文字にも対応
-			"6": 6, "他": 6, // 「他」という文字にも対応
+			"1": 1, "内": 1, "2": 2, "外": 2, "3": 3, "注": 3,
+			"4": 4, "歯": 4, "5": 5, "機": 5, "6": 6, "他": 6,
 		}
-
 		masterI := mastersByYjCode[result[i].YjCode][0]
 		masterJ := mastersByYjCode[result[j].YjCode][0]
-
 		prioI, okI := prio[strings.TrimSpace(masterI.UsageClassification)]
 		if !okI {
-			prioI = 6 // その他のデフォルト優先順位
+			prioI = 7
 		}
-
 		prioJ, okJ := prio[strings.TrimSpace(masterJ.UsageClassification)]
 		if !okJ {
-			prioJ = 6 // その他のデフォルト優先順位
+			prioJ = 7
 		}
-
 		if prioI != prioJ {
 			return prioI < prioJ
 		}
 		return masterI.KanaName < masterJ.KanaName
 	})
-	// ▲▲▲ 修正ここまで ▲▲▲
 
 	return result, nil
 }
@@ -934,7 +880,9 @@ func GetAllClients(conn *sql.DB) ([]model.Client, error) {
 	}
 	defer rows.Close()
 
-	var clients []model.Client
+	// ▼▼▼ [修正点] nilスライスではなく、空のスライスで初期化する ▼▼▼
+	clients := make([]model.Client, 0)
+	// ▲▲▲ 修正ここまで ▲▲▲
 	for rows.Next() {
 		var c model.Client
 		if err := rows.Scan(&c.Code, &c.Name); err != nil {
@@ -1263,6 +1211,24 @@ func SearchJcshmsByNameHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
+// SearchAllMastersHandler は /api/masters/search_all のリクエストを処理します。
+func SearchAllMastersHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query().Get("q")
+		if len(query) < 2 {
+			http.Error(w, "Query must be at least 2 characters", http.StatusBadRequest)
+			return
+		}
+		results, err := SearchAllProductMastersByName(conn, query)
+		if err != nil {
+			http.Error(w, "Failed to search masters", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(results)
+	}
+}
+
 
 ----- C:\Dev\WASABI\db\jcshms.go -----
 // C:\Dev\WASABI\db\jcshms.go
@@ -1357,6 +1323,104 @@ func GetJcshmsByCodesMap(tx *sql.Tx, jans []string) (map[string]*model.JCShms, e
 }
 
 // ▲▲▲ 修正ここまで ▲▲▲
+
+
+----- C:\Dev\WASABI\db\precomp.go -----
+package db
+
+import (
+	"database/sql"
+	"fmt"
+	"time"
+	"wasabi/model"
+)
+
+type PreCompoundingRecordView struct {
+	model.PreCompoundingRecord
+	ProductName     string  `json:"productName"`
+	YjUnitName      string  `json:"yjUnitName"`
+	JanPackInnerQty float64 `json:"janPackInnerQty"`
+}
+
+func GetPreCompoundingRecordsByPatient(conn *sql.DB, patientNumber string) ([]PreCompoundingRecordView, error) {
+	const q = `
+		SELECT
+			pcr.id, pcr.patient_number, pcr.product_code, pcr.quantity, pcr.created_at,
+			pm.product_name, pm.yj_unit_name, pm.jan_pack_inner_qty
+		FROM pre_compounding_records pcr
+		JOIN product_master pm ON pcr.product_code = pm.product_code
+		WHERE pcr.patient_number = ? ORDER BY pcr.id`
+
+	rows, err := conn.Query(q, patientNumber)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query pre-compounding records for patient %s: %w", patientNumber, err)
+	}
+	defer rows.Close()
+
+	var records []PreCompoundingRecordView
+	for rows.Next() {
+		var r PreCompoundingRecordView
+		if err := rows.Scan(
+			&r.ID, &r.PatientNumber, &r.ProductCode, &r.Quantity, &r.CreatedAt,
+			&r.ProductName, &r.YjUnitName, &r.JanPackInnerQty,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan pre-compounding record: %w", err)
+		}
+		records = append(records, r)
+	}
+	return records, nil
+}
+
+func DeletePreCompoundingRecordsByPatient(conn *sql.DB, patientNumber string) error {
+	const q = `DELETE FROM pre_compounding_records WHERE patient_number = ?`
+	if _, err := conn.Exec(q, patientNumber); err != nil {
+		return fmt.Errorf("failed to delete records for patient %s: %w", patientNumber, err)
+	}
+	return nil
+}
+
+func UpsertPreCompoundingRecordsInTx(tx *sql.Tx, patientNumber string, records []model.PreCompoundingRecord) error {
+	if _, err := tx.Exec("DELETE FROM pre_compounding_records WHERE patient_number = ?", patientNumber); err != nil {
+		return fmt.Errorf("failed to delete old records for patient %s: %w", patientNumber, err)
+	}
+
+	if len(records) == 0 {
+		return nil
+	}
+
+	stmt, err := tx.Prepare("INSERT INTO pre_compounding_records (patient_number, product_code, quantity, created_at) VALUES (?, ?, ?, ?)")
+	if err != nil {
+		return fmt.Errorf("failed to prepare insert statement: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, rec := range records {
+		_, err := stmt.Exec(patientNumber, rec.ProductCode, rec.Quantity, time.Now().Format("2006-01-02 15:04:05"))
+		if err != nil {
+			return fmt.Errorf("failed to insert record for product %s: %w", rec.ProductCode, err)
+		}
+	}
+	return nil
+}
+
+func GetPreCompoundingTotals(conn *sql.DB) (map[string]float64, error) {
+	const q = `SELECT product_code, SUM(quantity) FROM pre_compounding_records GROUP BY product_code`
+	rows, err := conn.Query(q)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query pre-compounding totals: %w", err)
+	}
+	defer rows.Close()
+	totals := make(map[string]float64)
+	for rows.Next() {
+		var productCode string
+		var totalQuantity float64
+		if err := rows.Scan(&productCode, &totalQuantity); err != nil {
+			return nil, fmt.Errorf("failed to scan pre-compounding total: %w", err)
+		}
+		totals[productCode] = totalQuantity
+	}
+	return totals, nil
+}
 
 
 ----- C:\Dev\WASABI\db\product_master.go -----
@@ -1659,6 +1723,32 @@ func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterVi
 	return results, nil
 }
 
+// SearchAllProductMastersByName は製品名またはカナ名（部分一致）でproduct_masterテーブル全体を検索します。
+func SearchAllProductMastersByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterView, error) {
+	q := `SELECT ` + selectColumns + ` FROM product_master 
+		  WHERE kana_name LIKE ? OR product_name LIKE ? 
+		  ORDER BY kana_name LIMIT 500`
+
+	rows, err := conn.Query(q, "%"+nameQuery+"%", "%"+nameQuery+"%")
+	if err != nil {
+		return nil, fmt.Errorf("SearchAllProductMastersByName failed: %w", err)
+	}
+	defer rows.Close()
+
+	var mastersView []model.ProductMasterView
+	for rows.Next() {
+		m, err := scanProductMaster(rows)
+		if err != nil {
+			return nil, err
+		}
+		mastersView = append(mastersView, model.ProductMasterView{
+			ProductMaster:        *m,
+			FormattedPackageSpec: m.PackageSpec, // Simplified for now
+		})
+	}
+	return mastersView, nil
+}
+
 
 ----- C:\Dev\WASABI\db\sequence.go -----
 package db
@@ -1959,6 +2049,59 @@ func DeleteUsageTransactionsInDateRange(tx *sql.Tx, minDate, maxDate string) err
 }
 
 
+----- C:\Dev\WASABI\db\wholesalers.go -----
+// C:\Dev\WASABI\db\wholesalers.go
+
+package db
+
+import (
+	"database/sql"
+	"fmt"
+	"wasabi/model"
+)
+
+// GetAllWholesalers は全ての卸業者を取得します。
+func GetAllWholesalers(conn *sql.DB) ([]model.Wholesaler, error) {
+	rows, err := conn.Query("SELECT wholesaler_code, wholesaler_name FROM wholesalers ORDER BY wholesaler_code")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get all wholesalers: %w", err)
+	}
+	defer rows.Close()
+
+	// ▼▼▼ [修正点] nilスライスではなく、空のスライスで初期化する ▼▼▼
+	wholesalers := make([]model.Wholesaler, 0)
+	// ▲▲▲ 修正ここまで ▲▲▲
+	for rows.Next() {
+		var w model.Wholesaler
+		if err := rows.Scan(&w.Code, &w.Name); err != nil {
+			return nil, err
+		}
+		wholesalers = append(wholesalers, w)
+	}
+	return wholesalers, nil
+}
+
+// CreateWholesaler は新しい卸業者を作成します。
+func CreateWholesaler(conn *sql.DB, code, name string) error {
+	const q = `INSERT INTO wholesalers (wholesaler_code, wholesaler_name) VALUES (?, ?)`
+	_, err := conn.Exec(q, code, name)
+	if err != nil {
+		return fmt.Errorf("CreateWholesaler failed: %w", err)
+	}
+	return nil
+}
+
+// DeleteWholesaler は指定されたコードの卸業者を削除します。
+func DeleteWholesaler(conn *sql.DB, code string) error {
+	const q = `DELETE FROM wholesalers WHERE wholesaler_code = ?`
+	_, err := conn.Exec(q, code)
+	if err != nil {
+		return fmt.Errorf("failed to delete wholesaler with code %s: %w", code, err)
+	}
+	return nil
+}
+
+
 ----- C:\Dev\WASABI\deadstock\handler.go -----
 // C:\Dev\WASABI\deadstock\handler.go
 
@@ -2226,10 +2369,19 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
+		// ▼▼▼ [修正点] 新規得意先情報をレスポンスに追加 ▼▼▼
+		response := map[string]interface{}{
 			"message":       "Saved successfully",
 			"receiptNumber": receiptNumber,
-		})
+		}
+		if payload.IsNewClient {
+			response["newClient"] = map[string]string{
+				"code": clientCode,
+				"name": payload.ClientName,
+			}
+		}
+		json.NewEncoder(w).Encode(response)
+		// ▲▲▲ 修正ここまで ▲▲▲
 	}
 }
 
@@ -3277,27 +3429,31 @@ type AggregationFilters struct {
 	Coefficient float64
 }
 type StockLedgerYJGroup struct {
-	YjCode            string                    `json:"yjCode"`
-	ProductName       string                    `json:"productName"`
-	YjUnitName        string                    `json:"yjUnitName"`
-	PackageLedgers    []StockLedgerPackageGroup `json:"packageLedgers"`
-	StartingBalance   interface{}               `json:"startingBalance"`
-	NetChange         float64                   `json:"netChange"`
-	EndingBalance     interface{}               `json:"endingBalance"`
-	TotalReorderPoint float64                   `json:"totalReorderPoint"`
-	IsReorderNeeded   bool                      `json:"isReorderNeeded"`
+	YjCode                string                    `json:"yjCode"`
+	ProductName           string                    `json:"productName"`
+	YjUnitName            string                    `json:"yjUnitName"`
+	PackageLedgers        []StockLedgerPackageGroup `json:"packageLedgers"`
+	StartingBalance       interface{}               `json:"startingBalance"`
+	NetChange             float64                   `json:"netChange"`
+	EndingBalance         interface{}               `json:"endingBalance"`
+	TotalReorderPoint     float64                   `json:"totalReorderPoint"`
+	IsReorderNeeded       bool                      `json:"isReorderNeeded"`
+	TotalBaseReorderPoint float64                   `json:"totalBaseReorderPoint"`
+	TotalPrecompounded    float64                   `json:"totalPrecompounded"`
 }
 type StockLedgerPackageGroup struct {
-	PackageKey      string              `json:"packageKey"`
-	JanUnitName     string              `json:"janUnitName"`
-	StartingBalance interface{}         `json:"startingBalance"`
-	Transactions    []LedgerTransaction `json:"transactions"`
-	NetChange       float64             `json:"netChange"`
-	EndingBalance   interface{}         `json:"endingBalance"`
-	MaxUsage        float64             `json:"maxUsage"`
-	ReorderPoint    float64             `json:"reorderPoint"`
-	IsReorderNeeded bool                `json:"isReorderNeeded"`
-	Master          *ProductMaster      `json:"-"`
+	PackageKey         string              `json:"packageKey"`
+	JanUnitName        string              `json:"janUnitName"`
+	StartingBalance    interface{}         `json:"startingBalance"`
+	Transactions       []LedgerTransaction `json:"transactions"`
+	NetChange          float64             `json:"netChange"`
+	EndingBalance      interface{}         `json:"endingBalance"`
+	MaxUsage           float64             `json:"maxUsage"`
+	ReorderPoint       float64             `json:"reorderPoint"`
+	IsReorderNeeded    bool                `json:"isReorderNeeded"`
+	Masters            []*ProductMaster    `json:"masters"` // masterからmastersに変更し、スライス型にする
+	BaseReorderPoint   float64             `json:"baseReorderPoint"`
+	PrecompoundedTotal float64             `json:"precompoundedTotal"`
 }
 type LedgerTransaction struct {
 	TransactionRecord
@@ -3354,9 +3510,98 @@ type DeadStockFilters struct {
 }
 
 // ▲▲▲ 修正ここまで ▲▲▲
+type PreCompoundingRecord struct {
+	ID            int     `json:"id"`
+	PatientNumber string  `json:"patientNumber"`
+	ProductCode   string  `json:"productCode"`
+	Quantity      float64 `json:"quantity"` // YJ Quantity
+	CreatedAt     string  `json:"createdAt"`
+}
+
+// Wholesaler は卸業者マスターの構造体です。
+type Wholesaler struct {
+	Code string `json:"code"`
+	Name string `json:"name"`
+}
+
+
+----- C:\Dev\WASABI\orders\handlee.go -----
+package orders
+
+import (
+	"database/sql"
+	"encoding/json"
+	"net/http"
+	"strconv"
+	"wasabi/db"
+	"wasabi/model"
+)
+
+// OrderCandidatesResponse は発注準備画面へのレスポンスの構造体です。
+type OrderCandidatesResponse struct {
+	Candidates  []model.StockLedgerYJGroup `json:"candidates"`
+	Wholesalers []model.Wholesaler         `json:"wholesalers"`
+}
+
+// GenerateOrderCandidatesHandler は発注候補を生成して返します。
+func GenerateOrderCandidatesHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		startDate := r.URL.Query().Get("startDate")
+		endDate := r.URL.Query().Get("endDate")
+		kanaName := r.URL.Query().Get("kanaName")
+		dosageForm := r.URL.Query().Get("dosageForm")
+		coefficientStr := r.URL.Query().Get("coefficient")
+		coefficient, err := strconv.ParseFloat(coefficientStr, 64)
+		if err != nil {
+			coefficient = 1.3
+		}
+
+		// ▼▼▼ 修正箇所 ▼▼▼
+		// パラメータをフィルタ用の構造体にまとめる
+		filters := model.AggregationFilters{
+			StartDate:   startDate,
+			EndDate:     endDate,
+			KanaName:    kanaName,
+			DosageForm:  dosageForm,
+			Coefficient: coefficient,
+		}
+
+		// 構造体を使って関数を呼び出す
+		yjGroup, err := db.GetStockLedger(conn, filters)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// ▲▲▲ 修正ここまで ▲▲▲
+
+		var candidates []model.StockLedgerYJGroup
+		for _, group := range yjGroup {
+			if group.IsReorderNeeded {
+				candidates = append(candidates, group)
+			}
+		}
+
+		// データベースから全卸業者リストを取得
+		wholesalers, err := db.GetAllWholesalers(conn)
+		if err != nil {
+			http.Error(w, "Failed to get wholesalers", http.StatusInternalServerError)
+			return
+		}
+
+		// 発注候補と卸業者リストをまとめてレスポンスを作成
+		response := OrderCandidatesResponse{
+			Candidates:  candidates,
+			Wholesalers: wholesalers,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}
+}
 
 
 ----- C:\Dev\WASABI\parsers\dat_parser.go -----
+// C:\Dev\WASABI\parsers\dat_parser.go
 package parsers
 
 import (
@@ -3385,7 +3630,7 @@ func ParseDat(r io.Reader) ([]model.UnifiedInputRecord, error) {
 		switch line[0:1] {
 		case "S":
 			if len(line) >= 13 {
-				currentWholesale = strings.TrimSpace(line[2:13])
+				currentWholesale = strings.TrimSpace(line[3:13])
 			}
 		case "D":
 			if len(line) < 121 {
@@ -3544,6 +3789,125 @@ func ParseUsage(r io.Reader) ([]model.UnifiedInputRecord, error) {
 }
 
 
+----- C:\Dev\WASABI\precomp\handler.go -----
+package precomp
+
+import (
+	"database/sql"
+	"encoding/json"
+	"net/http"
+	"wasabi/db"
+	"wasabi/model"
+)
+
+type PrecompRecordInput struct {
+	ProductCode string  `json:"productCode"`
+	JanQuantity float64 `json:"janQuantity"`
+}
+
+type PrecompPayload struct {
+	PatientNumber string               `json:"patientNumber"`
+	Records       []PrecompRecordInput `json:"records"`
+}
+
+func SavePrecompHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var payload PrecompPayload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if payload.PatientNumber == "" {
+			http.Error(w, "Patient number is required", http.StatusBadRequest)
+			return
+		}
+
+		tx, err := conn.Begin()
+		if err != nil {
+			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback()
+
+		var productCodes []string
+		for _, rec := range payload.Records {
+			productCodes = append(productCodes, rec.ProductCode)
+		}
+
+		masters, err := db.GetProductMastersByCodesMap(tx, productCodes)
+		if err != nil {
+			http.Error(w, "Failed to get product masters", http.StatusInternalServerError)
+			return
+		}
+
+		var recordsToSave []model.PreCompoundingRecord
+		for _, rec := range payload.Records {
+			master, ok := masters[rec.ProductCode]
+			if !ok {
+				continue
+			}
+
+			yjQuantity := rec.JanQuantity * master.JanPackInnerQty
+			recordsToSave = append(recordsToSave, model.PreCompoundingRecord{
+				ProductCode: rec.ProductCode,
+				Quantity:    yjQuantity,
+			})
+		}
+
+		if err := db.UpsertPreCompoundingRecordsInTx(tx, payload.PatientNumber, recordsToSave); err != nil {
+			http.Error(w, "Failed to save pre-compounding records", http.StatusInternalServerError)
+			return
+		}
+
+		if err := tx.Commit(); err != nil {
+			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"message": "予製データを保存しました。"})
+	}
+}
+
+func LoadPrecompHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		patientNumber := r.URL.Query().Get("patientNumber")
+		if patientNumber == "" {
+			http.Error(w, "Patient number is required", http.StatusBadRequest)
+			return
+		}
+
+		records, err := db.GetPreCompoundingRecordsByPatient(conn, patientNumber)
+		if err != nil {
+			http.Error(w, "Failed to load pre-compounding records", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(records)
+	}
+}
+
+func ClearPrecompHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		patientNumber := r.URL.Query().Get("patientNumber")
+		if patientNumber == "" {
+			http.Error(w, "Patient number is required", http.StatusBadRequest)
+			return
+		}
+
+		if err := db.DeletePreCompoundingRecordsByPatient(conn, patientNumber); err != nil {
+			http.Error(w, "Failed to clear pre-compounding records", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"message": "予製データを中断しました。"})
+	}
+}
+
+
 ----- C:\Dev\WASABI\reprocess\handler.go -----
 // C:\Dev\WASABI\reprocess\handler.go
 
@@ -3650,7 +4014,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strings" // stringsパッケージをインポート
 	"wasabi/config"
+	"wasabi/db"    // dbパッケージをインポート
+	"wasabi/model" // modelパッケージをインポート
 )
 
 // GetSettingsHandler returns the current settings.
@@ -3682,6 +4049,54 @@ func SaveSettingsHandler(conn *sql.DB) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"message": "設定を保存しました。"})
+	}
+}
+
+// WholesalersHandler は卸業者に関するリクエストを処理します。
+func WholesalersHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			wholesalers, err := db.GetAllWholesalers(conn)
+			if err != nil {
+				http.Error(w, "Failed to get wholesalers", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(wholesalers)
+
+		case http.MethodPost:
+			var payload model.Wholesaler
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				http.Error(w, "Invalid request body", http.StatusBadRequest)
+				return
+			}
+			if payload.Code == "" || payload.Name == "" {
+				http.Error(w, "Code and Name are required", http.StatusBadRequest)
+				return
+			}
+			if err := db.CreateWholesaler(conn, payload.Code, payload.Name); err != nil {
+				http.Error(w, "Failed to create wholesaler", http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]string{"message": "卸業者を追加しました。"})
+
+		case http.MethodDelete:
+			code := strings.TrimPrefix(r.URL.Path, "/api/settings/wholesalers/")
+			if code == "" {
+				http.Error(w, "Wholesaler code is required", http.StatusBadRequest)
+				return
+			}
+			if err := db.DeleteWholesaler(conn, code); err != nil {
+				http.Error(w, "Failed to delete wholesaler", http.StatusInternalServerError)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]string{"message": "卸業者を削除しました。"})
+
+		default:
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		}
 	}
 }
 
@@ -3760,7 +4175,7 @@ th { text-align: center; background-color: #f0f0f0; }
 .notification-box { position: fixed; top: -100px; left: 50%; transform: translateX(-50%); padding: 15px 25px; border-radius: 5px; color: white; font-size: 16px; z-index: 10000; transition: top 0.5s; }
 .notification-box.show { top: 20px; }
 .notification-box.success { background-color: #198754; }
-.notification-box.error { background-color: #dc3545; }
+.notification-box.error { background-color: #ff0019; }
 
 .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.6); display: flex; align-items: center; justify-content: center; z-index: 2000; }
 .modal-content { background-color: #ffffff; border: 1px solid #000000; padding: 20px; width: 80%; max-width: 900px; max-height: 90vh; display: flex; flex-direction: column; }
@@ -3774,7 +4189,90 @@ th { text-align: center; background-color: #f0f0f0; }
 .agg-yj-header .balance-info { font-size: 14px; font-weight: normal; }
 .agg-pkg-header { background-color: #e9ecef; padding: 6px 8px; border: 1px solid #ccc; border-bottom: none; font-weight: bold; }
 
+@media print {
+  /* ページ設定 */
+  @page {
+    size: A4 landscape;
+    margin: 15mm;
+  }
 
+  /* 印刷不要なUI要素をすべて非表示に */
+  header, .filter-container, .buttons-group, .btn, .inout-details-header, .inout-header-controls, #loading-overlay, #notification-box, .modal-overlay, .entry-controls {
+    display: none !important;
+  }
+
+  /* 印刷用の基本スタイル */
+  body {
+    font-size: 8pt; /* 全体の文字サイズを小さく設定 */
+    background: #fff;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* 全てのビューを一旦非表示に */
+  main > div[id$="-view"] {
+    display: none;
+  }
+
+  /* 現在表示中のビューのみを印刷対象に */
+  main > div[id$="-view"]:not(.hidden) {
+    display: block;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  
+  /* 表示中のビュー内で、指定の出力コンテナ以外を非表示に */
+  main > div[id$="-view"]:not(.hidden) > *:not(#aggregation-output-container):not(#deadstock-output-container) {
+      display: none;
+  }
+
+  /* 印刷対象のコンテナのスタイル */
+  #aggregation-output-container, #deadstock-output-container {
+    display: block !important;
+    font-size: 8pt;
+  }
+
+  /* h1, h2, h3, h4, h5, h6のすべてに適用 */
+h1, h2, h3, h4, h5, h6 {
+  all: unset;
+  display: block;
+}
+  
+  /* 印刷時のテーブルスタイル */
+  table {
+      width: 100%;
+      border-collapse: collapse;
+      page-break-inside: auto; /* テーブルの途中で改ページを許可 */
+  }
+
+  tr {
+      page-break-inside: avoid; /* 行の途中で改ページされないように */
+      page-break-after: auto;
+  }
+  
+  th, td {
+      border: 1px solid #ddd;
+      padding: 2px;
+  }
+
+  th {
+      background-color: #f2f2f2 !important;
+  }
+
+  .agg-yj-header, .agg-pkg-header {
+      background-color: #e9ecef !important;
+      border: 1px solid #ccc;
+      color: #000 !important;
+      page-break-after: avoid; /* ヘッダーの直後で改ページされないように */
+  }
+  
+  /* リンクなどの不要な装飾を解除 */
+  a {
+      text-decoration: none;
+      color: #000;
+  }
+}
 
 ----- C:\Dev\WASABI\static\js\aggregation.js -----
 import { transactionTypeMap, createUploadTableHTML, renderUploadTableRows } from './common_table.js';
@@ -3812,14 +4310,17 @@ function renderResults() {
 
     let html = '';
     dataToRender.forEach((yjGroup, yjIndex) => {
-        // formatBalance ヘルパー関数を使用して、数値・文字列の両方に対応
+        let yjReorderPointText = formatBalance(yjGroup.totalReorderPoint);
+        if (yjGroup.totalPrecompounded > 0) {
+            yjReorderPointText = `${formatBalance(yjGroup.totalBaseReorderPoint)} + 予${formatBalance(yjGroup.totalPrecompounded)} = ${formatBalance(yjGroup.totalReorderPoint)}`;
+        }
         html += `
-            <div class="agg-yj-header" ${yjGroup.isReorderNeeded ? 'style="background-color: #f8d7da;"' : ''}>
+            <div class="agg-yj-header" ${yjGroup.isReorderNeeded ? 'style="background-color: #ff0015ff;"' : ''}>
                 <span>YJ: ${yjGroup.yjCode}</span>
                 <span class="product-name">${yjGroup.productName}</span>
                 <span class="balance-info">
                     在庫: ${formatBalance(yjGroup.endingBalance)} | 
-                    発注点: ${formatBalance(yjGroup.totalReorderPoint)} | 
+                    発注点: ${yjReorderPointText} | 
                     変動: ${formatBalance(yjGroup.netChange)}
                 </span>
             </div>
@@ -3827,13 +4328,16 @@ function renderResults() {
      
         yjGroup.packageLedgers.forEach((pkg, pkgIndex) => {
             const tableId = `agg-table-${yjIndex}-${pkgIndex}`;
-            // formatBalance ヘルパー関数を使用して、数値・文字列の両方に対応
+            let pkgReorderPointText = formatBalance(pkg.reorderPoint);
+            if (pkg.precompoundedTotal > 0) {
+                pkgReorderPointText = `${formatBalance(pkg.baseReorderPoint)} + 予${formatBalance(pkg.precompoundedTotal)} = ${formatBalance(pkg.reorderPoint)}`;
+            }
             html += `
-                <div class="agg-pkg-header" ${pkg.isReorderNeeded ? 'style="background-color: #fff3cd;"' : ''}>
+                <div class="agg-pkg-header" ${pkg.isReorderNeeded ? 'style="background-color: #ff0000ff;"' : ''}>
                     <span>包装: ${pkg.packageKey}</span>
                     <span class="balance-info">
                         在庫: ${formatBalance(pkg.endingBalance)} |
-                        発注点: ${formatBalance(pkg.reorderPoint)} | 
+                        発注点: ${pkgReorderPointText} |  
                         変動: ${formatBalance(pkg.netChange)}
                     </span>
                 </div>
@@ -3921,7 +4425,7 @@ export function initAggregation() {
 
 ----- C:\Dev\WASABI\static\js\app.js -----
 // C:\Dev\WASABI\static\js\app.js
-
+import { loadMasterData } from './master_data.js'; // ★ 新しく作成したモジュールをインポート
 import { initInOut, resetInOutView } from './inout.js';
 import { initDatUpload } from './dat.js';
 import { initUsageUpload } from './usage.js';
@@ -3933,9 +4437,10 @@ import { initBackupButtons } from './backup.js';
 import { initModal } from './inout_modal.js'; 
 import { initDeadStock } from './deadstock.js'; 
 import { initSettings, onViewShow as onSettingsViewShow } from './settings.js';
-import { initMedrec } from './medrec.js'; // ▼▼▼ [修正点] 追加 ▼▼▼
+//import { initMedrec } from './medrec.js'; // ▼▼▼ [修正点] 追加 ▼▼▼
 import { initManualInventory } from './manual_inventory.js'; // ▼▼▼ [修正点] 追加 ▼▼▼
-
+import { initPrecomp } from './precomp.js';
+import { initOrders } from './orders.js';
 
 // (Global UI Elements and helper functions are unchanged)
 window.showLoading = () => document.getElementById('loading-overlay').classList.remove('hidden');
@@ -3948,13 +4453,19 @@ window.showNotification = (message, type = 'success') => {
     setTimeout(() => { notificationBox.classList.remove('show'); }, 3000);
 };
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => { // ★ asyncキーワードを追加
+    
+    // ★ 画面の初期化が始まる前に、マスターデータを一括で読み込みます
+    await loadMasterData();
     // (DOM Elements are unchanged)
     const allViews = document.querySelectorAll('main > div[id$="-view"]');
     const inOutBtn = document.getElementById('inOutViewBtn');
     const datBtn = document.getElementById('datBtn');
     const usageBtn = document.getElementById('usageBtn');
     const inventoryBtn = document.getElementById('inventoryBtn');
+        // ▼▼▼ [修正点] この行に manualInventoryBtn を追加 ▼▼▼
+    const manualInventoryBtn = document.getElementById('manualInventoryBtn');
+    // ▲▲▲ 修正ここまで ▲▲▲
     const aggregationBtn = document.getElementById('aggregationBtn');
     const masterEditBtn = document.getElementById('masterEditViewBtn');
     const settingsBtn = document.getElementById('settingsBtn'); // ▼▼▼ [修正点] 追加 ▼▼▼
@@ -3966,6 +4477,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const aggregationOutputContainer = document.getElementById('aggregation-output-container');
     const deadStockBtn = document.getElementById('deadStockBtn'); // ▼▼▼ [修正点] 追加 ▼▼▼
     const deadstockOutputContainer = document.getElementById('deadstock-output-container'); // ▼▼▼ [修正点] 追加 ▼▼▼
+    const precompBtn = document.getElementById('precompBtn');
+    const orderBtn = document.getElementById('orderBtn'); // ▼▼▼ この行を追加 ▼▼▼
 
     // --- Initialize all modules ---
     initInOut();
@@ -3979,8 +4492,10 @@ document.addEventListener('DOMContentLoaded', () => {
     initModal(); // ▼▼▼ [修正点] モーダルをここで一度だけ初期化 ▼▼▼
     initDeadStock(); // ▼▼▼ [修正点] この一行が抜けていました ▼▼▼
     initSettings(); // ▼▼▼ [修正点] 追加 ▼▼▼
-    initMedrec(); // ▼▼▼ [修正点] 追加 ▼▼▼
+    //initMedrec(); // ▼▼▼ [修正点] 追加 ▼▼▼
     initManualInventory(); // ▼▼▼ [修正点] 追加 ▼▼▼
+    initPrecomp();
+    initOrders(); // ▼▼▼ この行を追加 ▼▼▼
 
     // (View Switching Logic and Event Listeners are unchanged)
     function showView(viewIdToShow) {
@@ -4028,6 +4543,9 @@ document.addEventListener('DOMContentLoaded', () => {
         showView('settings-view');
         onSettingsViewShow(); // 画面表示時に設定を読み込む
     });
+
+    precompBtn.addEventListener('click', () => showView('precomp-view'));
+    orderBtn.addEventListener('click', () => showView('order-view')); // ▼▼▼ この行を追加 ▼▼▼
     // ▲▲▲ 修正ここまで ▲▲▲
     // --- Initial State ---
     showView('in-out-view');
@@ -4116,10 +4634,31 @@ export function initBackupButtons() {
 }
 
 ----- C:\Dev\WASABI\static\js\common_table.js -----
+// C:\Dev\WASABI\static\js\common_table.js
+
+import { clientMap, wholesalerMap } from './master_data.js'; // ★ 一元管理しているマップをインポート
+
 export const transactionTypeMap = {
     0: "棚卸", 1: "納品", 2: "返品", 3: "処方", 4: "棚卸増",
     5: "棚卸減", 11: "入庫", 12: "出庫", 30: "月末",
 };
+
+/**
+ * 取引レコードを受け取り、状況に応じて得意先名または卸業者名を返す関数
+ * @param {object} rec - 取引レコード
+ * @returns {string} 得意先名、卸業者名、またはコード
+ */
+function getClientOrWholesalerName(rec) {
+    if (!rec.clientCode) return '';
+
+    // flagが1(納品)または2(返品)の場合、clientCodeは卸業者コードを指す
+    if (rec.flag === 1 || rec.flag === 2) {
+        return wholesalerMap.get(rec.clientCode) || rec.clientCode;
+    }
+
+    // それ以外の場合、clientCodeは得意先コードを指す
+    return clientMap.get(rec.clientCode) || rec.clientCode;
+}
 
 // teble.htmlのレイアウトを正確に再現する関数
 export function createUploadTableHTML(tableId) {
@@ -4169,16 +4708,18 @@ export function renderUploadTableRows(tableId, records) {
         <td class="right">${rec.datQuantity?.toFixed(2) || ""}</td>
         <td class="right">${rec.yjQuantity?.toFixed(2) || ""}</td>
         <td class="right">${rec.yjPackUnitQty || ""}</td>
-        <td>${rec.yjUnitName || ""}</td>
+   
+         <td>${rec.yjUnitName || ""}</td>
         <td class="right">${rec.unitPrice?.toFixed(4) || ""}</td>
         <td class="right">${rec.taxAmount?.toFixed(2) || ""}</td>
         <td>${rec.expiryDate || ""}</td>
-        <td class="left">${rec.clientCode || ""}</td>
+        <td class="left">${getClientOrWholesalerName(rec)}</td>
         <td class="right">${rec.lineNumber || ""}</td>
       </tr>
       <tr>
         <td>${transactionTypeMap[rec.flag] ?? ""}</td>
         <td class="yj-jan-code">${rec.janCode || ""}</td>
+      
         <td class="left">${rec.packageSpec || ""}</td>
         <td class="left">${rec.makerName || ""}</td>
         <td class="left">${rec.usageClassification || ""}</td>
@@ -4195,7 +4736,6 @@ export function renderUploadTableRows(tableId, records) {
   });
   tbody.innerHTML = html;
 }
-
 // (setupDateDropdown and setupClientDropdown functions are unchanged)
 export function setupDateDropdown(inputEl) {
   if (!inputEl) return;
@@ -4358,12 +4898,17 @@ export function initDeadStock() {
     startDateInput = document.getElementById('ds-startDate');
     endDateInput = document.getElementById('ds-endDate');
     excludeZeroStockCheckbox = document.getElementById('ds-exclude-zero-stock');
+    const printBtn = document.getElementById('print-deadstock-btn');
 
     const today = new Date();
     const threeMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 3, today.getDate());
     endDateInput.value = today.toISOString().slice(0, 10);
     startDateInput.value = threeMonthsAgo.toISOString().slice(0, 10);
-    
+
+    if (printBtn) {
+        printBtn.addEventListener('click', () => window.print());
+    }
+
     view.addEventListener('click', async (e) => {
         if (e.target.id === 'run-dead-stock-btn') {
             window.showLoading();
@@ -4371,18 +4916,21 @@ export function initDeadStock() {
                 startDate: startDateInput.value.replace(/-/g, ''),
                 endDate: endDateInput.value.replace(/-/g, ''),
                 excludeZeroStock: excludeZeroStockCheckbox.checked,
+   
             });
 
             try {
                 const res = await fetch(`/api/deadstock/list?${params.toString()}`);
                 if (!res.ok) {
                     const errText = await res.text();
+                
                     throw new Error(errText || 'Failed to generate dead stock list');
                 }
                 const data = await res.json();
                 renderDeadStockList(data);
             } catch (err) {
-                outputContainer.innerHTML = `<p style="color:red;">エラー: ${err.message}</p>`;
+                outputContainer.innerHTML = `<p style="color:red;">エラー: 
+${err.message}</p>`;
             } finally {
                 window.hideLoading();
             }
@@ -4411,26 +4959,27 @@ export function initDeadStock() {
 
             const header = container.previousElementSibling;
             const pkgInfo = header.querySelector('span:first-child').textContent.replace('包装: ', '').split('|');
-            
             rows.forEach(row => {
                 payload.push({
                     productCode: productCode,
                     yjCode: yjCode, // 正しいYJコードをセット
                     packageForm: pkgInfo[0],
-                    janPackInnerQty: parseFloat(pkgInfo[1]) || 0,
+                 
+                   janPackInnerQty: parseFloat(pkgInfo[1]) || 0,
                     yjUnitName: pkgInfo[2],
                     stockQuantityJan: parseFloat(row.querySelector('.ds-stock-quantity').value) || 0,
                     expiryDate: row.querySelector('.ds-expiry-date').value,
                     lotNumber: row.querySelector('.ds-lot-number').value,
+        
                 });
             });
-
             window.showLoading();
             try {
                 const res = await fetch('/api/deadstock/save', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload),
+           
                 });
                 const resData = await res.json();
                 if (!res.ok) throw new Error(resData.message || '保存に失敗しました。');
@@ -4640,197 +5189,207 @@ export function initDetailsTable() {
 }
 
 ----- C:\Dev\WASABI\static\js\inout_header.js -----
+// C:\Dev\WASABI\static\js\inout_header.js
+
 import { setupDateDropdown, setupClientDropdown } from './common_table.js';
+// ▼▼▼ [修正点] refreshClientMap をインポート ▼▼▼
+import { refreshClientMap } from './master_data.js';
+// ▲▲▲ 修正ここまで ▲▲▲
 
 const NEW_ENTRY_VALUE = '--new--';
 let clientSelect, receiptSelect, saveBtn, deleteBtn, headerDateInput, headerTypeSelect;
 let newClientName = null;
 let currentLoadedReceipt = null;
 
+// (initializeClientDropdown, resetHeader 関数は変更ありません)
 async function initializeClientDropdown() {
-    clientSelect.innerHTML = `<option value="">選択してください</option>`;
-    await setupClientDropdown(clientSelect);
-    
-    const newOption = document.createElement('option');
-    newOption.value = NEW_ENTRY_VALUE;
-    newOption.textContent = '--- 新規作成 ---';
-    clientSelect.appendChild(newOption);
+	clientSelect.innerHTML = `<option value="">選択してください</option>`;
+	await setupClientDropdown(clientSelect);
+	
+	const newOption = document.createElement('option');
+	newOption.value = NEW_ENTRY_VALUE;
+	newOption.textContent = '--- 新規作成 ---';
+	clientSelect.appendChild(newOption);
 }
 
 export function resetHeader() {
-    if (!clientSelect || !headerDateInput) return;
-    setupDateDropdown(headerDateInput);
-    initializeClientDropdown(); // Dropdown population is now centralized here
-    
-    receiptSelect.innerHTML = `
-        <option value="">日付を選択してください</option>
-        <option value="${NEW_ENTRY_VALUE}">--- 新規作成 ---</option>
-    `;
-    headerTypeSelect.value = "入庫";
-    newClientName = null;
-    currentLoadedReceipt = null;
-    deleteBtn.disabled = true;
-    headerDateInput.dispatchEvent(new Event('change'));
+	if (!clientSelect || !headerDateInput) return;
+	setupDateDropdown(headerDateInput);
+	initializeClientDropdown();
+	
+	receiptSelect.innerHTML = `
+		<option value="">日付を選択してください</option>
+		<option value="${NEW_ENTRY_VALUE}">--- 新規作成 ---</option>
+	`;
+	headerTypeSelect.value = "入庫";
+	newClientName = null;
+	currentLoadedReceipt = null;
+	deleteBtn.disabled = true;
+	headerDateInput.dispatchEvent(new Event('change'));
 }
 
 export async function initHeader(getDetailsData, clearDetailsTable, populateDetailsTable) {
-    clientSelect = document.getElementById('in-out-client');
-    receiptSelect = document.getElementById('in-out-receipt');
-    saveBtn = document.getElementById('saveBtn');
-    deleteBtn = document.getElementById('deleteBtn');
-    headerDateInput = document.getElementById('in-out-date');
-    headerTypeSelect = document.getElementById('in-out-type');
+	clientSelect = document.getElementById('in-out-client');
+	receiptSelect = document.getElementById('in-out-receipt');
+	saveBtn = document.getElementById('saveBtn');
+	deleteBtn = document.getElementById('deleteBtn');
+	headerDateInput = document.getElementById('in-out-date');
+	headerTypeSelect = document.getElementById('in-out-type');
 
-    if (!clientSelect || !receiptSelect || !saveBtn || !deleteBtn) return;
-    
-    // [修正点] initHeaderからはdropdownの初期化呼び出しを削除し、イベントリスナーの設定のみに限定
-    
-    // --- ONE-TIME EVENT LISTENER SETUP ---
-    headerDateInput.addEventListener('change', async () => {
-        const date = headerDateInput.value.replace(/-/g, '');
-        if (!date) return;
-        try {
-            const res = await fetch(`/api/receipts?date=${date}`);
-            if (!res.ok) throw new Error('伝票の取得に失敗');
-            const receiptNumbers = await res.json();
-            
-            receiptSelect.innerHTML = `
-                <option value="">選択してください</option>
-                <option value="${NEW_ENTRY_VALUE}">--- 新規作成 ---</option>
-            `;
-            if (receiptNumbers && receiptNumbers.length > 0) {
-                receiptNumbers.forEach(num => {
-                    const opt = document.createElement('option');
-                    opt.value = num;
-                    opt.textContent = num;
-                    receiptSelect.appendChild(opt);
-                });
-            }
-        } catch (err) { console.error(err); }
-    });
+	if (!clientSelect || !receiptSelect || !saveBtn || !deleteBtn) return;
+	
+    // (各種イベントリスナーは変更ありません)
+	headerDateInput.addEventListener('change', async () => {
+		const date = headerDateInput.value.replace(/-/g, '');
+		if (!date) return;
+		try {
+			const res = await fetch(`/api/receipts?date=${date}`);
+			if (!res.ok) throw new Error('伝票の取得に失敗');
+			const receiptNumbers = await res.json();
+			
+			receiptSelect.innerHTML = `
+				<option value="">選択してください</option>
+				<option value="${NEW_ENTRY_VALUE}">--- 新規作成 ---</option>
+			`;
+			if (receiptNumbers && receiptNumbers.length > 0) {
+				receiptNumbers.forEach(num => {
+					const opt = document.createElement('option');
+					opt.value = num;
+					opt.textContent = num;
+					receiptSelect.appendChild(opt);
+				});
+			}
+		} catch (err) { console.error(err); }
+	});
 
-    clientSelect.addEventListener('change', () => {
-        const selectedValue = clientSelect.value;
-        if (selectedValue === NEW_ENTRY_VALUE) {
-            const name = prompt('新しい得意先名を入力してください:');
-            if (name && name.trim()) {
-                newClientName = name.trim();
-                const opt = document.createElement('option');
-                opt.value = `new:${newClientName}`;
-                opt.textContent = `[新規] ${newClientName}`;
-                opt.selected = true;
-                clientSelect.appendChild(opt);
-            } else {
-                clientSelect.value = '';
-            }
-        } else if (!selectedValue.startsWith('new:')) {
-            newClientName = null;
-        }
-    });
+	clientSelect.addEventListener('change', () => {
+		const selectedValue = clientSelect.value;
+		if (selectedValue === NEW_ENTRY_VALUE) {
+			const name = prompt('新しい得意先名を入力してください:');
+			if (name && name.trim()) {
+				newClientName = name.trim();
+				const opt = document.createElement('option');
+				opt.value = `new:${newClientName}`;
+				opt.textContent = `[新規] ${newClientName}`;
+				opt.selected = true;
+				clientSelect.appendChild(opt);
+			} else {
+				clientSelect.value = '';
+			}
+		} else if (!selectedValue.startsWith('new:')) {
+			newClientName = null;
+		}
+	});
+	receiptSelect.addEventListener('change', async () => {
+		const selectedValue = receiptSelect.value;
+		deleteBtn.disabled = (selectedValue === NEW_ENTRY_VALUE || selectedValue === "");
 
-    receiptSelect.addEventListener('change', async () => {
-        const selectedValue = receiptSelect.value;
-        deleteBtn.disabled = (selectedValue === NEW_ENTRY_VALUE || selectedValue === "");
+		if (selectedValue === NEW_ENTRY_VALUE || selectedValue === "") {
+			clearDetailsTable();
+			currentLoadedReceipt = null;
+		} else {
+			window.showLoading();
+			try {
+				const res = await fetch(`/api/transaction/${selectedValue}`);
+				if (!res.ok) throw new Error('明細の読込に失敗');
+				const records = await res.json();
+				if (records && records.length > 0) {
+					currentLoadedReceipt = selectedValue;
+					clientSelect.value = records[0].clientCode;
+					headerTypeSelect.value = records[0].flag === 11 ? "入庫" : "出庫";
+					newClientName = null;
+				}
+				populateDetailsTable(records);
+			} catch (err) {
+				console.error(err);
+				window.showNotification(err.message, 'error');
+			} finally {
+				window.hideLoading();
+			}
+		}
+	});
 
-        if (selectedValue === NEW_ENTRY_VALUE || selectedValue === "") {
-            clearDetailsTable();
-            currentLoadedReceipt = null;
-        } else {
-            window.showLoading();
-            try {
-                const res = await fetch(`/api/transaction/${selectedValue}`);
-                if (!res.ok) throw new Error('明細の読込に失敗');
-                const records = await res.json();
-                if (records && records.length > 0) {
-                    currentLoadedReceipt = selectedValue;
-                    clientSelect.value = records[0].clientCode;
-                    headerTypeSelect.value = records[0].flag === 11 ? "入庫" : "出庫";
-                    newClientName = null;
-                }
-                populateDetailsTable(records);
-            } catch (err) {
-                console.error(err);
-                window.showNotification(err.message, 'error');
-            } finally {
-                window.hideLoading();
-            }
-        }
-    });
+	saveBtn.addEventListener('click', async () => {
+		let clientCode = clientSelect.value;
+		let clientNameToSave = '';
+		let isNewClient = false;
+		if (newClientName && clientCode.startsWith('new:')) {
+			clientNameToSave = newClientName;
+			isNewClient = true;
+			clientCode = '';
+		} else {
+			if (!clientCode || clientCode === NEW_ENTRY_VALUE) {
+				window.showNotification('得意先を選択または新規作成してください。', 'error');
+				return;
+			}
+		}
+		const records = getDetailsData();
+		if (records.length === 0) {
+			window.showNotification('保存する明細データがありません。', 'error');
+			return;
+		}
+		const payload = {
+			isNewClient, clientCode, clientName: clientNameToSave,
+			transactionDate: headerDateInput.value.replace(/-/g, ''),
+			transactionType: headerTypeSelect.value,
+			records: records,
+			originalReceiptNumber: currentLoadedReceipt
+		};
+		window.showLoading();
+		try {
+			const res = await fetch('/api/inout/save', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(payload),
+			});
+			const resData = await res.json();
+			if (!res.ok) {
+				throw new Error(resData.message || `保存に失敗しました (HTTP ${res.status})`);
+			}
 
-    saveBtn.addEventListener('click', async () => {
-        let clientCode = clientSelect.value;
-        let clientNameToSave = '';
-        let isNewClient = false;
-        if (newClientName && clientCode.startsWith('new:')) {
-            clientNameToSave = newClientName;
-            isNewClient = true;
-            clientCode = '';
-        } else {
-            if (!clientCode || clientCode === NEW_ENTRY_VALUE) {
-                window.showNotification('得意先を選択または新規作成してください。', 'error');
-                return;
-            }
-        }
-        const records = getDetailsData();
-        if (records.length === 0) {
-            window.showNotification('保存する明細データがありません。', 'error');
-            return;
-        }
-        const payload = {
-            isNewClient, clientCode, clientName: clientNameToSave,
-            transactionDate: headerDateInput.value.replace(/-/g, ''),
-            transactionType: headerTypeSelect.value,
-            records: records,
-            originalReceiptNumber: currentLoadedReceipt
-        };
-        window.showLoading();
-        try {
-            const res = await fetch('/api/inout/save', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-            });
-            const resData = await res.json();
-            if (!res.ok) {
-                throw new Error(resData.message || `保存に失敗しました (HTTP ${res.status})`);
-            }
-            window.showNotification(`データを保存しました。\n伝票番号: ${resData.receiptNumber}`, 'success');
-            resetHeader();
-            clearDetailsTable();
-        } catch (err) {
-            console.error(err);
-            window.showNotification(err.message, 'error');
-        } finally {
-            window.hideLoading();
-        }
-    });
+			// ▼▼▼ [修正点] 新規得意先が作成された場合、変換マップを更新する ▼▼▼
+			if (resData.newClient) {
+				await refreshClientMap();
+			}
+			// ▲▲▲ 修正ここまで ▲▲▲
 
-    deleteBtn.addEventListener('click', async () => {
-        const receiptNumber = receiptSelect.value;
-        if (!receiptNumber || receiptNumber === NEW_ENTRY_VALUE) {
-            window.showNotification("削除対象の伝票が選択されていません。", 'error');
-            return;
-        }
-        if (!confirm(`伝票番号 [${receiptNumber}] を完全に削除します。よろしいですか？`)) {
-            return;
-        }
-        window.showLoading();
-        try {
-            const res = await fetch(`/api/transaction/delete/${receiptNumber}`, { method: 'DELETE' });
-            const errData = await res.json().catch(() => null);
-            if (!res.ok) {
-                throw new Error(errData?.message || '削除に失敗しました。');
-            }
-            window.showNotification(`伝票 [${receiptNumber}] を削除しました。`, 'success');
-            resetHeader();
-            clearDetailsTable();
-        } catch(err) {
-            console.error(err);
-            window.showNotification(err.message, 'error');
-        } finally {
-            window.hideLoading();
-        }
-    });
+			window.showNotification(`データを保存しました。\n伝票番号: ${resData.receiptNumber}`, 'success');
+			resetHeader();
+			clearDetailsTable();
+		} catch (err) {
+			console.error(err);
+			window.showNotification(err.message, 'error');
+		} finally {
+			window.hideLoading();
+		}
+	});
+
+	deleteBtn.addEventListener('click', async () => {
+		const receiptNumber = receiptSelect.value;
+		if (!receiptNumber || receiptNumber === NEW_ENTRY_VALUE) {
+			window.showNotification("削除対象の伝票が選択されていません。", 'error');
+			return;
+		}
+		if (!confirm(`伝票番号 [${receiptNumber}] を完全に削除します。よろしいですか？`)) {
+			return;
+		}
+		window.showLoading();
+		try {
+			const res = await fetch(`/api/transaction/delete/${receiptNumber}`, { method: 'DELETE' });
+			const errData = await res.json().catch(() => null);
+			if (!res.ok) {
+				throw new Error(errData?.message || '削除に失敗しました。');
+			}
+			window.showNotification(`伝票 [${receiptNumber}] を削除しました。`, 'success');
+			resetHeader();
+			clearDetailsTable();
+		} catch(err) {
+			console.error(err);
+			window.showNotification(err.message, 'error');
+		} finally {
+			window.hideLoading();
+		}
+	});
 }
 
 ----- C:\Dev\WASABI\static\js\inout_modal.js -----
@@ -4839,6 +5398,7 @@ export async function initHeader(getDetailsData, clearDetailsTable, populateDeta
 let activeCallback = null;
 let activeRowElement = null;
 
+const DEFAULT_SEARCH_API = '/api/products/search';
 const modal = document.getElementById('search-modal');
 const closeModalBtn = document.getElementById('closeModalBtn');
 const searchInput = document.getElementById('product-search-input');
@@ -4861,9 +5421,10 @@ async function performSearch() {
     alert('2文字以上入力してください。');
     return;
   }
+  const searchApi = modal.dataset.searchApi || DEFAULT_SEARCH_API; // 保存したAPIエンドポイントを取得
   searchResultsBody.innerHTML = '<tr><td colspan="6" class="center">検索中...</td></tr>';
   try {
-    const res = await fetch(`/api/products/search?q=${encodeURIComponent(query)}`);
+    const res = await fetch(`${searchApi}?q=${encodeURIComponent(query)}`);
     if (!res.ok) {
         throw new Error(`サーバーエラー: ${res.status}`);
     }
@@ -4915,18 +5476,17 @@ export function initModal() {
 }
 // ▲▲▲ 修正ここまで ▲▲▲
 
-// ▼▼▼ [修正点] showModalが実行するべきコールバック関数を引数で受け取るように変更 ▼▼▼
-export function showModal(rowElement, callback) {
+export function showModal(rowElement, callback, searchApi = DEFAULT_SEARCH_API) {
   if (modal) {
     activeRowElement = rowElement;
-    activeCallback = callback; // 実行する処理をセット
+    activeCallback = callback; 
+    modal.dataset.searchApi = searchApi; // APIエンドポイントを保存
     modal.classList.remove('hidden');
     searchInput.value = '';
     searchInput.focus();
     searchResultsBody.innerHTML = '<tr><td colspan="6" class="center">製品名を入力して検索してください。</td></tr>';
   }
 }
-// ▲▲▲ 修正ここまで ▲▲▲
 
 ----- C:\Dev\WASABI\static\js\inout.js -----
 import { initHeader, resetHeader } from './inout_header.js';
@@ -5053,7 +5613,8 @@ export function initManualInventory() {
         });
 
         let html = '';
-        for (const group of Object.values(groups).sort((a,b) => a.productName.localeCompare(b.productName, 'ja'))) {
+        // 【修正点】 .sort(...) を削除し、バックエンドから送られてきた順序を維持する
+        for (const group of Object.values(groups)) {
             html += `<div class="agg-yj-header"><span>YJ: ${group.yjCode}</span><span class="product-name">${group.productName}</span></div>`;
 
             for (const pkg of Object.values(group.packages)) {
@@ -5121,129 +5682,133 @@ export function initManualInventory() {
     });
 }
 
+----- C:\Dev\WASABI\static\js\master_data.js -----
+// C:\Dev\WASABI\static\js\master_data.js
+
+export const clientMap = new Map();
+export const wholesalerMap = new Map();
+
+/**
+ * 得意先マスターをサーバーから取得し、clientMapを更新する内部関数
+ */
+async function fetchAndPopulateClients() {
+    const res = await fetch('/api/clients');
+    if (!res.ok) {
+        throw new Error('得意先マスターの取得に失敗しました。');
+    }
+    const clients = await res.json();
+    clientMap.clear(); // 古いデータをクリア
+    if (clients) { // APIからの応答がnullでないことを確認
+        clients.forEach(c => clientMap.set(c.code, c.name));
+    }
+}
+
+/**
+ * ▼▼▼ [修正点] 新しい得意先が追加された後に呼び出すための関数を新設 ▼▼▼
+ * clientMapだけを再読み込みして更新します。
+ */
+export async function refreshClientMap() {
+    try {
+        await fetchAndPopulateClients();
+        console.log('得意先マップを更新しました。');
+    } catch (error) {
+        console.error("得意先マップの更新に失敗しました:", error);
+        window.showNotification('得意先リストの更新に失敗しました。', 'error');
+    }
+}
+// ▲▲▲ 修正ここまで ▲▲▲
+
+/**
+ * アプリケーション起動時に一度だけ実行する関数
+ */
+export async function loadMasterData() {
+    try {
+        const [wholesalerRes] = await Promise.all([
+            fetchAndPopulateClients(), // 内部関数を呼び出す
+            fetch('/api/settings/wholesalers')
+        ]);
+
+        if (!wholesalerRes.ok) {
+            throw new Error('卸業者マスターの読み込みに失敗しました。');
+        }
+
+        const wholesalers = await wholesalerRes.json();
+        wholesalerMap.clear(); // 古いデータをクリア
+        if (wholesalers) { // APIからの応答がnullでないことを確認
+            wholesalers.forEach(w => wholesalerMap.set(w.code, w.name));
+        }
+        
+        console.log('得意先と卸業者のマスターデータを読み込みました。');
+
+    } catch (error) {
+        console.error("マスターデータの読み込み中にエラーが発生しました:", error);
+        window.showNotification('マスターデータの読み込みに失敗しました。', 'error');
+    }
+}
+
 ----- C:\Dev\WASABI\static\js\master_edit.js -----
-// C:\Dev\WASABI\static\js\master_edit.js
+// C:\Dev\WASABI\static\js\master_data.js
 
-import { showModal } from './inout_modal.js';
+export const clientMap = new Map();
+export const wholesalerMap = new Map();
 
-let view, tableContainer, refreshBtn, addRowBtn;
-let unitMap = {};
-
-async function fetchUnitMap(){if(Object.keys(unitMap).length>0)return;try{const res=await fetch('/api/units/map');if(!res.ok)throw new Error('単位マスタの取得に失敗');unitMap=await res.json();}catch(err){console.error(err);window.showNotification(err.message,'error');}}
-function formatPackageSpecForRow(tbody){if(!tbody)return;const getVal=(name)=>tbody.querySelector(`[name="${name}"]`)?.value||'';const packageForm=getVal('packageForm');const yjPackUnitQty=getVal('yjPackUnitQty');const yjUnitName=getVal('yjUnitName');const janPackInnerQty=getVal('janPackInnerQty');const janPackUnitQty=getVal('janPackUnitQty');const janUnitCode=getVal('janUnitCode');let formattedSpec=`${packageForm} ${yjPackUnitQty}${yjUnitName}`;if(parseFloat(janPackInnerQty)>0&&parseFloat(janPackUnitQty)>0){let janUnitName=(janUnitCode==='0'||janUnitCode==='')?'':(unitMap[janUnitCode]||'');formattedSpec+=` (${janPackInnerQty}${yjUnitName}×${janPackUnitQty}${janUnitName})`;}
-const targetCell=tbody.querySelector('.formatted-spec-cell');if(targetCell)targetCell.textContent=formattedSpec;}
-function createMasterRowHTML(master={}){const isNew=!master.productCode;const rowId=master.productCode||`new-${Date.now()}`;const topRowFields=[{key:'productCode',ph:'製品コード(JAN)',readonly:!isNew},{key:'yjCode',ph:'YJコード'},{key:'productName',ph:'製品名'},{key:'kanaName',ph:'カナ名'},{key:'makerName',ph:'メーカー名'},{key:'usageClassification',ph:'剤型(JC013)'},{key:'nhiPrice',ph:'薬価',type:'number',step:'0.0001',value:master.nhiPrice||0},];const flags=[{key:'flagPoison',ph:'毒',opts:[0,1]},{key:'flagDeleterious',ph:'劇',opts:[0,1]},{key:'flagNarcotic',ph:'麻',opts:[0,1]},{key:'flagPsychotropic',ph:'向',opts:[0,1,2,3]},{key:'flagStimulant',ph:'覚',opts:[0,1]},{key:'flagStimulantRaw',ph:'覚原',opts:[0,1]},];const bottomRowFields=[{key:'packageForm',ph:'包装(JC037)'},{key:'yjUnitName',ph:'YJ単位'},{key:'yjPackUnitQty',ph:'YJ包装数量',type:'number',value:master.yjPackUnitQty||0},{key:'janPackInnerQty',ph:'内包装数量',type:'number',value:master.janPackInnerQty||0},{key:'janUnitCode',ph:'JAN単位',type:'select',value:master.janUnitCode||0},{key:'janPackUnitQty',ph:'JAN包装数量',type:'number',value:master.janPackUnitQty||0},];let topRowCellsHTML=topRowFields.map(f=>`<td><input type="${f.type||'text'}" name="${f.key}" value="${f.value||master[f.key]||''}" placeholder="${f.ph}" ${f.readonly?'readonly':''} ${f.step?`step="${f.step}"`:''}></td>`).join('');topRowCellsHTML+=flags.map(f=>{const options=f.opts.map(o=>`<option value="${o}" ${o==(master[f.key]||0)?'selected':''}>${o}</option>`).join('');return`<td><select name="${f.key}">${options}</select></td>`;}).join('');topRowCellsHTML+=`<td><button class="save-master-btn btn">保存</button></td>`;let bottomRowCellsHTML=bottomRowFields.map(f=>{if(f.type==='select'){let options=`<option value="0">YJ単位と同じ</option>`;for(const[code,name]of Object.entries(unitMap)){if(code!=='0')options+=`<option value="${code}" ${code==f.value?'selected':''}>${name}</option>`;}
-return`<td><select name="${f.key}">${options}</select></td>`;}
-return`<td><input type="${f.type||'text'}" name="${f.key}" value="${f.value||master[f.key]||''}" placeholder="${f.ph}"></td>`;}).join('');bottomRowCellsHTML+=`<td class="formatted-spec-cell" colspan="7"></td><td><button class="quote-jcshms-btn btn">引用</button></td>`;return`<tbody data-record-id="${rowId}"><tr class="data-row-top">${topRowCellsHTML}</tr><tr class="data-row-bottom">${bottomRowCellsHTML}</tr></tbody>`;}
-async function loadAndRenderMasters(){tableContainer.innerHTML=`<table><tbody><tr><td>読み込み中...</td></tr></tbody></table>`;try{const res=await fetch('/api/masters/editable');if(!res.ok)throw new Error('マスターの読み込みに失敗しました。');const masters=await res.json();const tableHeader=`<thead>
-            <tr><th>製品コード(JAN)</th><th>YJコード</th><th>製品名</th><th>カナ名</th><th>メーカー名</th><th>剤型</th><th>薬価</th><th>毒</th><th>劇</th><th>麻</th><th>向</th><th>覚</th><th>覚原</th><th>操作</th></tr>
-            <tr><th>包装</th><th>YJ単位</th><th>YJ包装数量</th><th>内包装数量</th><th>JAN単位</th><th>JAN包装数量</th><th colspan="7">組み立て包装</th><th>操作</th></tr>
-        </thead>`;const tableContent=masters.map(createMasterRowHTML).join('');tableContainer.innerHTML=`<table class="data-table">${tableHeader}${tableContent}</table>`;tableContainer.querySelectorAll('tbody[data-record-id]').forEach(formatPackageSpecForRow);}catch(err){tableContainer.innerHTML=`<p style="color:red;">${err.message}</p>`;}}
-
-function populateFormWithJcshms(selectedProduct, tbody) {
-    if (!tbody) return;
-    const setVal = (name, value) => {
-        const el = tbody.querySelector(`[name="${name}"]`);
-        if (el) el.value = value !== undefined ? value : '';
-    };
-
-    const productCodeInput = tbody.querySelector('[name="productCode"]');
-    if (productCodeInput && !productCodeInput.readOnly) {
-        productCodeInput.value = selectedProduct.productCode || '';
-    }
-    
-    setVal('yjCode', selectedProduct.yjCode); setVal('productName', selectedProduct.productName);
-    setVal('kanaName', selectedProduct.kanaName); setVal('makerName', selectedProduct.makerName);
-    setVal('usageClassification', selectedProduct.usageClassification); setVal('packageForm', selectedProduct.packageForm);
-    setVal('nhiPrice', selectedProduct.nhiPrice); setVal('flagPoison', selectedProduct.flagPoison);
-    setVal('flagDeleterious', selectedProduct.flagDeleterious); setVal('flagNarcotic', selectedProduct.flagNarcotic);
-    setVal('flagPsychotropic', selectedProduct.flagPsychotropic); setVal('flagStimulant', selectedProduct.flagStimulant);
-    setVal('flagStimulantRaw', selectedProduct.flagStimulantRaw); setVal('yjUnitName', selectedProduct.yjUnitName);
-    setVal('yjPackUnitQty', selectedProduct.yjPackUnitQty); setVal('janPackInnerQty', selectedProduct.janPackInnerQty);
-    setVal('janUnitCode', selectedProduct.janUnitCode); setVal('janPackUnitQty', selectedProduct.janPackUnitQty);
-    
-    formatPackageSpecForRow(tbody);
+/**
+ * 得意先マスターをサーバーから取得し、clientMapを更新する内部関数
+ */
+async function fetchAndPopulateClients() {
+	const res = await fetch('/api/clients');
+	if (!res.ok) {
+		throw new Error('得意先マスターの取得に失敗しました。');
+	}
+	const clients = await res.json();
+	clientMap.clear(); // 古いデータをクリア
+	if (clients) { // APIからの応答がnullでないことを確認
+		clients.forEach(c => clientMap.set(c.code, c.name));
+	}
 }
 
-export async function initMasterEdit() {
-    view = document.getElementById('master-edit-view');
-    if (!view) return;
-
-    tableContainer = document.getElementById('master-edit-container');
-    refreshBtn = document.getElementById('refreshMastersBtn');
-    addRowBtn = document.getElementById('addMasterRowBtn');
-
-    await fetchUnitMap();
-    // ▼▼▼ [修正点] initModalの呼び出しを削除 ▼▼▼
-    // initModal(populateFormWithJcshms);
-    // ▲▲▲ 修正ここまで ▲▲▲
-
-    refreshBtn.addEventListener('click', loadAndRenderMasters);
-    addRowBtn.addEventListener('click', () => {
-        const table = tableContainer.querySelector('table');
-        if (table) table.insertAdjacentHTML('beforeend', createMasterRowHTML());
-    });
-
-    tableContainer.addEventListener('input', (e) => {
-        const tbody = e.target.closest('tbody[data-record-id]');
-        if (tbody) formatPackageSpecForRow(tbody);
-    });
-
-    tableContainer.addEventListener('click', async (e) => {
-        const target = e.target;
-        const tbody = target.closest('tbody[data-record-id]');
-        if (!tbody) return;
-
-        if (target.classList.contains('save-master-btn')) {
-            const data = {};
-            tbody.querySelectorAll('input, select').forEach(el => {
-                const name = el.name;
-                const value = el.value;
-                if (el.tagName === 'SELECT' || el.type === 'number') {
-                    data[name] = parseFloat(value) || 0;
-                } else {
-                    data[name] = value;
-                }
-            });
-            
-            data.packageSpec = data.packageForm;
-            data.origin = "MANUAL"; data.purchasePrice = 0; data.supplierWholesale = '';
-
-            if (!data.productCode) {
-                window.showNotification('製品コードは必須です。', 'error');
-                return;
-            }
-            
-            window.showLoading();
-            try {
-                const res = await fetch('/api/master/update', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data),
-                });
-                const resData = await res.json();
-                if (!res.ok) throw new Error(resData.message || '保存に失敗しました。');
-                
-                window.showNotification(resData.message, 'success');
-                loadAndRenderMasters();
-            } catch (err) {
-                window.showNotification(err.message, 'error');
-            } finally {
-                window.hideLoading();
-            }
-        }
-        // ▼▼▼ [修正点] モーダル呼び出し時に、実行したい処理（コールバック）を直接渡す ▼▼▼
-        if (target.classList.contains('quote-jcshms-btn')) {
-            showModal(tbody, populateFormWithJcshms);
-        }
-        // ▲▲▲ 修正ここまで ▲▲▲
-    });
+/**
+ * 新しい得意先が追加された後に呼び出すための関数を新設
+ * clientMapだけを再読み込みして更新します。
+ */
+export async function refreshClientMap() {
+	try {
+		await fetchAndPopulateClients();
+		console.log('得意先マップを更新しました。');
+	} catch (error) {
+		console.error("得意先マップの更新に失敗しました:", error);
+		window.showNotification('得意先リストの更新に失敗しました。', 'error');
+	}
 }
 
-export function resetMasterEditView() {
-    if (tableContainer) {
-        loadAndRenderMasters();
-    }
+/**
+ * アプリケーション起動時に一度だけ実行する関数
+ */
+export async function loadMasterData() {
+	try {
+		// ▼▼▼ [修正点] 先頭にカンマを追加して、1つ目の結果を無視する ▼▼▼
+		const [, wholesalerRes] = await Promise.all([
+		// ▲▲▲ 修正ここまで ▲▲▲
+			fetchAndPopulateClients(), // 内部関数を呼び出す
+			fetch('/api/settings/wholesalers')
+		]);
+
+		if (!wholesalerRes.ok) {
+			throw new Error('卸業者マスターの読み込みに失敗しました。');
+		}
+
+		const wholesalers = await wholesalerRes.json();
+		wholesalerMap.clear(); // 古いデータをクリア
+		if (wholesalers) { // APIからの応答がnullでないことを確認
+			wholesalers.forEach(w => wholesalerMap.set(w.code, w.name));
+		}
+		
+		console.log('得意先と卸業者のマスターデータを読み込みました。');
+
+	} catch (error) {
+		console.error("マスターデータの読み込み中にエラーが発生しました:", error);
+		window.showNotification('マスターデータの読み込みに失敗しました。', 'error');
+	}
 }
 
 ----- C:\Dev\WASABI\static\js\medrec.js -----
@@ -5282,6 +5847,380 @@ export function initMedrec() {
     });
 }
 
+----- C:\Dev\WASABI\static\js\orders.js -----
+function formatBalance(balance) {
+    if (typeof balance === 'number') {
+        return balance.toFixed(2);
+    }
+    return balance;
+}
+
+// ★★★ この関数がメインの修正箇所です ★★★
+function renderOrderCandidates(data, container, wholesalers) {
+    if (!data || data.length === 0) {
+        container.innerHTML = "<p>発注が必要な品目はありませんでした。</p>";
+        return;
+    }
+
+    // 卸業者リストからプルダウンの <option> タグを事前に生成
+    const wholesalerOptionsHtml = wholesalers.map(w => `<option value="${w.code}">${w.name}</option>`).join('');
+
+    let html = '';
+    data.forEach(yjGroup => {
+        const yjShortfall = yjGroup.totalReorderPoint - (yjGroup.endingBalance || 0);
+
+        html += `
+            <div class="agg-yj-header" style="background-color: #ff0015ff;">
+                <span>YJ: ${yjGroup.yjCode}</span>
+                <span class="product-name">${yjGroup.productName}</span>
+                <span class="balance-info">
+                    在庫: ${formatBalance(yjGroup.endingBalance)} | 
+                    発注点: ${formatBalance(yjGroup.totalReorderPoint)} | 
+                    不足数: ${formatBalance(yjShortfall)}
+                </span>
+            </div>
+            <table class="data-table" style="margin-bottom: 20px;">
+                <thead>
+                    <tr>
+                        <th style="width: 25%;">製品名（包装）</th>
+                        <th style="width: 15%;">メーカー</th>
+                        <th style="width: 15%;">包装仕様</th>
+                        <th style="width: 20%;">卸業者</th>
+                        <th style="width: 10%;">発注単位</th>
+                        <th style="width: 5%;">発注数</th>
+                        <th style="width: 10%;">操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+
+        yjGroup.packageLedgers.forEach(pkg => {
+            if (pkg.masters && pkg.masters.length > 0) {
+                pkg.masters.forEach(master => {
+                    const pkgShortfall = pkg.reorderPoint - (pkg.endingBalance || 0);
+                    if (pkgShortfall > 0) {
+                        const recommendedOrder = master.yjPackUnitQty > 0 ? Math.ceil(pkgShortfall / master.yjPackUnitQty) : 0;
+                        
+                        // 各行のプルダウンを生成
+                        let rowWholesalerOptions = `<option value="">--- 選択 ---</option>` + wholesalerOptionsHtml;
+                        // デフォルト卸が設定されていれば、それを選択状態にする
+                        if (master.supplierWholesale) {
+                            rowWholesalerOptions = rowWholesalerOptions.replace(
+                                `value="${master.supplierWholesale}"`, 
+                                `value="${master.supplierWholesale}" selected`
+                            );
+                        }
+                        
+                        html += `
+                            <tr data-jan-code="${master.productCode}">
+                                <td class="left">${master.productName}</td>
+                                <td class="left">${master.makerName || ''}</td>
+                                <td class="left">${master.packageSpec}</td>
+                                <td><select class="wholesaler-select" style="width: 100%;">${rowWholesalerOptions}</select></td>
+                                <td>${master.yjPackUnitQty} ${master.yjUnitName}</td>
+                                <td><input type="number" value="${recommendedOrder}" class="order-quantity-input" style="width: 80px;"></td>
+                                <td><button class="remove-order-item-btn btn">除外</button></td>
+                            </tr>
+                        `;
+                    }
+                });
+            }
+        });
+        html += `</tbody></table>`;
+    });
+    container.innerHTML = html;
+}
+
+export function initOrders() {
+    const view = document.getElementById('order-view');
+    if (!view) return;
+
+    const runBtn = document.getElementById('generate-order-candidates-btn');
+    const outputContainer = document.getElementById('order-candidates-output');
+    const startDateInput = document.getElementById('order-startDate');
+    const endDateInput = document.getElementById('order-endDate');
+    const kanaNameInput = document.getElementById('order-kanaName');
+    const dosageFormInput = document.getElementById('order-dosageForm');
+    const coefficientInput = document.getElementById('order-reorder-coefficient');
+    const createCsvBtn = document.getElementById('createOrderCsvBtn');
+
+    const today = new Date();
+    const threeMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 3, today.getDate());
+    endDateInput.value = today.toISOString().slice(0, 10);
+    startDateInput.value = threeMonthsAgo.toISOString().slice(0, 10);
+
+    runBtn.addEventListener('click', async () => {
+        window.showLoading();
+        const params = new URLSearchParams({
+            startDate: startDateInput.value.replace(/-/g, ''),
+            endDate: endDateInput.value.replace(/-/g, ''),
+            kanaName: kanaNameInput.value,
+            dosageForm: dosageFormInput.value,
+            coefficient: coefficientInput.value,
+        });
+
+        try {
+            const res = await fetch(`/api/orders/candidates?${params.toString()}`);
+            if (!res.ok) {
+                const errText = await res.text();
+                throw new Error(errText || 'List generation failed');
+            }
+            const data = await res.json();
+            
+            // 卸業者リストを引数で渡すように変更
+            renderOrderCandidates(data.candidates, outputContainer, data.wholesalers || []);
+
+        } catch (err) {
+            outputContainer.innerHTML = `<p style="color:red;">エラー: ${err.message}</p>`;
+        } finally {
+            window.hideLoading();
+        }
+    });
+    
+    // ★★★ CSV作成ロジックを修正 ★★★
+    createCsvBtn.addEventListener('click', () => {
+        const rows = outputContainer.querySelectorAll('tbody tr');
+        if (rows.length === 0) {
+            window.showNotification('発注する品目がありません。', 'error');
+            return;
+        }
+
+        let csvContent = "";
+        let hasItemsToOrder = false;
+        rows.forEach(row => {
+            const quantity = row.querySelector('.order-quantity-input').value;
+            const wholesalerCode = row.querySelector('.wholesaler-select').value;
+            
+            if (parseInt(quantity, 10) > 0) {
+                if (!wholesalerCode) {
+                    // 卸が未選択の行はスキップ（もしくはエラー表示）
+                    return; 
+                }
+                hasItemsToOrder = true;
+                const janCode = row.dataset.janCode;
+                const productName = row.cells[0].textContent;
+                
+                // CSVフォーマット: JAN, 製品名, 発注数, 卸コード
+                const csvRow = [janCode, `"${productName}"`, quantity, wholesalerCode].join(',');
+                csvContent += csvRow + "\r\n";
+            }
+        });
+
+        if (!hasItemsToOrder) {
+            window.showNotification('発注数が1以上で、卸業者が選択されている品目がありません。', 'error');
+            return;
+        }
+
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement("a");
+        const url = URL.createObjectURL(blob);
+        const now = new Date();
+        const timestamp = `${now.getFullYear()}${(now.getMonth()+1).toString().padStart(2, '0')}${now.getDate().toString().padStart(2, '0')}_${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}${now.getSeconds().toString().padStart(2, '0')}`;
+        const fileName = `発注書_${timestamp}.csv`;
+
+        link.setAttribute("href", url);
+        link.setAttribute("download", fileName);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    });
+
+    outputContainer.addEventListener('click', (e) => {
+        if (e.target.classList.contains('remove-order-item-btn')) {
+            const row = e.target.closest('tr');
+            const tbody = row.closest('tbody');
+            row.remove();
+            if (tbody.children.length === 0) {
+                const header = tbody.closest('table').previousElementSibling;
+                header.remove();
+                tbody.closest('table').remove();
+            }
+        }
+    });
+}
+
+----- C:\Dev\WASABI\static\js\precomp.js -----
+import { showModal } from './inout_modal.js';
+
+let view, patientNumberInput, saveBtn, addRowBtn, tableBody, loadBtn, clearBtn;
+
+function createRowHTML(rec = {}) {
+    const isNew = !rec.id;
+    const rowId = isNew ? `new-${Date.now()}` : rec.id;
+    const janQuantity = isNew ? 1 : ((rec.janPackInnerQty > 0) ? (rec.quantity / rec.janPackInnerQty) : 0);
+    
+    const productData = isNew ? {} : {
+        productCode: rec.productCode,
+        productName: rec.productName,
+        yjUnitName: rec.yjUnitName,
+    };
+
+    return `
+        <tr data-row-id="${rowId}" data-product='${JSON.stringify(productData)}'>
+            <td class="product-name-cell" style="cursor: pointer; text-decoration: underline; color: blue;">${rec.productName || '製品を選択'}</td>
+            <td class="display-jan-code">${rec.productCode || ''}</td>
+            <td class="display-yj-unit-name">${rec.yjUnitName || ''}</td>
+            <td><input type="number" name="janQuantity" value="${janQuantity}" step="any" style="width: 100px;"></td>
+            <td><button class="delete-row-btn btn">×</button></td>
+        </tr>
+    `;
+}
+
+function renderPrecompRows(records = []) {
+    if (records.length === 0) {
+        tableBody.innerHTML = '<tr class="no-data-row"><td colspan="5">データがありません。「行追加」してください。</td></tr>';
+        return;
+    }
+    tableBody.innerHTML = records.map(rec => createRowHTML(rec)).join('');
+}
+
+function getDetailsData() {
+    const records = [];
+    const rows = tableBody.querySelectorAll('tr[data-row-id]');
+    rows.forEach(row => {
+        const productDataString = row.dataset.product;
+        if (!productDataString || productDataString === '{}') return;
+        
+        const janQuantity = parseFloat(row.querySelector('input[name="janQuantity"]').value) || 0;
+        if (janQuantity > 0) {
+            records.push({
+                productCode: JSON.parse(productDataString).productCode,
+                janQuantity: janQuantity,
+            });
+        }
+    });
+    return records;
+}
+
+export function initPrecomp() {
+    view = document.getElementById('precomp-view');
+    if (!view) return;
+
+    patientNumberInput = document.getElementById('precomp-patient-number');
+    saveBtn = document.getElementById('precomp-save-btn');
+    addRowBtn = document.getElementById('precomp-add-row-btn');
+    tableBody = document.querySelector('#precomp-details-table tbody');
+    loadBtn = document.getElementById('precomp-load-btn');
+    clearBtn = document.getElementById('precomp-clear-btn');
+
+    addRowBtn.addEventListener('click', () => {
+        if (tableBody.querySelector('.no-data-row')) {
+            tableBody.innerHTML = '';
+        }
+        tableBody.insertAdjacentHTML('beforeend', createRowHTML());
+    });
+
+    loadBtn.addEventListener('click', async () => {
+        const patientNumber = patientNumberInput.value.trim();
+        if (!patientNumber) {
+            window.showNotification('患者番号を入力してください。', 'error');
+            return;
+        }
+        window.showLoading();
+        try {
+            const res = await fetch(`/api/precomp/load?patientNumber=${encodeURIComponent(patientNumber)}`);
+            if (!res.ok) throw new Error('データの呼び出しに失敗しました。');
+            const records = await res.json();
+            renderPrecompRows(records);
+        } catch (err) {
+            window.showNotification(err.message, 'error');
+            tableBody.innerHTML = '<tr class="no-data-row"><td colspan="5">呼び出しに失敗しました。</td></tr>';
+        } finally {
+            window.hideLoading();
+        }
+    });
+
+    clearBtn.addEventListener('click', async () => {
+        const patientNumber = patientNumberInput.value.trim();
+        if (!patientNumber) {
+            window.showNotification('中断する患者番号を入力してください。', 'error');
+            return;
+        }
+        if (!confirm(`患者番号: ${patientNumber} の予製データをすべて削除（中断）します。本当によろしいですか？`)) {
+            return;
+        }
+        window.showLoading();
+        try {
+            const res = await fetch(`/api/precomp/clear?patientNumber=${encodeURIComponent(patientNumber)}`, {
+                method: 'DELETE',
+            });
+            const resData = await res.json();
+            if (!res.ok) throw new Error(resData.message || '中断に失敗しました。');
+            window.showNotification(resData.message, 'success');
+            patientNumberInput.value = '';
+            renderPrecompRows([]);
+        } catch (err) {
+            window.showNotification(err.message, 'error');
+        } finally {
+            window.hideLoading();
+        }
+    });
+
+    saveBtn.addEventListener('click', async () => {
+        const patientNumber = patientNumberInput.value.trim();
+        if (!patientNumber) {
+            window.showNotification('患者番号を入力してください。', 'error');
+            return;
+        }
+
+        const records = getDetailsData();
+        if (records.length === 0) {
+            window.showNotification('保存する明細がありません。', 'error');
+            return;
+        }
+
+        if (!confirm(`患者番号: ${patientNumber} の予製データを保存します。よろしいですか？`)) {
+            return;
+        }
+
+        const payload = { patientNumber, records };
+        window.showLoading();
+        try {
+            const res = await fetch('/api/precomp/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const resData = await res.json();
+            if (!res.ok) throw new Error(resData.message || '保存に失敗しました。');
+            
+            window.showNotification(resData.message, 'success');
+            patientNumberInput.value = '';
+            renderPrecompRows([]);
+        } catch (err) {
+            window.showNotification(`エラー: ${err.message}`, 'error');
+        } finally {
+            window.hideLoading();
+        }
+    });
+
+    tableBody.addEventListener('click', (e) => {
+        if (e.target.classList.contains('delete-row-btn')) {
+            e.target.closest('tr').remove();
+            if (tableBody.children.length === 0) {
+                 renderPrecompRows([]);
+            }
+        }
+
+        if (e.target.classList.contains('product-name-cell')) {
+            const activeRow = e.target.closest('tr');
+            showModal(activeRow, (selectedProduct, targetRow) => {
+                const productData = {
+                    productCode: selectedProduct.productCode,
+                    productName: selectedProduct.productName,
+                    yjUnitName: selectedProduct.yjUnitName,
+                };
+                targetRow.dataset.product = JSON.stringify(productData);
+                targetRow.querySelector('.product-name-cell').textContent = selectedProduct.productName;
+                targetRow.querySelector('.display-jan-code').textContent = selectedProduct.productCode;
+                targetRow.querySelector('.display-yj-unit-name').textContent = selectedProduct.yjUnitName;
+                targetRow.querySelector('input[name="janQuantity"]').focus();
+            }, '/api/masters/search_all');
+        }
+    });
+}
+
 ----- C:\Dev\WASABI\static\js\reprocess.js -----
 export function initReprocessButton() {
     const reprocessBtn = document.getElementById('reprocessBtn');
@@ -5313,6 +6252,7 @@ export function initReprocessButton() {
 
 ----- C:\Dev\WASABI\static\js\settings.js -----
 let view, userIDInput, passwordInput, saveBtn;
+let wholesalerCodeInput, wholesalerNameInput, addWholesalerBtn, wholesalersTableBody;
 
 async function loadSettings() {
     try {
@@ -5322,6 +6262,7 @@ async function loadSettings() {
         userIDInput.value = settings.emednetUserId || '';
         passwordInput.value = settings.emednetPassword || '';
     } catch (err) {
+        console.error(err); // ★ エラー詳細をコンソールに出力
         window.showNotification(err.message, 'error');
     }
 }
@@ -5331,7 +6272,6 @@ async function saveSettings() {
         emednetUserId: userIDInput.value,
         emednetPassword: passwordInput.value,
     };
-
     window.showLoading();
     try {
         const res = await fetch('/api/settings/save', {
@@ -5343,6 +6283,67 @@ async function saveSettings() {
         if (!res.ok) throw new Error(resData.message || '設定の保存に失敗しました。');
         window.showNotification(resData.message, 'success');
     } catch (err) {
+        console.error(err); // ★ エラー詳細をコンソールに出力
+        window.showNotification(err.message, 'error');
+    } finally {
+        window.hideLoading();
+    }
+}
+
+// 卸業者リストを描画する関数
+function renderWholesalers(wholesalers) {
+    if (!wholesalers) {
+        wholesalersTableBody.innerHTML = '<tr><td colspan="3">登録されている卸業者がありません。</td></tr>';
+        return;
+    }
+    wholesalersTableBody.innerHTML = wholesalers.map(w => `
+        <tr data-code="${w.code}">
+            <td>${w.code}</td>
+            <td class="left">${w.name}</td>
+            <td class="center"><button class="delete-wholesaler-btn btn">削除</button></td>
+        </tr>
+    `).join('');
+}
+
+// 卸業者リストをサーバーから読み込む関数
+async function loadWholesalers() {
+    try {
+        const res = await fetch('/api/settings/wholesalers');
+        if (!res.ok) throw new Error('卸業者リストの読み込みに失敗しました。');
+        const data = await res.json();
+        renderWholesalers(data);
+    } catch (err) {
+        console.error(err); // ★ エラー詳細をコンソールに出力
+        window.showNotification(err.message, 'error');
+    }
+}
+
+// 卸業者を追加する関数
+async function addWholesaler() {
+    const code = wholesalerCodeInput.value.trim();
+    const name = wholesalerNameInput.value.trim();
+
+    if (!code || !name) {
+        window.showNotification('卸コードと卸業者名の両方を入力してください。', 'error');
+        return;
+    }
+
+    window.showLoading();
+    try {
+        const res = await fetch('/api/settings/wholesalers', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code, name }),
+        });
+        const resData = await res.json();
+        if (!res.ok) throw new Error(resData.message || '卸業者の追加に失敗しました。');
+        
+        window.showNotification(resData.message, 'success');
+        wholesalerCodeInput.value = '';
+        wholesalerNameInput.value = '';
+        loadWholesalers(); // リストを再読み込み
+    } catch (err) {
+        console.error(err); // ★ エラー詳細をコンソールに出力
         window.showNotification(err.message, 'error');
     } finally {
         window.hideLoading();
@@ -5356,13 +6357,46 @@ export function initSettings() {
     userIDInput = document.getElementById('emednetUserID');
     passwordInput = document.getElementById('emednetPassword');
     saveBtn = document.getElementById('saveSettingsBtn');
+    
+    wholesalerCodeInput = document.getElementById('wholesalerCode');
+    wholesalerNameInput = document.getElementById('wholesalerName');
+    addWholesalerBtn = document.getElementById('addWholesalerBtn');
+    wholesalersTableBody = document.querySelector('#wholesalers-table tbody');
 
     saveBtn.addEventListener('click', saveSettings);
+    addWholesalerBtn.addEventListener('click', addWholesaler);
+
+    wholesalersTableBody.addEventListener('click', async (e) => {
+        if (e.target.classList.contains('delete-wholesaler-btn')) {
+            const row = e.target.closest('tr');
+            const code = row.dataset.code;
+            if (!confirm(`卸コード [${code}] を削除します。よろしいですか？`)) {
+                return;
+            }
+
+            window.showLoading();
+            try {
+                const res = await fetch(`/api/settings/wholesalers/${code}`, {
+                    method: 'DELETE',
+                });
+                const resData = await res.json();
+                if (!res.ok) throw new Error(resData.message || '削除に失敗しました。');
+                window.showNotification(resData.message, 'success');
+                loadWholesalers(); // リストを再読み込み
+            } catch (err) {
+                console.error(err); // ★ エラー詳細をコンソールに出力
+                window.showNotification(err.message, 'error');
+            } finally {
+                window.hideLoading();
+            }
+        }
+    });
 }
 
 // 画面が表示されるたびに最新の設定を読み込むための関数
 export function onViewShow() {
     loadSettings();
+    loadWholesalers();
 }
 
 ----- C:\Dev\WASABI\static\js\upload.js -----
@@ -5468,15 +6502,17 @@ export function initUsageUpload() {
 
 <header id="main-header">
     <button id="inOutViewBtn" class="btn">入庫・出庫</button>
-    <button id="datBtn" class="btn">納品・返品 (DAT)</button>
-    <button id="usageBtn" class="btn">処方 (USAGE)</button>
-    <button id="inventoryBtn" class="btn">棚卸(ファイル)</button>
-    <button id="manualInventoryBtn" class="btn">棚卸(手入力)</button>
+    <button id="precompBtn" class="btn">予製</button>
+    <button id="datBtn" class="btn">納品・返品</button>
+    <button id="usageBtn" class="btn">処方</button>
+    <button id="inventoryBtn" class="btn">棚卸読込</button>
+    <button id="manualInventoryBtn" class="btn">棚卸入力</button>
     <button id="aggregationBtn" class="btn">集計</button>
+    <button id="orderBtn" class="btn">発注</button>
     <button id="deadStockBtn" class="btn">デッドストック</button>
     <button id="masterEditViewBtn" class="btn">マスター</button>
     <button id="settingsBtn" class="btn">設定</button>
-    <button id="reprocessBtn" class="btn">仮登録を再計算</button>
+    <button id="reprocessBtn" class="btn">再計算</button>
     <button id="exportClientsBtn" class="btn">得意先エクスポート</button>
     <button id="importClientsBtn" class="btn">得意先インポート</button>
     <button id="exportProductsBtn" class="btn">製品エクスポート</button>
@@ -5488,146 +6524,242 @@ export function initUsageUpload() {
     <input type="file" id="usageFileInput" style="display:none;">
     <input type="file" id="inventoryFileInput" style="display:none;">
 
-    <div id="in-out-view" class="inout-view-container">
-        <div class="inout-header-controls">
-            <div class="field-group"><label for="in-out-date">日付</label><input type="date" id="in-out-date"></div>
-            <div class="field-group"><label for="in-out-type">種別</label><select id="in-out-type"><option>入庫</option><option>出庫</option></select></div>
-            <div class="field-group"><label for="in-out-client">得意先</label><select id="in-out-client"></select></div>
-            <div class="field-group"><label for="in-out-receipt">伝票番号</label><select id="in-out-receipt"></select></div>
-            <div class="buttons-group"><button id="saveBtn" class="btn">保存</button><button id="deleteBtn" class="btn">伝票削除</button></div>
-        </div>
-        <div class="inout-details-header"><button id="addRowBtn" class="btn">明細を追加</button></div>
-        <div id="inout-details-container"></div>
+<div id="in-out-view" class="inout-view-container">
+    <div class="inout-header-controls">
+        <div class="field-group"><label for="in-out-date">日付</label><input type="date" id="in-out-date"></div>
+        <div class="field-group"><label for="in-out-type">種別</label><select id="in-out-type"><option>入庫</option><option>出庫</option></select></div>
+        <div class="field-group"><label for="in-out-client">得意先</label><select id="in-out-client"></select></div>
+        <div class="field-group"><label for="in-out-receipt">伝票番号</label><select id="in-out-receipt"></select></div>
+        <div class="buttons-group"><button id="saveBtn" class="btn">保存</button><button id="deleteBtn" class="btn">伝票削除</button></div>
     </div>
-
-    <div id="upload-view" class="hidden">
-        <h3 id="upload-view-title">File Upload</h3>
-        <div id="upload-output-container"></div>
-    </div>
+    <div class="inout-details-header"><button id="addRowBtn" class="btn">明細を追加</button></div>
+    <div id="inout-details-container"></div>
+</div>
+<div id="upload-view" class="hidden">
+    <h3 id="upload-view-title">File Upload</h3>
+    <div id="upload-output-container"></div>
+</div>
     
-    <div id="inventory-view" class="hidden">
-        <h3>Inventory File Upload</h3>
-        <div id="inventory-output-container"></div>
-    </div>
+<div id="inventory-view" class="hidden">
+    <h3>Inventory File Upload</h3>
+    <div id="inventory-output-container"></div>
+</div>
 
-        <div id="manual-inventory-view" class="hidden">
-        <h1>棚卸（手入力）</h1>
-        <div class="filter-container">
+<div id="manual-inventory-view" class="hidden">
+    <h1>棚卸（手入力）</h1>
+    <div class="filter-container">
+        <div class="field-group">
+            <label for="manual-inv-date">棚卸日</label>
+            <input type="date" id="manual-inv-date">
+        </div>
+        <div class="buttons-group">
+            <button id="save-manual-inv-btn" class="btn" style="background-color: #0d6efd; color: white;">この内容で棚卸を保存</button>
+        </div>
+    </div>
+    <div id="manual-inventory-container">
+        <p>読み込み中...</p>
+    </div>
+</div>
+
+<div id="aggregation-view" class="hidden">
+    <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
+        <div class="field-group"><label for="startDate">開始日</label><input type="date" id="startDate"></div>
+        <div class="field-group"><label for="endDate">終了日</label><input type="date" id="endDate"></div>
+        <div class="field-group"><label for="kanaName">カナ名</label><input type="text" id="kanaName" placeholder="（部分一致）"></div>
+        <div class="field-group"><label for="dosageForm">剤型</label><input type="text" id="dosageForm" placeholder="（部分一致）"></div>
+        <div class="field-group"><label for="reorder-coefficient">発注点係数</label><input type="number" id="reorder-coefficient" value="1.5" step="0.1" style="width: 80px;"></div>
+        <div class="field-group">
+            <label>薬の種類</label>
+            <div style="display: flex; flex-wrap: wrap; gap: 5px 10px;">
+                <label><input type="checkbox" name="drugType" value="poison">毒</label>
+                <label><input type="checkbox" name="drugType" value="deleterious">劇</label>
+                <label><input type="checkbox" name="drugType" value="narcotic">麻</label>
+                <label><input type="checkbox" name="drugType" value="psychotropic1">向1</label>
+                <label><input type="checkbox" name="drugType" value="psychotropic2">向2</label>
+                <label><input type="checkbox" name="drugType" value="psychotropic3">向3</label>
+                <label><input type="checkbox" name="drugType" value="stimulant">覚</label>
+                <label><input type="checkbox" name="drugType" value="stimulant_raw">覚原</label>
+            </div>
+        </div>
+        <div class="field-group"><label><input type="checkbox" id="reorder-needed-filter"> 不足品のみ</label></div>
+        <div class="buttons-group" style="margin-left: auto;">
+            <button id="run-aggregation-btn" class="btn">集計実行</button>
+            <button id="print-aggregation-btn" class="btn">印刷</button>
+        </div>
+    </div>
+    <div id="aggregation-output-container"></div>
+</div>
+
+<div id="search-modal" class="modal-overlay hidden">
+    <div class="modal-content">
+        <div class="modal-header">
+        <h2>薬品検索</h2>
+        <button id="closeModalBtn" class="close-button">&times;</button>
+        </div>
+        <div style="display: flex; gap: 5px; margin-bottom: 10px;">
+        <input type="text" id="product-search-input" placeholder="製品名またはカナ名（2文字以上）" style="flex-grow: 1; padding: 5px;">
+        <button id="product-search-btn" class="btn">検索</button>
+        </div>
+        <div class="modal-body" id="search-results-container">
+        <table id="search-results-table">
+            <thead><tr><th>製品名</th><th>メーカー</th><th>包装</th><th>YJコード</th><th>JANコード</th><th>選択</th></tr></thead>
+            <tbody></tbody>
+        </table>
+        </div>
+    </div>
+</div>
+
+<div id="master-edit-view" class="hidden">
+    <div class="inout-header-controls" style="justify-content: flex-end;">
+        <div class="buttons-group">
+            <button id="addMasterRowBtn" class="btn">新規行を追加</button>
+            <button id="refreshMastersBtn" class="btn">一覧を更新</button>
+        </div>
+    </div>
+<div id="master-edit-container"></div>
+</div>
+
+<div id="precomp-view" class="hidden">
+    <div class="inout-header-controls">
+        <div class="field-group">
+        <label for="precomp-patient-number">患者番号</label>
+        <input type="text" id="precomp-patient-number" placeholder="患者番号を入力">
+        </div>
+        <button id="precomp-load-btn" class="btn">呼び出し</button>
+        <div class="buttons-group">
+        <button id="precomp-clear-btn" class="btn" style="background-color: #dc3545; color: white;">中断</button>
+        <button id="precomp-save-btn" class="btn" style="background-color: #0d6efd; color: white;">保存</button>
+        </div>
+    </div>
+    <div class="inout-details-header">
+        <button id="precomp-add-row-btn" class="btn">明細を追加</button>
+    </div>
+    <div id="precomp-details-container">
+        <table id="precomp-details-table" class="data-table">
+            <thead>
+                <tr>
+                    <th style="width: 40%;">製品名</th>
+                    <th style="width: 20%;">JANコード</th>
+                    <th style="width: 15%;">単位</th>
+                    <th style="width: 15%;">数量(JAN単位)</th>
+                    <th style="width: 10%;">削除</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr class="no-data-row"><td colspan="5">患者番号を入力し、「行追加」してください。</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div id="settings-view" class="hidden">
+    <div class="settings-form-container">
+        <fieldset>
+            <legend>e-mednet 連携設定</legend>
             <div class="field-group">
-                <label for="manual-inv-date">棚卸日</label>
-                <input type="date" id="manual-inv-date">
+                <label for="emednetUserID">ユーザーID</label>
+                <input type="text" id="emednetUserID" style="width: 300px;">
             </div>
-            <div class="buttons-group">
-                <button id="save-manual-inv-btn" class="btn" style="background-color: #0d6efd; color: white;">この内容で棚卸を保存</button>
-            </div>
-        </div>
-        <div id="manual-inventory-container">
-            <p>読み込み中...</p>
-        </div>
-    </div>
-
-    <div id="aggregation-view" class="hidden">
-        <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
-            <div class="field-group"><label for="startDate">開始日</label><input type="date" id="startDate"></div>
-            <div class="field-group"><label for="endDate">終了日</label><input type="date" id="endDate"></div>
-            <div class="field-group"><label for="kanaName">カナ名</label><input type="text" id="kanaName" placeholder="（部分一致）"></div>
-            <div class="field-group"><label for="dosageForm">剤型</label><input type="text" id="dosageForm" placeholder="（部分一致）"></div>
-            <div class="field-group"><label for="reorder-coefficient">発注点係数</label><input type="number" id="reorder-coefficient" value="1.5" step="0.1" style="width: 80px;"></div>
             <div class="field-group">
-                <label>薬の種類</label>
-                <div style="display: flex; flex-wrap: wrap; gap: 5px 10px;">
-                    <label><input type="checkbox" name="drugType" value="poison">毒</label>
-                    <label><input type="checkbox" name="drugType" value="deleterious">劇</label>
-                    <label><input type="checkbox" name="drugType" value="narcotic">麻</label>
-                    <label><input type="checkbox" name="drugType" value="psychotropic1">向1</label>
-                    <label><input type="checkbox" name="drugType" value="psychotropic2">向2</label>
-                    <label><input type="checkbox" name="drugType" value="psychotropic3">向3</label>
-                    <label><input type="checkbox" name="drugType" value="stimulant">覚</label>
-                    <label><input type="checkbox" name="drugType" value="stimulant_raw">覚原</label>
-                </div>
-                </div>
-            <div class="field-group"><label><input type="checkbox" id="reorder-needed-filter"> 不足品のみ</label></div>
-            <div class="buttons-group" style="margin-left: auto;">
-                <button id="run-aggregation-btn" class="btn">集計実行</button>
-                <button id="print-aggregation-btn" class="btn">印刷</button>
+                <label for="emednetPassword">パスワード</label>
+                <input type="password" id="emednetPassword" style="width: 300px;">
             </div>
-        </div>
-        <div id="aggregation-output-container"></div>
-    </div>
+        </fieldset>
 
-    <div id="search-modal" class="modal-overlay hidden">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>薬品検索</h2>
-                <button id="closeModalBtn" class="close-button">&times;</button>
-            </div>
-            <div style="display: flex; gap: 5px; margin-bottom: 10px;">
-                <input type="text" id="product-search-input" placeholder="製品名またはカナ名（2文字以上）" style="flex-grow: 1; padding: 5px;">
-                <button id="product-search-btn" class="btn">検索</button>
-            </div>
-            <div class="modal-body" id="search-results-container">
-                <table id="search-results-table">
-                    <thead><tr><th>製品名</th><th>メーカー</th><th>包装</th><th>YJコード</th><th>JANコード</th><th>選択</th></tr></thead>
-                    <tbody></tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-
-        <div id="master-edit-view" class="hidden">
-        <div class="inout-header-controls" style="justify-content: flex-end;">
-            <div class="buttons-group">
-                <button id="addMasterRowBtn" class="btn">新規行を追加</button>
-                <button id="refreshMastersBtn" class="btn">一覧を更新</button>
-            </div>
-        </div>
-        <div id="master-edit-container"></div>
-    </div>
-
-    <div id="settings-view" class="hidden">
-        <h1>設定</h1>
-        <div class="settings-form-container">
-            <fieldset>
-                <legend>e-mednet 連携設定</legend>
+        <fieldset style="margin-top: 20px;">
+            <legend>卸業者管理</legend>
+            <div style="display: flex; gap: 10px; align-items: flex-end; margin-bottom: 10px;">
                 <div class="field-group">
-                    <label for="emednetUserID">ユーザーID</label>
-                    <input type="text" id="emednetUserID" style="width: 300px;">
+                    <label for="wholesalerCode">卸コード (数字)</label>
+                    <input type="text" id="wholesalerCode" placeholder="例: 12345">
                 </div>
                 <div class="field-group">
-                    <label for="emednetPassword">パスワード</label>
-                    <input type="password" id="emednetPassword" style="width: 300px;">
+                    <label for="wholesalerName">卸業者名</label>
+                    <input type="text" id="wholesalerName" placeholder="例: 株式会社〇〇">
                 </div>
-            </fieldset>
-            
-            <div class="buttons-group" style="margin-top: 20px;">
-                <button id="saveSettingsBtn" class="btn" style="background-color: #0d6efd; color: white;">設定を保存</button>
+                <button id="addWholesalerBtn" class="btn">追加</button>
             </div>
+            <table class="data-table" id="wholesalers-table">
+                <thead>
+                    <tr>
+                        <th style="width: 30%;">卸コード</th>
+                        <th style="width: 50%;">卸業者名</th>
+                        <th style="width: 20%;">操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    </tbody>
+            </table>
+        </fieldset>
+
+        <div class="buttons-group" style="margin-top: 20px;">
+            <button id="saveSettingsBtn" class="btn" style="background-color: #0d6efd; color: white;">設定を保存</button>
         </div>
     </div>
+</div>
 
 
-    <div id="deadstock-view" class="hidden">
-        <h1>デッドストックリスト</h1>
-        <div class="filter-container">
-            <div class="field-group">
-                <label for="ds-startDate">開始日</label>
-                <input type="date" id="ds-startDate">
-            </div>
-            <div class="field-group">
-                <label for="ds-endDate">終了日</label>
-                <input type="date" id="ds-endDate">
-            </div>
-            <div class="field-group">
-                <label><input type="checkbox" id="ds-exclude-zero-stock"> 在庫が0の品目を除外</label>
-            </div>
-            <div class="buttons-group">
-                <button id="run-dead-stock-btn" class="btn">リスト作成</button>
-            </div>
+<div id="deadstock-view" class="hidden">
+    <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
+        <div class="field-group">
+        <label for="ds-startDate">開始日</label>
+        <input type="date" id="ds-startDate">
         </div>
-        <div id="deadstock-output-container"></div>
+        <div class="field-group">
+        <label for="ds-endDate">終了日</label>
+        <input type="date" id="ds-endDate">
+        </div>
+        <div class="field-group">
+        <label><input type="checkbox" id="ds-exclude-zero-stock"> 在庫が0の品目を除外</label>
+         </div>
+        <div class="buttons-group">
+        <button id="run-dead-stock-btn" class="btn">リスト作成</button>
+        <button id="print-deadstock-btn" class="btn">印刷</button>
+        </div>
+    </div>
+    <div id="deadstock-output-container"></div>
+</div>
 
-    <input type="file" id="importClientsInput" style="display:none;" accept=".csv">
-    <input type="file" id="importProductsInput" style="display:none;" accept=".csv">
+
+
+
+<div id="order-view" class="hidden">
+    <div class="controls-grid" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
+        <div class="field-group">
+            <label for="order-startDate">期間 開始</label>
+            <input type="date" id="order-startDate">
+        </div>
+        <div class="field-group">
+            <label for="order-endDate">期間 終了</label>
+            <input type="date" id="order-endDate">
+        </div>
+        <div class="field-group">
+            <label for="order-kanaName">薬品名カナ</label>
+            <input type="text" id="order-kanaName" placeholder="（前方一致）">
+        </div>
+        <div class="field-group">
+            <label for="order-dosageForm">剤形</label>
+            <input type="text" id="order-dosageForm" placeholder="（部分一致）">
+        </div>
+        <div class="field-group">
+            <label for="order-reorder-coefficient">発注点係数</label>
+            <input type="number" id="order-reorder-coefficient" value="1.3" step="0.1">
+        </div>
+        <div class="field-group">
+            <button id="generate-order-candidates-btn" class="btn">不足品リストを作成</button>
+        </div>
+                <div class="field-group">
+            <button id="createOrderCsvBtn" class="btn" style="background-color: #198754; color: white;">発注書作成 (CSVダウンロード)</button>
+        </div>
+    </div>
+    <div id="order-candidates-output">
+    </div>
+</div>
+    
+<input type="file" id="importClientsInput" style="display:none;" accept=".csv">
+
+<input type="file" id="importProductsInput" style="display:none;" accept=".csv">
+
 </main>
 
 <div id="loading-overlay" class="hidden"><div class="spinner"></div><p>Processing...</p></div>
@@ -6085,22 +7217,23 @@ import (
 	"net/http"
 	"os/exec"
 	"runtime"
-	"wasabi/config"   // settingsの前に移動
-	"wasabi/settings" // settingsを追加
 
 	_ "github.com/mattn/go-sqlite3"
 
 	"wasabi/aggregation"
 	"wasabi/backup"
+	"wasabi/config" // settingsの前に移動
 	"wasabi/dat"
 	"wasabi/db"
 	"wasabi/deadstock"
 	"wasabi/inout"
 	"wasabi/inventory"
 	"wasabi/loader"
-	"wasabi/masteredit"
-	"wasabi/medrec" // ▼▼▼ [修正点] 追加 ▼▼▼
+	"wasabi/masteredit" // ▼▼▼ [修正点] 追加 ▼▼▼
+	"wasabi/orders"
+	"wasabi/precomp"
 	"wasabi/reprocess"
+	"wasabi/settings" // settingsを追加
 	"wasabi/transaction"
 	"wasabi/units"
 	"wasabi/usage"
@@ -6160,7 +7293,16 @@ func main() {
 	mux.HandleFunc("/api/deadstock/save", deadstock.SaveDeadStockHandler(conn))
 	mux.HandleFunc("/api/settings/get", settings.GetSettingsHandler(conn))
 	mux.HandleFunc("/api/settings/save", settings.SaveSettingsHandler(conn))
-	mux.HandleFunc("/api/medrec/download", medrec.DownloadHandler(conn)) // ▼▼▼ [修正点] 追加 ▼▼▼
+	// ▼▼▼ 以下2行を追加 ▼▼▼
+	mux.HandleFunc("/api/settings/wholesalers", settings.WholesalersHandler(conn))
+	mux.HandleFunc("/api/settings/wholesalers/", settings.WholesalersHandler(conn))
+	// ▲▲▲ 追加ここまで ▲▲▲
+	//mux.HandleFunc("/api/medrec/download", medrec.DownloadHandler(conn))        // ▼▼▼ [修正点] 追加 ▼▼▼
+	mux.HandleFunc("/api/masters/search_all", db.SearchAllMastersHandler(conn)) // 予製用の製品検索
+	mux.HandleFunc("/api/precomp/save", precomp.SavePrecompHandler(conn))       // 予製データの保存
+	mux.HandleFunc("/api/precomp/load", precomp.LoadPrecompHandler(conn))       // 予製データの呼び出し
+	mux.HandleFunc("/api/precomp/clear", precomp.ClearPrecompHandler(conn))
+	mux.HandleFunc("/api/orders/candidates", orders.GenerateOrderCandidatesHandler(conn))
 
 	// Serve Frontend
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))
@@ -6321,4 +7463,22 @@ CREATE TABLE IF NOT EXISTS dead_stock_list (
 
 CREATE INDEX IF NOT EXISTS idx_tx_jan_date
   ON transaction_records(jan_code, transaction_date);
+
+-- 予製レコードテーブル
+CREATE TABLE IF NOT EXISTS pre_compounding_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  patient_number TEXT NOT NULL,
+  product_code TEXT NOT NULL,
+  quantity REAL NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (product_code) REFERENCES product_master(product_code)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pre_compounding_product_code ON pre_compounding_records (product_code);
+
+-- 卸業者マスターテーブル
+CREATE TABLE IF NOT EXISTS wholesalers (
+  wholesaler_code TEXT PRIMARY KEY,
+  wholesaler_name TEXT NOT NULL
+);
 

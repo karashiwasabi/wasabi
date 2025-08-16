@@ -1,0 +1,191 @@
+function formatBalance(balance) {
+    if (typeof balance === 'number') {
+        return balance.toFixed(2);
+    }
+    return balance;
+}
+
+// ★★★ この関数がメインの修正箇所です ★★★
+function renderOrderCandidates(data, container, wholesalers) {
+    if (!data || data.length === 0) {
+        container.innerHTML = "<p>発注が必要な品目はありませんでした。</p>";
+        return;
+    }
+
+    // 卸業者リストからプルダウンの <option> タグを事前に生成
+    const wholesalerOptionsHtml = wholesalers.map(w => `<option value="${w.code}">${w.name}</option>`).join('');
+
+    let html = '';
+    data.forEach(yjGroup => {
+        const yjShortfall = yjGroup.totalReorderPoint - (yjGroup.endingBalance || 0);
+
+        html += `
+            <div class="agg-yj-header" style="background-color: #ff0015ff;">
+                <span>YJ: ${yjGroup.yjCode}</span>
+                <span class="product-name">${yjGroup.productName}</span>
+                <span class="balance-info">
+                    在庫: ${formatBalance(yjGroup.endingBalance)} | 
+                    発注点: ${formatBalance(yjGroup.totalReorderPoint)} | 
+                    不足数: ${formatBalance(yjShortfall)}
+                </span>
+            </div>
+            <table class="data-table" style="margin-bottom: 20px;">
+                <thead>
+                    <tr>
+                        <th style="width: 25%;">製品名（包装）</th>
+                        <th style="width: 15%;">メーカー</th>
+                        <th style="width: 15%;">包装仕様</th>
+                        <th style="width: 20%;">卸業者</th>
+                        <th style="width: 10%;">発注単位</th>
+                        <th style="width: 5%;">発注数</th>
+                        <th style="width: 10%;">操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+
+        yjGroup.packageLedgers.forEach(pkg => {
+            if (pkg.masters && pkg.masters.length > 0) {
+                pkg.masters.forEach(master => {
+                    const pkgShortfall = pkg.reorderPoint - (pkg.endingBalance || 0);
+                    if (pkgShortfall > 0) {
+                        const recommendedOrder = master.yjPackUnitQty > 0 ? Math.ceil(pkgShortfall / master.yjPackUnitQty) : 0;
+                        
+                        // 各行のプルダウンを生成
+                        let rowWholesalerOptions = `<option value="">--- 選択 ---</option>` + wholesalerOptionsHtml;
+                        // デフォルト卸が設定されていれば、それを選択状態にする
+                        if (master.supplierWholesale) {
+                            rowWholesalerOptions = rowWholesalerOptions.replace(
+                                `value="${master.supplierWholesale}"`, 
+                                `value="${master.supplierWholesale}" selected`
+                            );
+                        }
+                        
+                        html += `
+                            <tr data-jan-code="${master.productCode}">
+                                <td class="left">${master.productName}</td>
+                                <td class="left">${master.makerName || ''}</td>
+                                <td class="left">${master.packageSpec}</td>
+                                <td><select class="wholesaler-select" style="width: 100%;">${rowWholesalerOptions}</select></td>
+                                <td>${master.yjPackUnitQty} ${master.yjUnitName}</td>
+                                <td><input type="number" value="${recommendedOrder}" class="order-quantity-input" style="width: 80px;"></td>
+                                <td><button class="remove-order-item-btn btn">除外</button></td>
+                            </tr>
+                        `;
+                    }
+                });
+            }
+        });
+        html += `</tbody></table>`;
+    });
+    container.innerHTML = html;
+}
+
+export function initOrders() {
+    const view = document.getElementById('order-view');
+    if (!view) return;
+
+    const runBtn = document.getElementById('generate-order-candidates-btn');
+    const outputContainer = document.getElementById('order-candidates-output');
+    const startDateInput = document.getElementById('order-startDate');
+    const endDateInput = document.getElementById('order-endDate');
+    const kanaNameInput = document.getElementById('order-kanaName');
+    const dosageFormInput = document.getElementById('order-dosageForm');
+    const coefficientInput = document.getElementById('order-reorder-coefficient');
+    const createCsvBtn = document.getElementById('createOrderCsvBtn');
+
+    const today = new Date();
+    const threeMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 3, today.getDate());
+    endDateInput.value = today.toISOString().slice(0, 10);
+    startDateInput.value = threeMonthsAgo.toISOString().slice(0, 10);
+
+    runBtn.addEventListener('click', async () => {
+        window.showLoading();
+        const params = new URLSearchParams({
+            startDate: startDateInput.value.replace(/-/g, ''),
+            endDate: endDateInput.value.replace(/-/g, ''),
+            kanaName: kanaNameInput.value,
+            dosageForm: dosageFormInput.value,
+            coefficient: coefficientInput.value,
+        });
+
+        try {
+            const res = await fetch(`/api/orders/candidates?${params.toString()}`);
+            if (!res.ok) {
+                const errText = await res.text();
+                throw new Error(errText || 'List generation failed');
+            }
+            const data = await res.json();
+            
+            // 卸業者リストを引数で渡すように変更
+            renderOrderCandidates(data.candidates, outputContainer, data.wholesalers || []);
+
+        } catch (err) {
+            outputContainer.innerHTML = `<p style="color:red;">エラー: ${err.message}</p>`;
+        } finally {
+            window.hideLoading();
+        }
+    });
+    
+    // ★★★ CSV作成ロジックを修正 ★★★
+    createCsvBtn.addEventListener('click', () => {
+        const rows = outputContainer.querySelectorAll('tbody tr');
+        if (rows.length === 0) {
+            window.showNotification('発注する品目がありません。', 'error');
+            return;
+        }
+
+        let csvContent = "";
+        let hasItemsToOrder = false;
+        rows.forEach(row => {
+            const quantity = row.querySelector('.order-quantity-input').value;
+            const wholesalerCode = row.querySelector('.wholesaler-select').value;
+            
+            if (parseInt(quantity, 10) > 0) {
+                if (!wholesalerCode) {
+                    // 卸が未選択の行はスキップ（もしくはエラー表示）
+                    return; 
+                }
+                hasItemsToOrder = true;
+                const janCode = row.dataset.janCode;
+                const productName = row.cells[0].textContent;
+                
+                // CSVフォーマット: JAN, 製品名, 発注数, 卸コード
+                const csvRow = [janCode, `"${productName}"`, quantity, wholesalerCode].join(',');
+                csvContent += csvRow + "\r\n";
+            }
+        });
+
+        if (!hasItemsToOrder) {
+            window.showNotification('発注数が1以上で、卸業者が選択されている品目がありません。', 'error');
+            return;
+        }
+
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement("a");
+        const url = URL.createObjectURL(blob);
+        const now = new Date();
+        const timestamp = `${now.getFullYear()}${(now.getMonth()+1).toString().padStart(2, '0')}${now.getDate().toString().padStart(2, '0')}_${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}${now.getSeconds().toString().padStart(2, '0')}`;
+        const fileName = `発注書_${timestamp}.csv`;
+
+        link.setAttribute("href", url);
+        link.setAttribute("download", fileName);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    });
+
+    outputContainer.addEventListener('click', (e) => {
+        if (e.target.classList.contains('remove-order-item-btn')) {
+            const row = e.target.closest('tr');
+            const tbody = row.closest('tbody');
+            row.remove();
+            if (tbody.children.length === 0) {
+                const header = tbody.closest('table').previousElementSibling;
+                header.remove();
+                tbody.closest('table').remove();
+            }
+        }
+    });
+}

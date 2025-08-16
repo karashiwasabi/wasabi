@@ -1,3 +1,4 @@
+// C:\Dev\WASABI\parsers\dat_parser.go
 package parsers
 
 import (
@@ -26,7 +27,7 @@ func ParseDat(r io.Reader) ([]model.UnifiedInputRecord, error) {
 		switch line[0:1] {
 		case "S":
 			if len(line) >= 13 {
-				currentWholesale = strings.TrimSpace(line[2:13])
+				currentWholesale = strings.TrimSpace(line[3:13])
 			}
 		case "D":
 			if len(line) < 121 {

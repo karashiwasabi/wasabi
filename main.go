@@ -8,23 +8,23 @@ import (
 	"net/http"
 	"os/exec"
 	"runtime"
-	"wasabi/config"   // settingsの前に移動
-	"wasabi/settings" // settingsを追加
 
 	_ "github.com/mattn/go-sqlite3"
 
 	"wasabi/aggregation"
 	"wasabi/backup"
+	"wasabi/config" // settingsの前に移動
 	"wasabi/dat"
 	"wasabi/db"
 	"wasabi/deadstock"
 	"wasabi/inout"
 	"wasabi/inventory"
 	"wasabi/loader"
-	"wasabi/masteredit"
-	"wasabi/medrec" // ▼▼▼ [修正点] 追加 ▼▼▼
+	"wasabi/masteredit" // ▼▼▼ [修正点] 追加 ▼▼▼
+	"wasabi/orders"
 	"wasabi/precomp"
 	"wasabi/reprocess"
+	"wasabi/settings" // settingsを追加
 	"wasabi/transaction"
 	"wasabi/units"
 	"wasabi/usage"
@@ -84,11 +84,16 @@ func main() {
 	mux.HandleFunc("/api/deadstock/save", deadstock.SaveDeadStockHandler(conn))
 	mux.HandleFunc("/api/settings/get", settings.GetSettingsHandler(conn))
 	mux.HandleFunc("/api/settings/save", settings.SaveSettingsHandler(conn))
-	mux.HandleFunc("/api/medrec/download", medrec.DownloadHandler(conn))        // ▼▼▼ [修正点] 追加 ▼▼▼
+	// ▼▼▼ 以下2行を追加 ▼▼▼
+	mux.HandleFunc("/api/settings/wholesalers", settings.WholesalersHandler(conn))
+	mux.HandleFunc("/api/settings/wholesalers/", settings.WholesalersHandler(conn))
+	// ▲▲▲ 追加ここまで ▲▲▲
+	//mux.HandleFunc("/api/medrec/download", medrec.DownloadHandler(conn))        // ▼▼▼ [修正点] 追加 ▼▼▼
 	mux.HandleFunc("/api/masters/search_all", db.SearchAllMastersHandler(conn)) // 予製用の製品検索
 	mux.HandleFunc("/api/precomp/save", precomp.SavePrecompHandler(conn))       // 予製データの保存
 	mux.HandleFunc("/api/precomp/load", precomp.LoadPrecompHandler(conn))       // 予製データの呼び出し
 	mux.HandleFunc("/api/precomp/clear", precomp.ClearPrecompHandler(conn))
+	mux.HandleFunc("/api/orders/candidates", orders.GenerateOrderCandidatesHandler(conn))
 
 	// Serve Frontend
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))

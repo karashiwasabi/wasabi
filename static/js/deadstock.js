@@ -95,12 +95,17 @@ export function initDeadStock() {
     startDateInput = document.getElementById('ds-startDate');
     endDateInput = document.getElementById('ds-endDate');
     excludeZeroStockCheckbox = document.getElementById('ds-exclude-zero-stock');
+    const printBtn = document.getElementById('print-deadstock-btn');
 
     const today = new Date();
     const threeMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 3, today.getDate());
     endDateInput.value = today.toISOString().slice(0, 10);
     startDateInput.value = threeMonthsAgo.toISOString().slice(0, 10);
-    
+
+    if (printBtn) {
+        printBtn.addEventListener('click', () => window.print());
+    }
+
     view.addEventListener('click', async (e) => {
         if (e.target.id === 'run-dead-stock-btn') {
             window.showLoading();
@@ -108,18 +113,21 @@ export function initDeadStock() {
                 startDate: startDateInput.value.replace(/-/g, ''),
                 endDate: endDateInput.value.replace(/-/g, ''),
                 excludeZeroStock: excludeZeroStockCheckbox.checked,
+   
             });
 
             try {
                 const res = await fetch(`/api/deadstock/list?${params.toString()}`);
                 if (!res.ok) {
                     const errText = await res.text();
+                
                     throw new Error(errText || 'Failed to generate dead stock list');
                 }
                 const data = await res.json();
                 renderDeadStockList(data);
             } catch (err) {
-                outputContainer.innerHTML = `<p style="color:red;">エラー: ${err.message}</p>`;
+                outputContainer.innerHTML = `<p style="color:red;">エラー: 
+${err.message}</p>`;
             } finally {
                 window.hideLoading();
             }
@@ -148,26 +156,27 @@ export function initDeadStock() {
 
             const header = container.previousElementSibling;
             const pkgInfo = header.querySelector('span:first-child').textContent.replace('包装: ', '').split('|');
-            
             rows.forEach(row => {
                 payload.push({
                     productCode: productCode,
                     yjCode: yjCode, // 正しいYJコードをセット
                     packageForm: pkgInfo[0],
-                    janPackInnerQty: parseFloat(pkgInfo[1]) || 0,
+                 
+                   janPackInnerQty: parseFloat(pkgInfo[1]) || 0,
                     yjUnitName: pkgInfo[2],
                     stockQuantityJan: parseFloat(row.querySelector('.ds-stock-quantity').value) || 0,
                     expiryDate: row.querySelector('.ds-expiry-date').value,
                     lotNumber: row.querySelector('.ds-lot-number').value,
+        
                 });
             });
-
             window.showLoading();
             try {
                 const res = await fetch('/api/deadstock/save', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload),
+           
                 });
                 const resData = await res.json();
                 if (!res.ok) throw new Error(resData.message || '保存に失敗しました。');

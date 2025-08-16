@@ -182,9 +182,18 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
+		// ▼▼▼ [修正点] 新規得意先情報をレスポンスに追加 ▼▼▼
+		response := map[string]interface{}{
 			"message":       "Saved successfully",
 			"receiptNumber": receiptNumber,
-		})
+		}
+		if payload.IsNewClient {
+			response["newClient"] = map[string]string{
+				"code": clientCode,
+				"name": payload.ClientName,
+			}
+		}
+		json.NewEncoder(w).Encode(response)
+		// ▲▲▲ 修正ここまで ▲▲▲
 	}
 }

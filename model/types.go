@@ -179,7 +179,7 @@ type StockLedgerPackageGroup struct {
 	MaxUsage           float64             `json:"maxUsage"`
 	ReorderPoint       float64             `json:"reorderPoint"`
 	IsReorderNeeded    bool                `json:"isReorderNeeded"`
-	Master             *ProductMaster      `json:"-"`
+	Masters            []*ProductMaster    `json:"masters"` // masterからmastersに変更し、スライス型にする
 	BaseReorderPoint   float64             `json:"baseReorderPoint"`
 	PrecompoundedTotal float64             `json:"precompoundedTotal"`
 }
@@ -244,4 +244,10 @@ type PreCompoundingRecord struct {
 	ProductCode   string  `json:"productCode"`
 	Quantity      float64 `json:"quantity"` // YJ Quantity
 	CreatedAt     string  `json:"createdAt"`
+}
+
+// Wholesaler は卸業者マスターの構造体です。
+type Wholesaler struct {
+	Code string `json:"code"`
+	Name string `json:"name"`
 }

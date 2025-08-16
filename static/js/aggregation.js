@@ -38,7 +38,7 @@ function renderResults() {
             yjReorderPointText = `${formatBalance(yjGroup.totalBaseReorderPoint)} + 予${formatBalance(yjGroup.totalPrecompounded)} = ${formatBalance(yjGroup.totalReorderPoint)}`;
         }
         html += `
-            <div class="agg-yj-header" ${yjGroup.isReorderNeeded ? 'style="background-color: #f8d7da;"' : ''}>
+            <div class="agg-yj-header" ${yjGroup.isReorderNeeded ? 'style="background-color: #ff0015ff;"' : ''}>
                 <span>YJ: ${yjGroup.yjCode}</span>
                 <span class="product-name">${yjGroup.productName}</span>
                 <span class="balance-info">
@@ -56,7 +56,7 @@ function renderResults() {
                 pkgReorderPointText = `${formatBalance(pkg.baseReorderPoint)} + 予${formatBalance(pkg.precompoundedTotal)} = ${formatBalance(pkg.reorderPoint)}`;
             }
             html += `
-                <div class="agg-pkg-header" ${pkg.isReorderNeeded ? 'style="background-color: #fff3cd;"' : ''}>
+                <div class="agg-pkg-header" ${pkg.isReorderNeeded ? 'style="background-color: #ff0000ff;"' : ''}>
                     <span>包装: ${pkg.packageKey}</span>
                     <span class="balance-info">
                         在庫: ${formatBalance(pkg.endingBalance)} |
