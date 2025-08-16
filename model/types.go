@@ -170,18 +170,21 @@ type StockLedgerYJGroup struct {
 	TotalPrecompounded    float64                   `json:"totalPrecompounded"`
 }
 type StockLedgerPackageGroup struct {
-	PackageKey         string              `json:"packageKey"`
-	JanUnitName        string              `json:"janUnitName"`
-	StartingBalance    interface{}         `json:"startingBalance"`
-	Transactions       []LedgerTransaction `json:"transactions"`
-	NetChange          float64             `json:"netChange"`
-	EndingBalance      interface{}         `json:"endingBalance"`
-	MaxUsage           float64             `json:"maxUsage"`
-	ReorderPoint       float64             `json:"reorderPoint"`
-	IsReorderNeeded    bool                `json:"isReorderNeeded"`
-	Masters            []*ProductMaster    `json:"masters"` // masterからmastersに変更し、スライス型にする
-	BaseReorderPoint   float64             `json:"baseReorderPoint"`
-	PrecompoundedTotal float64             `json:"precompoundedTotal"`
+	PackageKey      string              `json:"packageKey"`
+	JanUnitName     string              `json:"janUnitName"`
+	StartingBalance interface{}         `json:"startingBalance"`
+	Transactions    []LedgerTransaction `json:"transactions"`
+	NetChange       float64             `json:"netChange"`
+	EndingBalance   interface{}         `json:"endingBalance"`
+	// ▼▼▼ [修正点] 以下の1行を追加 ▼▼▼
+	EffectiveEndingBalance float64 `json:"effectiveEndingBalance"`
+	// ▲▲▲ 修正ここまで ▲▲▲
+	MaxUsage           float64          `json:"maxUsage"`
+	ReorderPoint       float64          `json:"reorderPoint"`
+	IsReorderNeeded    bool             `json:"isReorderNeeded"`
+	Masters            []*ProductMaster `json:"masters"` // masterからmastersに変更し、スライス型にする
+	BaseReorderPoint   float64          `json:"baseReorderPoint"`
+	PrecompoundedTotal float64          `json:"precompoundedTotal"`
 }
 type LedgerTransaction struct {
 	TransactionRecord
@@ -251,3 +254,17 @@ type Wholesaler struct {
 	Code string `json:"code"`
 	Name string `json:"name"`
 }
+
+// ▼▼▼ [修正点] Backorder構造体を新しいテーブル定義に合わせる ▼▼▼
+// Backorder は発注残レコードの構造体です。
+type Backorder struct {
+	YjCode          string  `json:"yjCode"`
+	PackageForm     string  `json:"packageForm"`
+	JanPackInnerQty float64 `json:"janPackInnerQty"`
+	YjUnitName      string  `json:"yjUnitName"`
+	OrderDate       string  `json:"orderDate"`
+	YjQuantity      float64 `json:"yjQuantity"`
+	ProductName     string  `json:"productName"`
+}
+
+// ▲▲▲ 修正ここまで ▲▲▲

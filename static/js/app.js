@@ -18,6 +18,9 @@ import { initOrders } from './orders.js';
 // ▼▼▼ [修正点] 以下の1行を新しく追加 ▼▼▼
 import { initJcshmsUpdate } from './jcshms_update.js';
 // ▲▲▲ 修正ここまで ▲▲
+// ▼▼▼ [修正点] 以下の1行を新しく追加 ▼▼▼
+import { initBackorderView } from './backorder.js';
+// ▲▲▲ 修正ここまで ▲▲▲
 
 // (Global UI Elements and helper functions are unchanged)
 window.showLoading = () => document.getElementById('loading-overlay').classList.remove('hidden');
@@ -56,6 +59,9 @@ document.addEventListener('DOMContentLoaded', async () => { // ★ asyncキー�
     const deadstockOutputContainer = document.getElementById('deadstock-output-container'); // ▼▼▼ [修正点] 追加 ▼▼▼
     const precompBtn = document.getElementById('precompBtn');
     const orderBtn = document.getElementById('orderBtn'); // ▼▼▼ この行を追加 ▼▼▼
+    // ▼▼▼ [修正点] 以下の1行を新しく追加 ▼▼▼
+    const backorderBtn = document.getElementById('backorderBtn');
+    // ▲▲▲ 修正ここまで ▲▲▲
 
     // --- Initialize all modules ---
     initInOut();
@@ -75,6 +81,9 @@ document.addEventListener('DOMContentLoaded', async () => { // ★ asyncキー�
     initOrders(); // ▼▼▼ この行を追加 ▼▼▼
     // ▼▼▼ [修正点] 以下の1行を新しく追加 ▼▼▼
     initJcshmsUpdate();
+    // ▲▲▲ 修正ここまで ▲▲▲
+    // ▼▼▼ [修正点] 以下の1行を新しく追加 ▼▼▼
+    initBackorderView();
     // ▲▲▲ 修正ここまで ▲▲▲
 
     // (View Switching Logic and Event Listeners are unchanged)
@@ -127,6 +136,15 @@ document.addEventListener('DOMContentLoaded', async () => { // ★ asyncキー�
     precompBtn.addEventListener('click', () => showView('precomp-view'));
     orderBtn.addEventListener('click', () => showView('order-view')); // ▼▼▼ この行を追加 ▼▼▼
     // ▲▲▲ 修正ここまで ▲▲▲
+
+    // ▼▼▼ [修正点] 以下の1ブロックを新しく追加 ▼▼▼
+    backorderBtn.addEventListener('click', () => {
+        showView('backorder-view');
+        // viewが表示されるイベントを発火させてデータを読み込ませる
+        document.getElementById('backorder-view').dispatchEvent(new Event('show'));
+    });
+    // ▲▲▲ 修正ここまで ▲▲▲
+
     // --- Initial State ---
     showView('in-out-view');
     resetInOutView();

@@ -55,16 +55,19 @@ function renderResults() {
             if (pkg.precompoundedTotal > 0) {
                 pkgReorderPointText = `${formatBalance(pkg.baseReorderPoint)} + 予${formatBalance(pkg.precompoundedTotal)} = ${formatBalance(pkg.reorderPoint)}`;
             }
+            // ▼▼▼ [修正点] ヘッダー表示に「有効在庫」を追加 ▼▼▼
             html += `
                 <div class="agg-pkg-header" ${pkg.isReorderNeeded ? 'style="background-color: #ff0000ff;"' : ''}>
                     <span>包装: ${pkg.packageKey}</span>
                     <span class="balance-info">
-                        在庫: ${formatBalance(pkg.endingBalance)} |
+                        物理在庫: ${formatBalance(pkg.endingBalance)} | 
+                        有効在庫: ${formatBalance(pkg.effectiveEndingBalance)} | 
                         発注点: ${pkgReorderPointText} |  
                         変動: ${formatBalance(pkg.netChange)}
                     </span>
                 </div>
                 <div id="${tableId}-container"></div>`;
+            // ▲▲▲ 修正ここまで ▲▲▲
         });
     });
     outputContainer.innerHTML = html;

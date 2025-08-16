@@ -5,16 +5,13 @@ function formatBalance(balance) {
     return balance;
 }
 
-// ★★★ この関数がメインの修正箇所です ★★★
 function renderOrderCandidates(data, container, wholesalers) {
     if (!data || data.length === 0) {
         container.innerHTML = "<p>発注が必要な品目はありませんでした。</p>";
         return;
     }
 
-    // 卸業者リストからプルダウンの <option> タグを事前に生成
     const wholesalerOptionsHtml = wholesalers.map(w => `<option value="${w.code}">${w.name}</option>`).join('');
-
     let html = '';
     data.forEach(yjGroup => {
         const yjShortfall = yjGroup.totalReorderPoint - (yjGroup.endingBalance || 0);
@@ -43,7 +40,6 @@ function renderOrderCandidates(data, container, wholesalers) {
                 </thead>
                 <tbody>
         `;
-
         yjGroup.packageLedgers.forEach(pkg => {
             if (pkg.masters && pkg.masters.length > 0) {
                 pkg.masters.forEach(master => {
@@ -51,9 +47,7 @@ function renderOrderCandidates(data, container, wholesalers) {
                     if (pkgShortfall > 0) {
                         const recommendedOrder = master.yjPackUnitQty > 0 ? Math.ceil(pkgShortfall / master.yjPackUnitQty) : 0;
                         
-                        // 各行のプルダウンを生成
                         let rowWholesalerOptions = `<option value="">--- 選択 ---</option>` + wholesalerOptionsHtml;
-                        // デフォルト卸が設定されていれば、それを選択状態にする
                         if (master.supplierWholesale) {
                             rowWholesalerOptions = rowWholesalerOptions.replace(
                                 `value="${master.supplierWholesale}"`, 
@@ -61,8 +55,14 @@ function renderOrderCandidates(data, container, wholesalers) {
                             );
                         }
                         
+                        // ▼▼▼ [修正点] 発注残登録で使う情報をdata属性に埋め込む ▼▼▼
                         html += `
-                            <tr data-jan-code="${master.productCode}">
+                            <tr data-jan-code="${master.productCode}" 
+                                data-yj-code="${yjGroup.yjCode}"
+                                data-product-name="${master.productName}"
+                                data-package-form="${master.packageForm}"
+                                data-jan-pack-inner-qty="${master.janPackInnerQty}"
+                                data-yj-unit-name="${master.yjUnitName}">
                                 <td class="left">${master.productName}</td>
                                 <td class="left">${master.makerName || ''}</td>
                                 <td class="left">${master.packageSpec}</td>
@@ -72,6 +72,7 @@ function renderOrderCandidates(data, container, wholesalers) {
                                 <td><button class="remove-order-item-btn btn">除外</button></td>
                             </tr>
                         `;
+                        // ▲▲▲ 修正ここまで ▲▲▲
                     }
                 });
             }
@@ -117,7 +118,6 @@ export function initOrders() {
             }
             const data = await res.json();
             
-            // 卸業者リストを引数で渡すように変更
             renderOrderCandidates(data.candidates, outputContainer, data.wholesalers || []);
 
         } catch (err) {
@@ -127,54 +127,80 @@ export function initOrders() {
         }
     });
     
-    // ★★★ CSV作成ロジックを修正 ★★★
-    createCsvBtn.addEventListener('click', () => {
+    // ▼▼▼ [修正点] createCsvBtnのイベントリスナーを全面的に書き換え ▼▼▼
+    createCsvBtn.addEventListener('click', async () => {
         const rows = outputContainer.querySelectorAll('tbody tr');
         if (rows.length === 0) {
             window.showNotification('発注する品目がありません。', 'error');
             return;
         }
 
+        const backorderPayload = [];
         let csvContent = "";
         let hasItemsToOrder = false;
+
         rows.forEach(row => {
-            const quantity = row.querySelector('.order-quantity-input').value;
-            const wholesalerCode = row.querySelector('.wholesaler-select').value;
+            const quantityInput = row.querySelector('.order-quantity-input');
+            const quantity = parseInt(quantityInput.value, 10);
             
-            if (parseInt(quantity, 10) > 0) {
-                if (!wholesalerCode) {
-                    // 卸が未選択の行はスキップ（もしくはエラー表示）
-                    return; 
-                }
+            if (quantity > 0) {
                 hasItemsToOrder = true;
                 const janCode = row.dataset.janCode;
                 const productName = row.cells[0].textContent;
+                const wholesalerCode = row.querySelector('.wholesaler-select').value;
                 
-                // CSVフォーマット: JAN, 製品名, 発注数, 卸コード
                 const csvRow = [janCode, `"${productName}"`, quantity, wholesalerCode].join(',');
                 csvContent += csvRow + "\r\n";
+
+                const yjUnitQty = parseFloat(row.cells[4].textContent) || 1;
+                backorderPayload.push({
+                    yjCode: row.dataset.yjCode,
+                    packageForm: row.dataset.packageForm,
+                    janPackInnerQty: parseFloat(row.dataset.janPackInnerQty),
+                    yjUnitName: row.dataset.yjUnitName,
+                    yjQuantity: quantity * yjUnitQty,
+                    productName: row.dataset.productName,
+                });
             }
         });
 
         if (!hasItemsToOrder) {
-            window.showNotification('発注数が1以上で、卸業者が選択されている品目がありません。', 'error');
+            window.showNotification('発注数が1以上の品目がありません。', 'error');
             return;
         }
 
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement("a");
-        const url = URL.createObjectURL(blob);
-        const now = new Date();
-        const timestamp = `${now.getFullYear()}${(now.getMonth()+1).toString().padStart(2, '0')}${now.getDate().toString().padStart(2, '0')}_${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}${now.getSeconds().toString().padStart(2, '0')}`;
-        const fileName = `発注書_${timestamp}.csv`;
+        window.showLoading();
+        try {
+            const res = await fetch('/api/orders/place', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(backorderPayload),
+            });
+            const resData = await res.json();
+            if (!res.ok) throw new Error(resData.message || '発注残の登録に失敗しました。');
+            
+            window.showNotification(resData.message, 'success');
 
-        link.setAttribute("href", url);
-        link.setAttribute("download", fileName);
-        link.style.visibility = 'hidden';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            const now = new Date();
+            const timestamp = `${now.getFullYear()}${(now.getMonth()+1).toString().padStart(2, '0')}${now.getDate().toString().padStart(2, '0')}_${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}${now.getSeconds().toString().padStart(2, '0')}`;
+            const fileName = `発注書_${timestamp}.csv`;
+            
+            link.setAttribute("href", url);
+            link.setAttribute("download", fileName);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        } catch(err) {
+            window.showNotification(err.message, 'error');
+        } finally {
+            window.hideLoading();
+        }
     });
+    // ▲▲▲ 修正ここまで ▲▲▲
 
     outputContainer.addEventListener('click', (e) => {
         if (e.target.classList.contains('remove-order-item-btn')) {

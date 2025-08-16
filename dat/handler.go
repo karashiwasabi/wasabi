@@ -200,6 +200,27 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
+		// ▼▼▼ [修正点] 消込処理を新しいテーブル構造に合わせて修正 ▼▼▼
+		var deliveredItems []model.Backorder
+		for _, rec := range finalRecords {
+			if rec.Flag == 1 { // 納品フラグ
+				deliveredItems = append(deliveredItems, model.Backorder{
+					YjCode:          rec.YjCode,
+					PackageForm:     rec.PackageForm,
+					JanPackInnerQty: rec.JanPackInnerQty,
+					YjUnitName:      rec.YjUnitName,
+					YjQuantity:      rec.YjQuantity,
+				})
+			}
+		}
+
+		if len(deliveredItems) > 0 {
+			if err := db.ReconcileBackorders(conn, deliveredItems); err != nil {
+				log.Printf("WARN: Failed to reconcile backorders: %v", err)
+			}
+		}
+		// ▲▲▲ 修正ここまで ▲▲▲
+
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"message": "Parsed and processed DAT files successfully",

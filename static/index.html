@@ -17,6 +17,7 @@
     <button id="manualInventoryBtn" class="btn">棚卸入力</button>
     <button id="aggregationBtn" class="btn">集計</button>
     <button id="orderBtn" class="btn">発注</button>
+    <button id="backorderBtn" class="btn">発注残</button>
     <button id="deadStockBtn" class="btn">デッドストック</button>
     <button id="masterEditViewBtn" class="btn">マスター</button>
     <button id="settingsBtn" class="btn">設定</button>
@@ -272,6 +273,13 @@
     </div>
     <div id="order-candidates-output">
     </div>
+</div>
+
+<div id="backorder-view" class="hidden">
+    <div class="filter-container">
+        <p class="view-subtitle" style="margin:0;">発注残一覧</p>
+    </div>
+    <div id="backorder-output-container"></div>
 </div>
     
 <input type="file" id="importClientsInput" style="display:none;" accept=".csv">

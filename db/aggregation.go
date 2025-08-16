@@ -12,7 +12,15 @@ import (
 )
 
 // GetStockLedger generates the stock ledger report with the new, simplified calculation logic.
+
 func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.StockLedgerYJGroup, error) {
+	// ▼▼▼ [修正点] 発注残マップ取得関数を変更 ▼▼▼
+	backordersMap, err := GetAllBackordersMap(conn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get backorders for aggregation: %w", err)
+	}
+	// ▲▲▲ 修正ここまで ▲▲▲
+
 	precompTotals, err := GetPreCompoundingTotals(conn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pre-compounding totals for aggregation: %w", err)
@@ -110,11 +118,14 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 			YjUnitName:  units.ResolveName(mastersInYjGroup[0].YjUnitName),
 		}
 
+		// ▼▼▼ [修正点] mastersByPackageKeyのキー生成方法を変更 ▼▼▼
 		mastersByPackageKey := make(map[string][]*model.ProductMaster)
 		for _, m := range mastersInYjGroup {
-			key := fmt.Sprintf("%s|%g|%s", m.PackageForm, m.JanPackInnerQty, m.YjUnitName)
+			// YJコードを含めたユニークなキーを生成
+			key := fmt.Sprintf("%s|%s|%g|%s", m.YjCode, m.PackageForm, m.JanPackInnerQty, m.YjUnitName)
 			mastersByPackageKey[key] = append(mastersByPackageKey[key], m)
 		}
+		// ▲▲▲ 修正ここまで ▲▲▲
 
 		var allPackageLedgers []model.StockLedgerPackageGroup
 		for key, mastersInPackageGroup := range mastersByPackageKey {
@@ -179,13 +190,21 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 				}
 			}
 
+			// ▼▼▼ [修正点] 物理在庫に発注残を加えた有効在庫を計算 ▼▼▼
+			backorderQty := backordersMap[key]
+			effectiveEndingBalance := runningBalance + backorderQty
+			// ▲▲▲ 修正ここまで ▲▲▲
+
 			pkg := model.StockLedgerPackageGroup{
 				PackageKey:      key,
 				StartingBalance: startingBalance,
 				EndingBalance:   runningBalance,
-				Transactions:    transactionsInPeriod,
-				NetChange:       netChange,
-				MaxUsage:        maxUsage,
+				// ▼▼▼ [修正点] 以下の1行を追加 ▼▼▼
+				EffectiveEndingBalance: effectiveEndingBalance,
+				// ▲▲▲ 修正ここまで ▲▲▲
+				Transactions: transactionsInPeriod,
+				NetChange:    netChange,
+				MaxUsage:     maxUsage,
 			}
 
 			// 発注点計算
@@ -198,9 +217,9 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 			pkg.BaseReorderPoint = maxUsage * filters.Coefficient
 			pkg.PrecompoundedTotal = precompTotalForPackage
 			pkg.ReorderPoint = pkg.BaseReorderPoint + pkg.PrecompoundedTotal
-			if endBalanceFloat, ok := pkg.EndingBalance.(float64); ok {
-				pkg.IsReorderNeeded = endBalanceFloat < pkg.ReorderPoint && pkg.MaxUsage > 0
-			}
+			// ▼▼▼ [修正点] 発注要否の判定を effectiveEndingBalance で行う ▼▼▼
+			pkg.IsReorderNeeded = effectiveEndingBalance < pkg.ReorderPoint && pkg.MaxUsage > 0
+			// ▲▲▲ 修正ここまで ▲▲▲
 			if len(mastersInPackageGroup) > 0 {
 				pkg.Masters = mastersInPackageGroup // スライス全体を新しいフィールドに設定する
 			}

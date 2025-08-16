@@ -43,6 +43,32 @@ func GetAggregationHandler(conn *sql.DB) http.HandlerFunc {
 }
 
 
+----- C:\Dev\WASABI\backorder\handler.go -----
+package backorder
+
+import (
+	"database/sql"
+	"encoding/json"
+	"net/http"
+	"wasabi/db"
+)
+
+// GetBackordersHandler は発注残リストを返します。
+func GetBackordersHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// ▼▼▼ [修正点] 呼び出す関数名を変更 ▼▼▼
+		backorders, err := db.GetAllBackordersList(conn)
+		// ▲▲▲ 修正ここまで ▲▲▲
+		if err != nil {
+			http.Error(w, "Failed to get backorder list", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(backorders)
+	}
+}
+
+
 ----- C:\Dev\WASABI\backup\handler.go -----
 package backup
 
@@ -550,6 +576,27 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
+		// ▼▼▼ [修正点] 消込処理を新しいテーブル構造に合わせて修正 ▼▼▼
+		var deliveredItems []model.Backorder
+		for _, rec := range finalRecords {
+			if rec.Flag == 1 { // 納品フラグ
+				deliveredItems = append(deliveredItems, model.Backorder{
+					YjCode:          rec.YjCode,
+					PackageForm:     rec.PackageForm,
+					JanPackInnerQty: rec.JanPackInnerQty,
+					YjUnitName:      rec.YjUnitName,
+					YjQuantity:      rec.YjQuantity,
+				})
+			}
+		}
+
+		if len(deliveredItems) > 0 {
+			if err := db.ReconcileBackorders(conn, deliveredItems); err != nil {
+				log.Printf("WARN: Failed to reconcile backorders: %v", err)
+			}
+		}
+		// ▲▲▲ 修正ここまで ▲▲▲
+
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"message": "Parsed and processed DAT files successfully",
@@ -588,7 +635,15 @@ import (
 )
 
 // GetStockLedger generates the stock ledger report with the new, simplified calculation logic.
+
 func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.StockLedgerYJGroup, error) {
+	// ▼▼▼ [修正点] 発注残マップ取得関数を変更 ▼▼▼
+	backordersMap, err := GetAllBackordersMap(conn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get backorders for aggregation: %w", err)
+	}
+	// ▲▲▲ 修正ここまで ▲▲▲
+
 	precompTotals, err := GetPreCompoundingTotals(conn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pre-compounding totals for aggregation: %w", err)
@@ -686,11 +741,14 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 			YjUnitName:  units.ResolveName(mastersInYjGroup[0].YjUnitName),
 		}
 
+		// ▼▼▼ [修正点] mastersByPackageKeyのキー生成方法を変更 ▼▼▼
 		mastersByPackageKey := make(map[string][]*model.ProductMaster)
 		for _, m := range mastersInYjGroup {
-			key := fmt.Sprintf("%s|%g|%s", m.PackageForm, m.JanPackInnerQty, m.YjUnitName)
+			// YJコードを含めたユニークなキーを生成
+			key := fmt.Sprintf("%s|%s|%g|%s", m.YjCode, m.PackageForm, m.JanPackInnerQty, m.YjUnitName)
 			mastersByPackageKey[key] = append(mastersByPackageKey[key], m)
 		}
+		// ▲▲▲ 修正ここまで ▲▲▲
 
 		var allPackageLedgers []model.StockLedgerPackageGroup
 		for key, mastersInPackageGroup := range mastersByPackageKey {
@@ -755,13 +813,21 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 				}
 			}
 
+			// ▼▼▼ [修正点] 物理在庫に発注残を加えた有効在庫を計算 ▼▼▼
+			backorderQty := backordersMap[key]
+			effectiveEndingBalance := runningBalance + backorderQty
+			// ▲▲▲ 修正ここまで ▲▲▲
+
 			pkg := model.StockLedgerPackageGroup{
 				PackageKey:      key,
 				StartingBalance: startingBalance,
 				EndingBalance:   runningBalance,
-				Transactions:    transactionsInPeriod,
-				NetChange:       netChange,
-				MaxUsage:        maxUsage,
+				// ▼▼▼ [修正点] 以下の1行を追加 ▼▼▼
+				EffectiveEndingBalance: effectiveEndingBalance,
+				// ▲▲▲ 修正ここまで ▲▲▲
+				Transactions: transactionsInPeriod,
+				NetChange:    netChange,
+				MaxUsage:     maxUsage,
 			}
 
 			// 発注点計算
@@ -774,9 +840,9 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 			pkg.BaseReorderPoint = maxUsage * filters.Coefficient
 			pkg.PrecompoundedTotal = precompTotalForPackage
 			pkg.ReorderPoint = pkg.BaseReorderPoint + pkg.PrecompoundedTotal
-			if endBalanceFloat, ok := pkg.EndingBalance.(float64); ok {
-				pkg.IsReorderNeeded = endBalanceFloat < pkg.ReorderPoint && pkg.MaxUsage > 0
-			}
+			// ▼▼▼ [修正点] 発注要否の判定を effectiveEndingBalance で行う ▼▼▼
+			pkg.IsReorderNeeded = effectiveEndingBalance < pkg.ReorderPoint && pkg.MaxUsage > 0
+			// ▲▲▲ 修正ここまで ▲▲▲
 			if len(mastersInPackageGroup) > 0 {
 				pkg.Masters = mastersInPackageGroup // スライス全体を新しいフィールドに設定する
 			}
@@ -836,6 +902,128 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 	})
 
 	return result, nil
+}
+
+
+----- C:\Dev\WASABI\db\backorders.go -----
+package db
+
+import (
+	"database/sql"
+	"fmt"
+	"wasabi/model"
+)
+
+// UpsertBackordersInTx は複数の発注残レコードを登録または更新します。
+func UpsertBackordersInTx(tx *sql.Tx, backorders []model.Backorder) error {
+	const q = `
+		INSERT INTO backorders (yj_code, package_form, jan_pack_inner_qty, yj_unit_name, order_date, yj_quantity, product_name)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(yj_code, package_form, jan_pack_inner_qty, yj_unit_name) DO UPDATE SET
+			yj_quantity = yj_quantity + excluded.yj_quantity,
+			order_date = excluded.order_date
+	`
+	stmt, err := tx.Prepare(q)
+	if err != nil {
+		return fmt.Errorf("failed to prepare backorder upsert statement: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, bo := range backorders {
+		_, err := stmt.Exec(bo.YjCode, bo.PackageForm, bo.JanPackInnerQty, bo.YjUnitName, bo.OrderDate, bo.YjQuantity, bo.ProductName)
+		if err != nil {
+			return fmt.Errorf("failed to execute backorder upsert for yj %s: %w", bo.YjCode, err)
+		}
+	}
+	return nil
+}
+
+// ReconcileBackorders は納品データに基づいて発注残を消し込みます。
+func ReconcileBackorders(conn *sql.DB, deliveredItems []model.Backorder) error {
+	tx, err := conn.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction for reconciliation: %w", err)
+	}
+	defer tx.Rollback()
+
+	for _, item := range deliveredItems {
+		var currentBackorderQty float64
+		err := tx.QueryRow(`
+			SELECT yj_quantity FROM backorders 
+			WHERE yj_code = ? AND package_form = ? AND jan_pack_inner_qty = ? AND yj_unit_name = ?`,
+			item.YjCode, item.PackageForm, item.JanPackInnerQty, item.YjUnitName,
+		).Scan(&currentBackorderQty)
+
+		if err != nil {
+			if err == sql.ErrNoRows {
+				continue // 発注残がなければスキップ
+			}
+			return fmt.Errorf("failed to query backorder for yj %s: %w", item.YjCode, err)
+		}
+
+		newQty := currentBackorderQty - item.YjQuantity
+		if newQty <= 0 {
+			_, err := tx.Exec(`
+				DELETE FROM backorders 
+				WHERE yj_code = ? AND package_form = ? AND jan_pack_inner_qty = ? AND yj_unit_name = ?`,
+				item.YjCode, item.PackageForm, item.JanPackInnerQty, item.YjUnitName,
+			)
+			if err != nil {
+				return fmt.Errorf("failed to delete completed backorder for yj %s: %w", item.YjCode, err)
+			}
+		} else {
+			_, err := tx.Exec(`
+				UPDATE backorders SET yj_quantity = ? 
+				WHERE yj_code = ? AND package_form = ? AND jan_pack_inner_qty = ? AND yj_unit_name = ?`,
+				newQty, item.YjCode, item.PackageForm, item.JanPackInnerQty, item.YjUnitName,
+			)
+			if err != nil {
+				return fmt.Errorf("failed to update backorder for yj %s: %w", item.YjCode, err)
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+// GetAllBackordersMap は全ての発注残を、集計で使いやすいキーのマップ形式で取得します。
+func GetAllBackordersMap(conn *sql.DB) (map[string]float64, error) {
+	rows, err := conn.Query("SELECT yj_code, package_form, jan_pack_inner_qty, yj_unit_name, yj_quantity FROM backorders")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query all backorders: %w", err)
+	}
+	defer rows.Close()
+
+	backordersMap := make(map[string]float64)
+	for rows.Next() {
+		var bo model.Backorder
+		var qty float64
+		if err := rows.Scan(&bo.YjCode, &bo.PackageForm, &bo.JanPackInnerQty, &bo.YjUnitName, &qty); err != nil {
+			return nil, err
+		}
+		// 集計ロジックで使うための文字列キーをここで生成
+		key := fmt.Sprintf("%s|%s|%g|%s", bo.YjCode, bo.PackageForm, bo.JanPackInnerQty, bo.YjUnitName)
+		backordersMap[key] = qty
+	}
+	return backordersMap, nil
+}
+
+// GetAllBackordersList は全ての発注残をリスト形式で取得します。
+func GetAllBackordersList(conn *sql.DB) ([]model.Backorder, error) {
+	rows, err := conn.Query("SELECT yj_code, package_form, jan_pack_inner_qty, yj_unit_name, order_date, yj_quantity, product_name FROM backorders ORDER BY order_date, product_name")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query all backorders list: %w", err)
+	}
+	defer rows.Close()
+
+	var backorders []model.Backorder
+	for rows.Next() {
+		var bo model.Backorder
+		if err := rows.Scan(&bo.YjCode, &bo.PackageForm, &bo.JanPackInnerQty, &bo.YjUnitName, &bo.OrderDate, &bo.YjQuantity, &bo.ProductName); err != nil {
+			return nil, err
+		}
+		backorders = append(backorders, bo)
+	}
+	return backorders, nil
 }
 
 
@@ -3472,18 +3660,21 @@ type StockLedgerYJGroup struct {
 	TotalPrecompounded    float64                   `json:"totalPrecompounded"`
 }
 type StockLedgerPackageGroup struct {
-	PackageKey         string              `json:"packageKey"`
-	JanUnitName        string              `json:"janUnitName"`
-	StartingBalance    interface{}         `json:"startingBalance"`
-	Transactions       []LedgerTransaction `json:"transactions"`
-	NetChange          float64             `json:"netChange"`
-	EndingBalance      interface{}         `json:"endingBalance"`
-	MaxUsage           float64             `json:"maxUsage"`
-	ReorderPoint       float64             `json:"reorderPoint"`
-	IsReorderNeeded    bool                `json:"isReorderNeeded"`
-	Masters            []*ProductMaster    `json:"masters"` // masterからmastersに変更し、スライス型にする
-	BaseReorderPoint   float64             `json:"baseReorderPoint"`
-	PrecompoundedTotal float64             `json:"precompoundedTotal"`
+	PackageKey      string              `json:"packageKey"`
+	JanUnitName     string              `json:"janUnitName"`
+	StartingBalance interface{}         `json:"startingBalance"`
+	Transactions    []LedgerTransaction `json:"transactions"`
+	NetChange       float64             `json:"netChange"`
+	EndingBalance   interface{}         `json:"endingBalance"`
+	// ▼▼▼ [修正点] 以下の1行を追加 ▼▼▼
+	EffectiveEndingBalance float64 `json:"effectiveEndingBalance"`
+	// ▲▲▲ 修正ここまで ▲▲▲
+	MaxUsage           float64          `json:"maxUsage"`
+	ReorderPoint       float64          `json:"reorderPoint"`
+	IsReorderNeeded    bool             `json:"isReorderNeeded"`
+	Masters            []*ProductMaster `json:"masters"` // masterからmastersに変更し、スライス型にする
+	BaseReorderPoint   float64          `json:"baseReorderPoint"`
+	PrecompoundedTotal float64          `json:"precompoundedTotal"`
 }
 type LedgerTransaction struct {
 	TransactionRecord
@@ -3554,6 +3745,20 @@ type Wholesaler struct {
 	Name string `json:"name"`
 }
 
+// ▼▼▼ [修正点] Backorder構造体を新しいテーブル定義に合わせる ▼▼▼
+// Backorder は発注残レコードの構造体です。
+type Backorder struct {
+	YjCode          string  `json:"yjCode"`
+	PackageForm     string  `json:"packageForm"`
+	JanPackInnerQty float64 `json:"janPackInnerQty"`
+	YjUnitName      string  `json:"yjUnitName"`
+	OrderDate       string  `json:"orderDate"`
+	YjQuantity      float64 `json:"yjQuantity"`
+	ProductName     string  `json:"productName"`
+}
+
+// ▲▲▲ 修正ここまで ▲▲▲
+
 
 ----- C:\Dev\WASABI\orders\handlee.go -----
 package orders
@@ -3563,6 +3768,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 	"wasabi/db"
 	"wasabi/model"
 )
@@ -3628,6 +3834,47 @@ func GenerateOrderCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 		json.NewEncoder(w).Encode(response)
 	}
 }
+
+// ▼▼▼ [修正点] PlaceOrderHandlerを新しいテーブル構造に合わせて修正 ▼▼▼
+// PlaceOrderHandler は発注内容を受け取り、発注残テーブルに登録します。
+func PlaceOrderHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var payload []model.Backorder
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		tx, err := conn.Begin()
+		if err != nil {
+			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback()
+
+		today := time.Now().Format("20060102")
+		for i := range payload {
+			if payload[i].OrderDate == "" {
+				payload[i].OrderDate = today
+			}
+		}
+
+		if err := db.UpsertBackordersInTx(tx, payload); err != nil {
+			http.Error(w, "Failed to save backorders", http.StatusInternalServerError)
+			return
+		}
+
+		if err := tx.Commit(); err != nil {
+			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"message": "発注内容を発注残として登録しました。"})
+	}
+}
+
+// ▲▲▲ 修正ここまで ▲▲▲
 
 
 ----- C:\Dev\WASABI\parsers\dat_parser.go -----
@@ -4372,16 +4619,19 @@ function renderResults() {
             if (pkg.precompoundedTotal > 0) {
                 pkgReorderPointText = `${formatBalance(pkg.baseReorderPoint)} + 予${formatBalance(pkg.precompoundedTotal)} = ${formatBalance(pkg.reorderPoint)}`;
             }
+            // ▼▼▼ [修正点] ヘッダー表示に「有効在庫」を追加 ▼▼▼
             html += `
                 <div class="agg-pkg-header" ${pkg.isReorderNeeded ? 'style="background-color: #ff0000ff;"' : ''}>
                     <span>包装: ${pkg.packageKey}</span>
                     <span class="balance-info">
-                        在庫: ${formatBalance(pkg.endingBalance)} |
+                        物理在庫: ${formatBalance(pkg.endingBalance)} | 
+                        有効在庫: ${formatBalance(pkg.effectiveEndingBalance)} | 
                         発注点: ${pkgReorderPointText} |  
                         変動: ${formatBalance(pkg.netChange)}
                     </span>
                 </div>
                 <div id="${tableId}-container"></div>`;
+            // ▲▲▲ 修正ここまで ▲▲▲
         });
     });
     outputContainer.innerHTML = html;
@@ -4484,6 +4734,9 @@ import { initOrders } from './orders.js';
 // ▼▼▼ [修正点] 以下の1行を新しく追加 ▼▼▼
 import { initJcshmsUpdate } from './jcshms_update.js';
 // ▲▲▲ 修正ここまで ▲▲
+// ▼▼▼ [修正点] 以下の1行を新しく追加 ▼▼▼
+import { initBackorderView } from './backorder.js';
+// ▲▲▲ 修正ここまで ▲▲▲
 
 // (Global UI Elements and helper functions are unchanged)
 window.showLoading = () => document.getElementById('loading-overlay').classList.remove('hidden');
@@ -4522,6 +4775,9 @@ document.addEventListener('DOMContentLoaded', async () => { // ★ asyncキー�
     const deadstockOutputContainer = document.getElementById('deadstock-output-container'); // ▼▼▼ [修正点] 追加 ▼▼▼
     const precompBtn = document.getElementById('precompBtn');
     const orderBtn = document.getElementById('orderBtn'); // ▼▼▼ この行を追加 ▼▼▼
+    // ▼▼▼ [修正点] 以下の1行を新しく追加 ▼▼▼
+    const backorderBtn = document.getElementById('backorderBtn');
+    // ▲▲▲ 修正ここまで ▲▲▲
 
     // --- Initialize all modules ---
     initInOut();
@@ -4541,6 +4797,9 @@ document.addEventListener('DOMContentLoaded', async () => { // ★ asyncキー�
     initOrders(); // ▼▼▼ この行を追加 ▼▼▼
     // ▼▼▼ [修正点] 以下の1行を新しく追加 ▼▼▼
     initJcshmsUpdate();
+    // ▲▲▲ 修正ここまで ▲▲▲
+    // ▼▼▼ [修正点] 以下の1行を新しく追加 ▼▼▼
+    initBackorderView();
     // ▲▲▲ 修正ここまで ▲▲▲
 
     // (View Switching Logic and Event Listeners are unchanged)
@@ -4593,10 +4852,80 @@ document.addEventListener('DOMContentLoaded', async () => { // ★ asyncキー�
     precompBtn.addEventListener('click', () => showView('precomp-view'));
     orderBtn.addEventListener('click', () => showView('order-view')); // ▼▼▼ この行を追加 ▼▼▼
     // ▲▲▲ 修正ここまで ▲▲▲
+
+    // ▼▼▼ [修正点] 以下の1ブロックを新しく追加 ▼▼▼
+    backorderBtn.addEventListener('click', () => {
+        showView('backorder-view');
+        // viewが表示されるイベントを発火させてデータを読み込ませる
+        document.getElementById('backorder-view').dispatchEvent(new Event('show'));
+    });
+    // ▲▲▲ 修正ここまで ▲▲▲
+
     // --- Initial State ---
     showView('in-out-view');
     resetInOutView();
 });
+
+----- C:\Dev\WASABI\static\js\backorder.js -----
+let view, outputContainer;
+
+function renderBackorders(data) {
+    if (!data || data.length === 0) {
+        outputContainer.innerHTML = "<p>現在、発注残はありません。</p>";
+        return;
+    }
+
+    let html = `
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th style="width: 10%;">発注日</th>
+                    <th style="width: 10%;">YJコード</th>
+                    <th style="width: 35%;">製品名</th>
+                    <th style="width: 35%;">包装仕様</th>
+                    <th style="width: 10%;">発注残数量</th>
+                </tr>
+            </thead>
+            <tbody>
+    `;
+
+    data.forEach(bo => {
+        const pkgSpec = `${bo.packageForm} ${bo.janPackInnerQty}${bo.yjUnitName}`;
+        html += `
+            <tr>
+                <td>${bo.orderDate}</td>
+                <td>${bo.yjCode}</td>
+                <td class="left">${bo.productName}</td>
+                <td class="left">${pkgSpec}</td>
+                <td class="right">${bo.yjQuantity.toFixed(2)}</td>
+            </tr>
+        `;
+    });
+
+    html += `</tbody></table>`;
+    outputContainer.innerHTML = html;
+}
+
+async function loadAndRenderBackorders() {
+    outputContainer.innerHTML = '<p>読み込み中...</p>';
+    try {
+        const res = await fetch('/api/backorders');
+        if (!res.ok) throw new Error('発注残リストの読み込みに失敗しました。');
+        const data = await res.json();
+        renderBackorders(data);
+    } catch (err) {
+        outputContainer.innerHTML = `<p style="color:red;">${err.message}</p>`;
+    }
+}
+
+export function initBackorderView() {
+    view = document.getElementById('backorder-view');
+    if (!view) return;
+    outputContainer = document.getElementById('backorder-output-container');
+    
+    // viewが表示されるたびに最新のデータを読み込む
+    view.addEventListener('show', loadAndRenderBackorders);
+}
 
 ----- C:\Dev\WASABI\static\js\backup.js -----
 /**
@@ -6077,16 +6406,13 @@ function formatBalance(balance) {
     return balance;
 }
 
-// ★★★ この関数がメインの修正箇所です ★★★
 function renderOrderCandidates(data, container, wholesalers) {
     if (!data || data.length === 0) {
         container.innerHTML = "<p>発注が必要な品目はありませんでした。</p>";
         return;
     }
 
-    // 卸業者リストからプルダウンの <option> タグを事前に生成
     const wholesalerOptionsHtml = wholesalers.map(w => `<option value="${w.code}">${w.name}</option>`).join('');
-
     let html = '';
     data.forEach(yjGroup => {
         const yjShortfall = yjGroup.totalReorderPoint - (yjGroup.endingBalance || 0);
@@ -6115,7 +6441,6 @@ function renderOrderCandidates(data, container, wholesalers) {
                 </thead>
                 <tbody>
         `;
-
         yjGroup.packageLedgers.forEach(pkg => {
             if (pkg.masters && pkg.masters.length > 0) {
                 pkg.masters.forEach(master => {
@@ -6123,9 +6448,7 @@ function renderOrderCandidates(data, container, wholesalers) {
                     if (pkgShortfall > 0) {
                         const recommendedOrder = master.yjPackUnitQty > 0 ? Math.ceil(pkgShortfall / master.yjPackUnitQty) : 0;
                         
-                        // 各行のプルダウンを生成
                         let rowWholesalerOptions = `<option value="">--- 選択 ---</option>` + wholesalerOptionsHtml;
-                        // デフォルト卸が設定されていれば、それを選択状態にする
                         if (master.supplierWholesale) {
                             rowWholesalerOptions = rowWholesalerOptions.replace(
                                 `value="${master.supplierWholesale}"`, 
@@ -6133,8 +6456,14 @@ function renderOrderCandidates(data, container, wholesalers) {
                             );
                         }
                         
+                        // ▼▼▼ [修正点] 発注残登録で使う情報をdata属性に埋め込む ▼▼▼
                         html += `
-                            <tr data-jan-code="${master.productCode}">
+                            <tr data-jan-code="${master.productCode}" 
+                                data-yj-code="${yjGroup.yjCode}"
+                                data-product-name="${master.productName}"
+                                data-package-form="${master.packageForm}"
+                                data-jan-pack-inner-qty="${master.janPackInnerQty}"
+                                data-yj-unit-name="${master.yjUnitName}">
                                 <td class="left">${master.productName}</td>
                                 <td class="left">${master.makerName || ''}</td>
                                 <td class="left">${master.packageSpec}</td>
@@ -6144,6 +6473,7 @@ function renderOrderCandidates(data, container, wholesalers) {
                                 <td><button class="remove-order-item-btn btn">除外</button></td>
                             </tr>
                         `;
+                        // ▲▲▲ 修正ここまで ▲▲▲
                     }
                 });
             }
@@ -6189,7 +6519,6 @@ export function initOrders() {
             }
             const data = await res.json();
             
-            // 卸業者リストを引数で渡すように変更
             renderOrderCandidates(data.candidates, outputContainer, data.wholesalers || []);
 
         } catch (err) {
@@ -6199,54 +6528,80 @@ export function initOrders() {
         }
     });
     
-    // ★★★ CSV作成ロジックを修正 ★★★
-    createCsvBtn.addEventListener('click', () => {
+    // ▼▼▼ [修正点] createCsvBtnのイベントリスナーを全面的に書き換え ▼▼▼
+    createCsvBtn.addEventListener('click', async () => {
         const rows = outputContainer.querySelectorAll('tbody tr');
         if (rows.length === 0) {
             window.showNotification('発注する品目がありません。', 'error');
             return;
         }
 
+        const backorderPayload = [];
         let csvContent = "";
         let hasItemsToOrder = false;
+
         rows.forEach(row => {
-            const quantity = row.querySelector('.order-quantity-input').value;
-            const wholesalerCode = row.querySelector('.wholesaler-select').value;
+            const quantityInput = row.querySelector('.order-quantity-input');
+            const quantity = parseInt(quantityInput.value, 10);
             
-            if (parseInt(quantity, 10) > 0) {
-                if (!wholesalerCode) {
-                    // 卸が未選択の行はスキップ（もしくはエラー表示）
-                    return; 
-                }
+            if (quantity > 0) {
                 hasItemsToOrder = true;
                 const janCode = row.dataset.janCode;
                 const productName = row.cells[0].textContent;
+                const wholesalerCode = row.querySelector('.wholesaler-select').value;
                 
-                // CSVフォーマット: JAN, 製品名, 発注数, 卸コード
                 const csvRow = [janCode, `"${productName}"`, quantity, wholesalerCode].join(',');
                 csvContent += csvRow + "\r\n";
+
+                const yjUnitQty = parseFloat(row.cells[4].textContent) || 1;
+                backorderPayload.push({
+                    yjCode: row.dataset.yjCode,
+                    packageForm: row.dataset.packageForm,
+                    janPackInnerQty: parseFloat(row.dataset.janPackInnerQty),
+                    yjUnitName: row.dataset.yjUnitName,
+                    yjQuantity: quantity * yjUnitQty,
+                    productName: row.dataset.productName,
+                });
             }
         });
 
         if (!hasItemsToOrder) {
-            window.showNotification('発注数が1以上で、卸業者が選択されている品目がありません。', 'error');
+            window.showNotification('発注数が1以上の品目がありません。', 'error');
             return;
         }
 
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement("a");
-        const url = URL.createObjectURL(blob);
-        const now = new Date();
-        const timestamp = `${now.getFullYear()}${(now.getMonth()+1).toString().padStart(2, '0')}${now.getDate().toString().padStart(2, '0')}_${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}${now.getSeconds().toString().padStart(2, '0')}`;
-        const fileName = `発注書_${timestamp}.csv`;
+        window.showLoading();
+        try {
+            const res = await fetch('/api/orders/place', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(backorderPayload),
+            });
+            const resData = await res.json();
+            if (!res.ok) throw new Error(resData.message || '発注残の登録に失敗しました。');
+            
+            window.showNotification(resData.message, 'success');
 
-        link.setAttribute("href", url);
-        link.setAttribute("download", fileName);
-        link.style.visibility = 'hidden';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            const now = new Date();
+            const timestamp = `${now.getFullYear()}${(now.getMonth()+1).toString().padStart(2, '0')}${now.getDate().toString().padStart(2, '0')}_${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}${now.getSeconds().toString().padStart(2, '0')}`;
+            const fileName = `発注書_${timestamp}.csv`;
+            
+            link.setAttribute("href", url);
+            link.setAttribute("download", fileName);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        } catch(err) {
+            window.showNotification(err.message, 'error');
+        } finally {
+            window.hideLoading();
+        }
     });
+    // ▲▲▲ 修正ここまで ▲▲▲
 
     outputContainer.addEventListener('click', (e) => {
         if (e.target.classList.contains('remove-order-item-btn')) {
@@ -6731,6 +7086,7 @@ export function initUsageUpload() {
     <button id="manualInventoryBtn" class="btn">棚卸入力</button>
     <button id="aggregationBtn" class="btn">集計</button>
     <button id="orderBtn" class="btn">発注</button>
+    <button id="backorderBtn" class="btn">発注残</button>
     <button id="deadStockBtn" class="btn">デッドストック</button>
     <button id="masterEditViewBtn" class="btn">マスター</button>
     <button id="settingsBtn" class="btn">設定</button>
@@ -6986,6 +7342,13 @@ export function initUsageUpload() {
     </div>
     <div id="order-candidates-output">
     </div>
+</div>
+
+<div id="backorder-view" class="hidden">
+    <div class="filter-container">
+        <p class="view-subtitle" style="margin:0;">発注残一覧</p>
+    </div>
+    <div id="backorder-output-container"></div>
 </div>
     
 <input type="file" id="importClientsInput" style="display:none;" accept=".csv">
@@ -7453,6 +7816,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"wasabi/aggregation"
+	"wasabi/backorder" // backorderパッケージをインポートリストに追加
 	"wasabi/backup"
 	"wasabi/config" // settingsの前に移動
 	"wasabi/dat"
@@ -7535,6 +7899,10 @@ func main() {
 	mux.HandleFunc("/api/precomp/load", precomp.LoadPrecompHandler(conn))       // 予製データの呼び出し
 	mux.HandleFunc("/api/precomp/clear", precomp.ClearPrecompHandler(conn))
 	mux.HandleFunc("/api/orders/candidates", orders.GenerateOrderCandidatesHandler(conn))
+	// ▼▼▼ [修正点] 以下の2行を新しく追加 ▼▼▼
+	mux.HandleFunc("/api/orders/place", orders.PlaceOrderHandler(conn))
+	mux.HandleFunc("/api/backorders", backorder.GetBackordersHandler(conn))
+	// ▲▲▲ 修正ここまで ▲▲▲
 	// ▼▼▼ [修正点] 以下の1行を新しく追加 ▼▼▼
 	mux.HandleFunc("/api/masters/reload_jcshms", loader.ReloadJcshmsHandler(conn))
 	// ▲▲▲ 修正ここまで ▲▲▲
@@ -7715,5 +8083,21 @@ CREATE INDEX IF NOT EXISTS idx_pre_compounding_product_code ON pre_compounding_r
 CREATE TABLE IF NOT EXISTS wholesalers (
   wholesaler_code TEXT PRIMARY KEY,
   wholesaler_name TEXT NOT NULL
+);
+
+-- 発注残管理テーブル (改善版)
+CREATE TABLE IF NOT EXISTS backorders (
+  -- ▼ 複合主キー ▼
+  yj_code TEXT NOT NULL,
+  package_form TEXT NOT NULL,
+  jan_pack_inner_qty REAL NOT NULL,
+  yj_unit_name TEXT NOT NULL,
+  -- ▲ 複合主キーここまで ▲
+
+  order_date TEXT NOT NULL,
+  yj_quantity REAL NOT NULL,
+  product_name TEXT, -- 表示用
+
+  PRIMARY KEY (yj_code, package_form, jan_pack_inner_qty, yj_unit_name)
 );
 

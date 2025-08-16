@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 	"wasabi/db"
 	"wasabi/model"
 )
@@ -70,3 +71,44 @@ func GenerateOrderCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 		json.NewEncoder(w).Encode(response)
 	}
 }
+
+// ▼▼▼ [修正点] PlaceOrderHandlerを新しいテーブル構造に合わせて修正 ▼▼▼
+// PlaceOrderHandler は発注内容を受け取り、発注残テーブルに登録します。
+func PlaceOrderHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var payload []model.Backorder
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		tx, err := conn.Begin()
+		if err != nil {
+			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback()
+
+		today := time.Now().Format("20060102")
+		for i := range payload {
+			if payload[i].OrderDate == "" {
+				payload[i].OrderDate = today
+			}
+		}
+
+		if err := db.UpsertBackordersInTx(tx, payload); err != nil {
+			http.Error(w, "Failed to save backorders", http.StatusInternalServerError)
+			return
+		}
+
+		if err := tx.Commit(); err != nil {
+			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"message": "発注内容を発注残として登録しました。"})
+	}
+}
+
+// ▲▲▲ 修正ここまで ▲▲▲

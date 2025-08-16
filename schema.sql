@@ -144,3 +144,19 @@ CREATE TABLE IF NOT EXISTS wholesalers (
   wholesaler_code TEXT PRIMARY KEY,
   wholesaler_name TEXT NOT NULL
 );
+
+-- 発注残管理テーブル (改善版)
+CREATE TABLE IF NOT EXISTS backorders (
+  -- ▼ 複合主キー ▼
+  yj_code TEXT NOT NULL,
+  package_form TEXT NOT NULL,
+  jan_pack_inner_qty REAL NOT NULL,
+  yj_unit_name TEXT NOT NULL,
+  -- ▲ 複合主キーここまで ▲
+
+  order_date TEXT NOT NULL,
+  yj_quantity REAL NOT NULL,
+  product_name TEXT, -- 表示用
+
+  PRIMARY KEY (yj_code, package_form, jan_pack_inner_qty, yj_unit_name)
+);
