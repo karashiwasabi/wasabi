@@ -1,10 +1,8 @@
 // C:\Dev\WASABI\model\types.go
-
 package model
 
 import "database/sql"
 
-// (Struct definitions up to DeadStockFilters are unchanged)
 type ProductMaster struct {
 	ProductCode         string  `json:"productCode"`
 	YjCode              string  `json:"yjCode"`
@@ -156,6 +154,13 @@ type AggregationFilters struct {
 	DosageForm  string
 	Coefficient float64
 }
+
+type ValuationFilters struct {
+	Date                string
+	KanaName            string // 製品名・カナ名による絞り込み
+	UsageClassification string // 剤型による絞り込み
+}
+
 type StockLedgerYJGroup struct {
 	YjCode                string                    `json:"yjCode"`
 	ProductName           string                    `json:"productName"`
@@ -231,16 +236,12 @@ type DeadStockRecord struct {
 	ExpiryDate       string  `json:"expiryDate"`
 	LotNumber        string  `json:"lotNumber"`
 }
-
-// ▼▼▼ [修正点] DeadStockFiltersにCoefficientを追加 ▼▼▼
 type DeadStockFilters struct {
 	StartDate        string
 	EndDate          string
 	ExcludeZeroStock bool
 	Coefficient      float64
 }
-
-// ▲▲▲ 修正ここまで ▲▲▲
 type PreCompoundingRecord struct {
 	ID            int     `json:"id"`
 	PatientNumber string  `json:"patientNumber"`
@@ -248,15 +249,10 @@ type PreCompoundingRecord struct {
 	Quantity      float64 `json:"quantity"` // YJ Quantity
 	CreatedAt     string  `json:"createdAt"`
 }
-
-// Wholesaler は卸業者マスターの構造体です。
 type Wholesaler struct {
 	Code string `json:"code"`
 	Name string `json:"name"`
 }
-
-// ▼▼▼ [修正点] Backorder構造体を新しいテーブル定義に合わせる ▼▼▼
-// Backorder は発注残レコードの構造体です。
 type Backorder struct {
 	YjCode          string  `json:"yjCode"`
 	PackageForm     string  `json:"packageForm"`
@@ -266,5 +262,3 @@ type Backorder struct {
 	YjQuantity      float64 `json:"yjQuantity"`
 	ProductName     string  `json:"productName"`
 }
-
-// ▲▲▲ 修正ここまで ▲▲▲

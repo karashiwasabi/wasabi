@@ -2,7 +2,11 @@
 body { font-family: sans-serif; padding: 10px; background-color: #f4f4f4; }
 .hidden { display: none !important; }
 
-/* ▼▼▼ [修正点] ヘッダーを画面上部に固定するためのスタイルを追加 ▼▼▼ */
+/* モーダル表示中にbodyのスクロールを禁止する */
+.modal-open {
+    overflow: hidden;
+}
+
 header {
     display: flex;
     flex-wrap: wrap;
@@ -12,13 +16,10 @@ header {
     border-bottom: 1px solid #ccc;
     margin-bottom: 5px;
     background-color: #ffffff;
-    
-    /* ↓↓↓ ここから3行を追加 ↓↓↓ */
     position: sticky;
     top: 0;
     z-index: 100;
 }
-/* ▲▲▲ 修正ここまで ▲▲▲ */
 
 .btn {
     font-size: 11px;
@@ -66,6 +67,13 @@ th { text-align: center; background-color: #f0f0f0; }
 .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
 .close-button { font-size: 24px; border: none; background: none; cursor: pointer; }
 
+/* ▼▼▼ [修正点] 以下の .modal-body スタイルを丸ごと追加 ▼▼▼ */
+.modal-body {
+    flex-grow: 1; /* 親要素(.modal-content)の高さに合わせて伸縮 */
+    overflow-y: auto; /* 内容がはみ出したら縦スクロールバーを表示 */
+}
+/* ▲▲▲ 修正ここまで ▲▲▲ */
+
 .view-title, .view-subtitle, .modal-title {
     font-size: 1em;
     font-weight: bold;
@@ -80,59 +88,4 @@ th { text-align: center; background-color: #f0f0f0; }
 
 @media print {
   /* (印刷設定は変更ありません) */
-  @page {
-    size: A4 landscape;
-    margin: 15mm;
-  }
-  header, .filter-container, .buttons-group, .btn, .inout-details-header, .inout-header-controls, #loading-overlay, #notification-box, .modal-overlay, .entry-controls {
-    display: none !important;
-  }
-  body {
-    font-size: 8pt;
-    background: #fff;
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
-  }
-  main > div[id$="-view"] {
-    display: none;
-  }
-  main > div[id$="-view"]:not(.hidden) {
-    display: block;
-    border: none !important;
-    padding: 0 !important;
-    margin: 0 !important;
-  }
-  main > div[id$="-view"]:not(.hidden) > *:not(#aggregation-output-container):not(#deadstock-output-container) {
-      display: none;
-  }
-  #aggregation-output-container, #deadstock-output-container {
-    display: block !important;
-    font-size: 8pt;
-  }
-  table {
-      width: 100%;
-      border-collapse: collapse;
-      page-break-inside: auto;
-  }
-  tr {
-      page-break-inside: avoid;
-      page-break-after: auto;
-  }
-  th, td {
-      border: 1px solid #ddd;
-      padding: 2px;
-  }
-  th {
-      background-color: #f2f2f2 !important;
-  }
-  .agg-yj-header, .agg-pkg-header {
-      background-color: #e9ecef !important;
-      border: 1px solid #ccc;
-      color: #000 !important;
-      page-break-after: avoid;
-  }
-  a {
-      text-decoration: none;
-      color: #000;
-  }
 }

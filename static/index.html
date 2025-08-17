@@ -71,35 +71,6 @@
     </div>
 </div>
 
-<div id="aggregation-view" class="hidden">
-    <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
-        <div class="field-group"><label for="startDate">開始日</label><input type="date" id="startDate"></div>
-        <div class="field-group"><label for="endDate">終了日</label><input type="date" id="endDate"></div>
-        <div class="field-group"><label for="kanaName">カナ名</label><input type="text" id="kanaName" placeholder="（部分一致）"></div>
-        <div class="field-group"><label for="dosageForm">剤型</label><input type="text" id="dosageForm" placeholder="（部分一致）"></div>
-        <div class="field-group"><label for="reorder-coefficient">発注点係数</label><input type="number" id="reorder-coefficient" value="1.5" step="0.1" style="width: 80px;"></div>
-        <div class="field-group">
-            <label>薬の種類</label>
-            <div style="display: flex; flex-wrap: wrap; gap: 5px 10px;">
-                <label><input type="checkbox" name="drugType" value="poison">毒</label>
-                <label><input type="checkbox" name="drugType" value="deleterious">劇</label>
-                <label><input type="checkbox" name="drugType" value="narcotic">麻</label>
-                <label><input type="checkbox" name="drugType" value="psychotropic1">向1</label>
-                <label><input type="checkbox" name="drugType" value="psychotropic2">向2</label>
-                <label><input type="checkbox" name="drugType" value="psychotropic3">向3</label>
-                <label><input type="checkbox" name="drugType" value="stimulant">覚</label>
-                <label><input type="checkbox" name="drugType" value="stimulant_raw">覚原</label>
-            </div>
-        </div>
-        <div class="field-group"><label><input type="checkbox" id="reorder-needed-filter"> 不足品のみ</label></div>
-        <div class="buttons-group" style="margin-left: auto;">
-            <button id="run-aggregation-btn" class="btn">集計実行</button>
-            <button id="print-aggregation-btn" class="btn">印刷</button>
-        </div>
-    </div>
-    <div id="aggregation-output-container"></div>
-</div>
-
 <div id="search-modal" class="modal-overlay hidden">
     <div class="modal-content">
         <div class="modal-header">
@@ -283,21 +254,87 @@
     <div id="backorder-output-container"></div>
 </div>
 
-<div id="valuation-view" class="hidden">
-    <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
-        <div class="field-group">
-            <label for="valuation-date">評価基準日</label>
-            <input type="date" id="valuation-date">
+    <div id="aggregation-view" class="hidden">
+        <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
+            <div class="field-group"><label for="startDate">開始日</label><input type="date" id="startDate"></div>
+            <div class="field-group"><label for="endDate">終了日</label><input type="date" id="endDate"></div>
+            
+            <div class="field-group">
+                <label for="agg-kanaName">製品名/カナ名</label>
+                <input type="text" id="agg-kanaName" placeholder="（部分一致）">
+            </div>
+
+            <div class="field-group">
+                <label for="agg-dosageForm">剤型</label>
+                <select id="agg-dosageForm">
+                    <option value="all">すべて</option>
+                    <option value="内">内</option>
+                    <option value="外">外</option>
+                    <option value="歯">歯</option>
+                    <option value="注">注</option>
+                    <option value="機">機</option>
+                    <option value="他">他</option>
+                </select>
+            </div>
+
+            <div class="field-group"><label for="reorder-coefficient">発注点係数</label><input type="number" id="reorder-coefficient" value="1.5" step="0.1" style="width: 80px;"></div>
+            <div class="field-group">
+                <label>薬の種類</label>
+                <div style="display: flex; flex-wrap: wrap; gap: 5px 10px;">
+                    <label><input type="checkbox" name="drugType" value="poison">毒</label>
+                    <label><input type="checkbox" name="drugType" value="deleterious">劇</label>
+                    <label><input type="checkbox" name="drugType" value="narcotic">麻</label>
+                    <label><input type="checkbox" name="drugType" value="psychotropic1">向1</label>
+                    <label><input type="checkbox" name="drugType" value="psychotropic2">向2</label>
+                    <label><input type="checkbox" name="drugType" value="psychotropic3">向3</label>
+                    <label><input type="checkbox" name="drugType" value="stimulant">覚</label>
+                    <label><input type="checkbox" name="drugType" value="stimulant_raw">覚原</label>
+                </div>
+            </div>
+            <div class="field-group"><label><input type="checkbox" id="reorder-needed-filter"> 不足品のみ</label></div>
+            <div class="buttons-group" style="margin-left: auto;">
+                <button id="run-aggregation-btn" class="btn">集計実行</button>
+                <button id="print-aggregation-btn" class="btn">印刷</button>
+            </div>
         </div>
-        <div class="buttons-group">
-            <button id="run-valuation-btn" class="btn">計算実行</button>
+        <div id="aggregation-output-container"></div>
+    </div>
+
+    <div id="valuation-view" class="hidden">
+        <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
+            <div class="field-group">
+                <label for="valuation-date">評価基準日</label>
+                <input type="date" id="valuation-date">
+            </div>
+
+            <div class="field-group">
+                <label for="val-kanaName">製品名/カナ名</label>
+                <input type="text" id="val-kanaName" placeholder="（部分一致）">
+            </div>
+
+            <div class="field-group">
+                <label for="val-dosageForm">剤型</label>
+                <select id="val-dosageForm">
+                    <option value="all">すべて</option>
+                    <option value="内">内</option>
+                    <option value="外">外</option>
+                    <option value="歯">歯</option>
+                    <option value="注">注</option>
+                    <option value="機">機</option>
+                    <option value="他">他</option>
+                </select>
+            </div>
+
+            <div class="buttons-group">
+                <button id="run-valuation-btn" class="btn">計算実行</button>
+            </div>
+        </div>
+        <div id="valuation-output-container">
+            <p>評価基準日を指定して「計算実行」を押してください。</p>
         </div>
     </div>
-    <div id="valuation-output-container">
-        <p>評価基準日を指定して「計算実行」を押してください。</p>
-    </div>
-</div>
-    
+
+
 <input type="file" id="importClientsInput" style="display:none;" accept=".csv">
 
 <input type="file" id="importProductsInput" style="display:none;" accept=".csv">

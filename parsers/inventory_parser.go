@@ -30,7 +30,10 @@ func ParseInventoryFile(r io.Reader) (*ParsedInventoryData, error) {
 	reader.FieldsPerRecord = -1
 
 	var result ParsedInventoryData
-	var dataRecords []model.UnifiedInputRecord
+
+	// ▼▼▼ [修正点] 重複するJANコードの数量を合算するためのマップを準備 ▼▼▼
+	recordMap := make(map[string]*model.UnifiedInputRecord)
+	// ▲▲▲ 修正ここまで ▲▲▲
 
 	records, err := reader.ReadAll()
 	if err != nil {
@@ -50,20 +53,41 @@ func ParseInventoryFile(r io.Reader) (*ParsedInventoryData, error) {
 			}
 		case "R1":
 			if len(row) > 45 {
-				innerPackQty, _ := strconv.ParseFloat(strings.TrimSpace(row[17]), 64)
+				janCode := trimQuotes(row[45])
+				if janCode == "" {
+					continue // JANコードがないレコードは集計できないためスキップ
+				}
+
 				physicalJanQty, _ := strconv.ParseFloat(strings.TrimSpace(row[21]), 64)
 
-				dataRecords = append(dataRecords, model.UnifiedInputRecord{
-					ProductName:     trimQuotes(row[12]),
-					YjUnitName:      trimQuotes(row[16]),
-					JanPackInnerQty: innerPackQty,   // 18列目を格納
-					JanQuantity:     physicalJanQty, // 22列目を格納
-					YjCode:          trimQuotes(row[42]),
-					JanCode:         trimQuotes(row[45]),
-				})
+				// ▼▼▼ [修正点] 重複チェックと数量の合算ロジック ▼▼▼
+				if existing, ok := recordMap[janCode]; ok {
+					// 既にマップに存在する場合、数量を加算
+					existing.JanQuantity += physicalJanQty
+				} else {
+					// マップに存在しない場合、新しいレコードとして追加
+					innerPackQty, _ := strconv.ParseFloat(strings.TrimSpace(row[17]), 64)
+					recordMap[janCode] = &model.UnifiedInputRecord{
+						ProductName:     trimQuotes(row[12]),
+						YjUnitName:      trimQuotes(row[16]),
+						JanPackInnerQty: innerPackQty,
+						JanQuantity:     physicalJanQty,
+						YjCode:          trimQuotes(row[42]),
+						JanCode:         janCode,
+					}
+				}
+				// ▲▲▲ 修正ここまで ▲▲▲
 			}
 		}
 	}
-	result.Records = dataRecords
+
+	// ▼▼▼ [修正点] 合算後のマップから最終的なスライスを作成 ▼▼▼
+	finalRecords := make([]model.UnifiedInputRecord, 0, len(recordMap))
+	for _, rec := range recordMap {
+		finalRecords = append(finalRecords, *rec)
+	}
+	result.Records = finalRecords
+	// ▲▲▲ 修正ここまで ▲▲▲
+
 	return &result, nil
 }

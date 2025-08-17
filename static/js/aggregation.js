@@ -87,16 +87,18 @@ function renderResults() {
 export function initAggregation() {
     view = document.getElementById('aggregation-view');
     if (!view) return; // 新しいフィルター要素を取得
+    // ▼▼▼ [修正点] IDを変更した要素を取得するように修正 ▼▼▼
     runBtn = document.getElementById('run-aggregation-btn');
     printBtn = document.getElementById('print-aggregation-btn');
     outputContainer = document.getElementById('aggregation-output-container');
     startDateInput = document.getElementById('startDate');
     endDateInput = document.getElementById('endDate');
-    kanaNameInput = document.getElementById('kanaName');
-    dosageFormInput = document.getElementById('dosageForm');
+    kanaNameInput = document.getElementById('agg-kanaName');     // ID変更
+    dosageFormInput = document.getElementById('agg-dosageForm'); // ID変更
     coefficientInput = document.getElementById('reorder-coefficient');
     drugTypeCheckboxes = document.querySelectorAll('input[name="drugType"]');
-    reorderNeededCheckbox = document.getElementById('reorder-needed-filter'); // 日付のデフォルト値を設定
+    reorderNeededCheckbox = document.getElementById('reorder-needed-filter');
+    // ▲▲▲ 修正ここまで ▲▲▲
     const today = new Date();
     const threeMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 3, today.getDate());
     endDateInput.value = today.toISOString().slice(0, 10);
@@ -115,8 +117,8 @@ export function initAggregation() {
         const params = new URLSearchParams({
             startDate: startDateInput.value.replace(/-/g, ''),
             endDate: endDateInput.value.replace(/-/g, ''),
-            kanaName: kanaNameInput.value,
-            dosageForm: dosageFormInput.value,
+            kanaName: kanaNameInput.value,           // 検索項目として追加
+            dosageForm: dosageFormInput.value,       // 検索項目として追加
             coefficient: coefficientInput.value,
             drugTypes: selectedDrugTypes,
         });

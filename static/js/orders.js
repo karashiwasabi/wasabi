@@ -90,7 +90,9 @@ export function initOrders() {
     const outputContainer = document.getElementById('order-candidates-output');
     const startDateInput = document.getElementById('order-startDate');
     const endDateInput = document.getElementById('order-endDate');
+     // ▼▼▼ [修正点] kanaNameInputのIDを order-kanaName に合わせる ▼▼▼
     const kanaNameInput = document.getElementById('order-kanaName');
+    // ▲▲▲ 修正ここまで ▲▲▲
     const dosageFormInput = document.getElementById('order-dosageForm');
     const coefficientInput = document.getElementById('order-reorder-coefficient');
     const createCsvBtn = document.getElementById('createOrderCsvBtn');
@@ -102,13 +104,15 @@ export function initOrders() {
 
     runBtn.addEventListener('click', async () => {
         window.showLoading();
+        // ▼▼▼ [修正点] パラメータ作成部分を修正 ▼▼▼
         const params = new URLSearchParams({
             startDate: startDateInput.value.replace(/-/g, ''),
             endDate: endDateInput.value.replace(/-/g, ''),
-            kanaName: kanaNameInput.value,
-            dosageForm: dosageFormInput.value,
+            kanaName: kanaNameInput.value,     // kanaNameは製品名/カナ名検索に使われる
+            dosageForm: dosageFormInput.value, // dosageFormは剤型検索に使われる
             coefficient: coefficientInput.value,
         });
+        // ▲▲▲ 修正ここまで ▲▲▲
 
         try {
             const res = await fetch(`/api/orders/candidates?${params.toString()}`);

@@ -10,13 +10,24 @@ const searchInput = document.getElementById('product-search-input');
 const searchBtn = document.getElementById('product-search-btn');
 const searchResultsBody = document.querySelector('#search-results-table tbody');
 
+// ▼▼▼ [修正点] モーダルを閉じる処理を共通関数化 ▼▼▼
+function hideModal() {
+    if (modal) {
+        modal.classList.add('hidden');
+        document.body.classList.remove('modal-open'); // bodyからクラスを削除
+    }
+}
+// ▲▲▲ 修正ここまで ▲▲▲
+
 function handleResultClick(event) {
   if (event.target && event.target.classList.contains('select-product-btn')) {
     const product = JSON.parse(event.target.dataset.product);
     if (typeof activeCallback === 'function') {
       activeCallback(product, activeRowElement);
     }
-    modal.classList.add('hidden');
+    // ▼▼▼ [修正点] 共通のhideModal関数を呼び出す ▼▼▼
+    hideModal();
+    // ▲▲▲ 修正ここまで ▲▲▲
   }
 }
 
@@ -69,7 +80,9 @@ export function initModal() {
     console.error("薬品検索モーダルの必須要素が見つかりません。");
     return;
   }
-  closeModalBtn.addEventListener('click', () => modal.classList.add('hidden'));
+  // ▼▼▼ [修正点] 共通のhideModal関数を呼び出すように変更 ▼▼▼
+  closeModalBtn.addEventListener('click', hideModal);
+  // ▲▲▲ 修正ここまで ▲▲▲
   searchBtn.addEventListener('click', performSearch);
   searchInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') {
@@ -83,6 +96,9 @@ export function initModal() {
 
 export function showModal(rowElement, callback, searchApi = DEFAULT_SEARCH_API) {
   if (modal) {
+    // ▼▼▼ [修正点] モーダル表示時にbodyにクラスを追加 ▼▼▼
+    document.body.classList.add('modal-open');
+    // ▲▲▲ 修正ここまで ▲▲▲
     activeRowElement = rowElement;
     activeCallback = callback; 
     modal.dataset.searchApi = searchApi; // APIエンドポイントを保存

@@ -74,7 +74,7 @@ function createMasterRowHTML(master = {}) {
             }
             return `<td><select name="${f.key}">${options}</select></td>`;
         }
-        return `<td><input type="${f.type || 'text'}" name="${f.key}" value="${f.value || master[f.key] || ''}" placeholder="${f.ph}"></td>`;
+        return `<td><input type="${f.type || 'text'}" name="${f.key}" value="${f.value ?? master[f.key] ?? ''}" placeholder="${f.ph}"></td>`;
     }).join('');
 
     bottomRowCellsHTML += `<td class="formatted-spec-cell" colspan="6"></td><td><button class="quote-jcshms-btn btn">引用</button></td>`;
@@ -167,11 +167,14 @@ export async function initMasterEdit() {
             tbody.querySelectorAll('input, select').forEach(el => {
                 const name = el.name;
                 const value = el.value;
+                // ▼▼▼ [修正点] 0を正しく扱えるようにロジックを変更 ▼▼▼
                 if (el.tagName === 'SELECT' || el.type === 'number') {
-                    data[name] = parseFloat(value) || 0;
+                    const numValue = parseFloat(value);
+                    data[name] = !isNaN(numValue) ? numValue : 0;
                 } else {
                     data[name] = value;
                 }
+                // ▲▲▲ 修正ここまで ▲▲▲
             });
             data.packageSpec = data.packageForm;
             data.origin = "MANUAL";
