@@ -1,23 +1,23 @@
+// C:\Dev\WASABI\static\js\aggregation.js
+
 import { transactionTypeMap, createUploadTableHTML, renderUploadTableRows } from './common_table.js';
 let view, runBtn, printBtn, outputContainer, startDateInput, endDateInput, kanaNameInput, dosageFormInput, coefficientInput, drugTypeCheckboxes, reorderNeededCheckbox;
 let lastData = []; // サーバーから受け取った元のデータを保持
 
 /**
  * 在庫数をフォーマットするヘルパー関数
- * @param {number | string} balance - 在庫数（数値または "期間棚卸なし" の文字列）
+ * @param {number | string} balance - 在庫数
  * @returns {string} 表示用にフォーマットされた文字列
  */
 function formatBalance(balance) {
-    // 渡された値が数値の場合のみ、小数点以下2桁にフォーマットする
     if (typeof balance === 'number') {
         return balance.toFixed(2);
     }
-    // 文字列（"期間棚卸なし" など）の場合は、そのまま返す
     return balance;
 }
 
 function renderResults() {
-    let dataToRender = lastData; // 「不足品のみ表示」フィルターを適用
+    let dataToRender = lastData;
     if (reorderNeededCheckbox.checked) {
         dataToRender = lastData.filter(yjGroup => yjGroup.isReorderNeeded)
             .map(yjGroup => ({
@@ -55,13 +55,12 @@ function renderResults() {
             if (pkg.precompoundedTotal > 0) {
                 pkgReorderPointText = `${formatBalance(pkg.baseReorderPoint)} + 予${formatBalance(pkg.precompoundedTotal)} = ${formatBalance(pkg.reorderPoint)}`;
             }
-            // ▼▼▼ [修正点] ヘッダー表示に「有効在庫」を追加 ▼▼▼
+            // ▼▼▼ [修正点] ご指示の表示形式に修正 ▼▼▼
             html += `
                 <div class="agg-pkg-header" ${pkg.isReorderNeeded ? 'style="background-color: #ff0000ff;"' : ''}>
                     <span>包装: ${pkg.packageKey}</span>
                     <span class="balance-info">
-                        物理在庫: ${formatBalance(pkg.endingBalance)} | 
-                        有効在庫: ${formatBalance(pkg.effectiveEndingBalance)} | 
+                        在庫: ${formatBalance(pkg.endingBalance)} | 在庫(発注残含): ${formatBalance(pkg.effectiveEndingBalance)} | 
                         発注点: ${pkgReorderPointText} |  
                         変動: ${formatBalance(pkg.netChange)}
                     </span>
@@ -71,7 +70,6 @@ function renderResults() {
         });
     });
     outputContainer.innerHTML = html;
-
     dataToRender.forEach((yjGroup, yjIndex) => {
         yjGroup.packageLedgers.forEach((pkg, pkgIndex) => {
             const tableId = `agg-table-${yjIndex}-${pkgIndex}`;
@@ -86,26 +84,43 @@ function renderResults() {
 
 export function initAggregation() {
     view = document.getElementById('aggregation-view');
-    if (!view) return; // 新しいフィルター要素を取得
-    // ▼▼▼ [修正点] IDを変更した要素を取得するように修正 ▼▼▼
+    if (!view) return;
     runBtn = document.getElementById('run-aggregation-btn');
     printBtn = document.getElementById('print-aggregation-btn');
     outputContainer = document.getElementById('aggregation-output-container');
     startDateInput = document.getElementById('startDate');
     endDateInput = document.getElementById('endDate');
-    kanaNameInput = document.getElementById('agg-kanaName');     // ID変更
-    dosageFormInput = document.getElementById('agg-dosageForm'); // ID変更
+    kanaNameInput = document.getElementById('agg-kanaName');
+    dosageFormInput = document.getElementById('agg-dosageForm');
     coefficientInput = document.getElementById('reorder-coefficient');
     drugTypeCheckboxes = document.querySelectorAll('input[name="drugType"]');
     reorderNeededCheckbox = document.getElementById('reorder-needed-filter');
-    // ▲▲▲ 修正ここまで ▲▲▲
     const today = new Date();
     const threeMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 3, today.getDate());
     endDateInput.value = today.toISOString().slice(0, 10);
     startDateInput.value = threeMonthsAgo.toISOString().slice(0, 10);
 
-    printBtn.addEventListener('click', () => window.print());
+    // ▼▼▼ [修正点] 印刷ボタンのイベントリスナーを修正 ▼▼▼
+    printBtn.addEventListener('click', () => {
+        if (lastData && lastData.length > 0) {
+             // 他のビューから印刷用クラスを削除
+            document.getElementById('valuation-view').classList.remove('print-this-view');
+            // 集計ビューに印刷用クラスを追加
+            view.classList.add('print-this-view');
+            window.print();
+        } else {
+            window.showNotification('先に「集計実行」を押してデータを表示してください。', 'error');
+        }
+    });
+
+    // 印刷後にクラスを削除する後処理
+    window.addEventListener('afterprint', () => {
+        view.classList.remove('print-this-view');
+    });
+    // ▲▲▲ 修正ここまで ▲▲▲
+
     reorderNeededCheckbox.addEventListener('change', () => renderResults());
+    
     runBtn.addEventListener('click', async () => {
         window.showLoading();
 
@@ -117,8 +132,8 @@ export function initAggregation() {
         const params = new URLSearchParams({
             startDate: startDateInput.value.replace(/-/g, ''),
             endDate: endDateInput.value.replace(/-/g, ''),
-            kanaName: kanaNameInput.value,           // 検索項目として追加
-            dosageForm: dosageFormInput.value,       // 検索項目として追加
+            kanaName: kanaNameInput.value,
+            dosageForm: dosageFormInput.value,
             coefficient: coefficientInput.value,
             drugTypes: selectedDrugTypes,
         });
@@ -129,24 +144,12 @@ export function initAggregation() {
                 const errText = await res.text();
                 throw new Error(errText || 'Aggregation failed');
             }
-            lastData = await res.json(); // 元データを保持
-
-         renderResults();       // ← 既存：DOM 更新
-         // ← DOM 更新後、次のペイント直前に発火するカスタムイベント
-        requestAnimationFrame(() => {
-        window.dispatchEvent(new Event('aggregationRendered'));
-        });
-
+            lastData = await res.json();
+            renderResults();
         } catch (err) {
             outputContainer.innerHTML = `<p style="color:red;">エラー: ${err.message}</p>`;
         } finally {
             window.hideLoading();
         }
     });
-
-  // ← ここでリスナー登録
-  window.addEventListener('aggregationRendered', () => {
-    console.log('集計描画完了！');
-    // たとえばボタンを有効化するとか、別コンポーネントに通知するとか
-  });
 }

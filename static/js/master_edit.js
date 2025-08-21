@@ -1,5 +1,6 @@
-import { showModal } from './inout_modal.js';
+// C:\Dev\WASABI\static\js\master_edit.js
 
+import { showModal } from './inout_modal.js';
 let view, tableContainer, refreshBtn, addRowBtn;
 let unitMap = {};
 
@@ -72,11 +73,10 @@ function createMasterRowHTML(master = {}) {
             for (const [code, name] of Object.entries(unitMap)) {
                 if (code !== '0') options += `<option value="${code}" ${code == f.value ? 'selected' : ''}>${name}</option>`;
             }
-            return `<td><select name="${f.key}">${options}</select></td>`;
+             return `<td><select name="${f.key}">${options}</select></td>`;
         }
         return `<td><input type="${f.type || 'text'}" name="${f.key}" value="${f.value ?? master[f.key] ?? ''}" placeholder="${f.ph}"></td>`;
     }).join('');
-
     bottomRowCellsHTML += `<td class="formatted-spec-cell" colspan="6"></td><td><button class="quote-jcshms-btn btn">引用</button></td>`;
     return `<tbody data-record-id="${rowId}"><tr class="data-row-top">${topRowCellsHTML}</tr><tr class="data-row-bottom">${bottomRowCellsHTML}</tr></tbody>`;
 }
@@ -91,12 +91,10 @@ async function loadAndRenderMasters() {
             <tr><th>製品コード(JAN)</th><th>YJコード</th><th colspan="2">製品名</th><th>カナ名</th><th>メーカー名</th><th>剤型</th><th>毒</th><th>劇</th><th>麻</th><th>向</th><th>覚</th><th>覚原</th><th>操作</th></tr>
             <tr><th>薬価</th><th>包装</th><th>YJ単位</th><th>YJ包装数量</th><th>内包装数量</th><th>JAN単位</th><th>JAN包装数量</th><th colspan="6">組み立て包装</th><th>操作</th></tr>
         </thead>`;
-        
         const allTablesHTML = masters.map(master => {
             const tableContent = createMasterRowHTML(master);
             return `<table class="data-table" style="margin-bottom: 15px;">${tableHeader}${tableContent}</table>`;
         }).join('');
-        
         tableContainer.innerHTML = allTablesHTML;
         tableContainer.querySelectorAll('tbody[data-record-id]').forEach(formatPackageSpecForRow);
     } catch (err) {
@@ -145,18 +143,17 @@ export async function initMasterEdit() {
         const newTableHTML = `<table class="data-table" style="margin-bottom: 15px;">${tableHeader}${newRowContent}</table>`;
         tableContainer.insertAdjacentHTML('beforeend', newTableHTML);
         const newTable = tableContainer.lastElementChild;
-        if (newTable) {
+       
+         if (newTable) {
             newTable.scrollIntoView({ behavior: 'smooth', block: 'end' });
             const firstInput = newTable.querySelector('input');
             if (firstInput) firstInput.focus();
         }
     });
-
     tableContainer.addEventListener('input', (e) => {
         const tbody = e.target.closest('tbody[data-record-id]');
         if (tbody) formatPackageSpecForRow(tbody);
     });
-
     tableContainer.addEventListener('click', async (e) => {
         const target = e.target;
         const tbody = target.closest('tbody[data-record-id]');
@@ -166,18 +163,21 @@ export async function initMasterEdit() {
             const data = {};
             tbody.querySelectorAll('input, select').forEach(el => {
                 const name = el.name;
+     
                 const value = el.value;
-                // ▼▼▼ [修正点] 0を正しく扱えるようにロジックを変更 ▼▼▼
                 if (el.tagName === 'SELECT' || el.type === 'number') {
                     const numValue = parseFloat(value);
+                   
                     data[name] = !isNaN(numValue) ? numValue : 0;
                 } else {
                     data[name] = value;
                 }
-                // ▲▲▲ 修正ここまで ▲▲▲
             });
+      
             data.packageSpec = data.packageForm;
-            data.origin = "MANUAL";
+            // ▼▼▼ [修正点] "MANUAL" を "PROVISIONAL" に変更 ▼▼▼
+            data.origin = "PROVISIONAL";
+            // ▲▲▲ 修正ここまで ▲▲▲
             data.purchasePrice = 0;
             data.supplierWholesale = '';
 
@@ -191,6 +191,7 @@ export async function initMasterEdit() {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(data),
+            
                 });
                 const resData = await res.json();
                 if (!res.ok) throw new Error(resData.message || '保存に失敗しました。');

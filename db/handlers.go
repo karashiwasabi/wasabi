@@ -54,3 +54,24 @@ func SearchAllMastersHandler(conn *sql.DB) http.HandlerFunc {
 		json.NewEncoder(w).Encode(results)
 	}
 }
+
+// ▼▼▼ [修正点] 以下の関数をファイル末尾に追加 ▼▼▼
+// GetMastersByYjCodeHandler はYJコードに紐づくマスターのリストを返します。
+func GetMastersByYjCodeHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		yjCode := r.URL.Query().Get("yj_code")
+		if yjCode == "" {
+			http.Error(w, "yj_code parameter is required", http.StatusBadRequest)
+			return
+		}
+		results, err := GetProductMastersByYjCode(conn, yjCode)
+		if err != nil {
+			http.Error(w, "Failed to get masters by yj_code", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(results)
+	}
+}
+
+// ▲▲▲ 修正ここまで ▲▲▲

@@ -11,10 +11,8 @@ import (
 	"wasabi/mappers"
 )
 
-// ▼▼▼ [修正点] ロジック全体を書き換え、デッドロックを解消 ▼▼▼
 func ReProcessTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// 1. 最初にトランザクションを開始
 		tx, err := conn.Begin()
 		if err != nil {
 			http.Error(w, "Failed to start transaction: "+err.Error(), http.StatusInternalServerError)
@@ -22,7 +20,6 @@ func ReProcessTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer tx.Rollback()
 
-		// 2. トランザクション内で、更新対象のリストを取得
 		provisionalRecords, err := db.GetProvisionalTransactions(tx)
 		if err != nil {
 			http.Error(w, "Failed to fetch provisional records: "+err.Error(), http.StatusInternalServerError)
@@ -34,7 +31,6 @@ func ReProcessTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// 3. トランザクション内で、関連マスターを一括取得
 		keyList := make([]string, 0, len(provisionalRecords))
 		keySet := map[string]struct{}{}
 		for _, rec := range provisionalRecords {
@@ -53,7 +49,6 @@ func ReProcessTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// 4. 一件ずつマッピング＆更新
 		updatedCount := 0
 		for _, rec := range provisionalRecords {
 			key := rec.JanCode
@@ -62,14 +57,14 @@ func ReProcessTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 			}
 			master, ok := mastersMap[key]
 
-			if !ok || master.Origin == "PROVISIONAL" {
+			if !ok || master.Origin != "JCSHMS" {
 				continue
 			}
 
 			mappers.MapProductMasterToTransaction(&rec, master)
-			// 再計算なので、ステータスをCOMPLETEに変更
+			// ▼▼▼ [修正点] ProcessingStatusの設定を削除 ▼▼▼
 			rec.ProcessFlagMA = "COMPLETE"
-			rec.ProcessingStatus = sql.NullString{String: "completed", Valid: true}
+			// ▲▲▲ 修正ここまで ▲▲▲
 
 			if err := db.UpdateFullTransactionInTx(tx, &rec); err != nil {
 				http.Error(w, fmt.Sprintf("Failed to update record ID %d: %v", rec.ID, err), http.StatusInternalServerError)
@@ -78,7 +73,6 @@ func ReProcessTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 			updatedCount++
 		}
 
-		// 5. コミットして完了
 		if err := tx.Commit(); err != nil {
 			http.Error(w, "Failed to commit: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -90,5 +84,3 @@ func ReProcessTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 		})
 	}
 }
-
-// ▲▲▲ 修正ここまで ▲▲▲

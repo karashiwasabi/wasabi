@@ -3,17 +3,31 @@ package orders
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 	"wasabi/db"
 	"wasabi/model"
+	"wasabi/units"
 )
 
 // OrderCandidatesResponse は発注準備画面へのレスポンスの構造体です。
 type OrderCandidatesResponse struct {
-	Candidates  []model.StockLedgerYJGroup `json:"candidates"`
-	Wholesalers []model.Wholesaler         `json:"wholesalers"`
+	Candidates  []OrderCandidateYJGroup `json:"candidates"`
+	Wholesalers []model.Wholesaler      `json:"wholesalers"`
+}
+
+// OrderCandidateYJGroup は表示用に変換されたYJグループです。
+type OrderCandidateYJGroup struct {
+	model.StockLedgerYJGroup
+	PackageLedgers []OrderCandidatePackageGroup `json:"packageLedgers"`
+}
+
+// OrderCandidatePackageGroup は表示用に変換された包装グループです。
+type OrderCandidatePackageGroup struct {
+	model.StockLedgerPackageGroup
+	Masters []model.ProductMasterView `json:"masters"`
 }
 
 // GenerateOrderCandidatesHandler は発注候補を生成して返します。
@@ -40,17 +54,47 @@ func GenerateOrderCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 		}
 
 		// 構造体を使って関数を呼び出す
-		yjGroup, err := db.GetStockLedger(conn, filters)
+		yjGroups, err := db.GetStockLedger(conn, filters)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		// ▲▲▲ 修正ここまで ▲▲▲
 
-		var candidates []model.StockLedgerYJGroup
-		for _, group := range yjGroup {
+		var candidates []OrderCandidateYJGroup
+		for _, group := range yjGroups {
 			if group.IsReorderNeeded {
-				candidates = append(candidates, group)
+				newYjGroup := OrderCandidateYJGroup{
+					StockLedgerYJGroup: group,
+					PackageLedgers:     []OrderCandidatePackageGroup{},
+				}
+
+				for _, pkg := range group.PackageLedgers {
+					newPkgGroup := OrderCandidatePackageGroup{
+						StockLedgerPackageGroup: pkg,
+						Masters:                 []model.ProductMasterView{},
+					}
+					for _, master := range pkg.Masters {
+						// ▼▼▼ [修正点] 組み立て包装の生成に必要なデータを全て渡すように修正 ▼▼▼
+						tempJcshms := model.JCShms{
+							JC037: master.PackageForm,
+							JC039: master.YjUnitName,
+							JC044: master.YjPackUnitQty,
+							JA006: sql.NullFloat64{Float64: master.JanPackInnerQty, Valid: true},
+							JA008: sql.NullFloat64{Float64: master.JanPackUnitQty, Valid: true},
+							JA007: sql.NullString{String: fmt.Sprintf("%d", master.JanUnitCode), Valid: true},
+						}
+						// ▲▲▲ 修正ここまで ▲▲▲
+						formattedSpec := units.FormatPackageSpec(&tempJcshms)
+
+						newPkgGroup.Masters = append(newPkgGroup.Masters, model.ProductMasterView{
+							ProductMaster:        *master,
+							FormattedPackageSpec: formattedSpec,
+						})
+					}
+					newYjGroup.PackageLedgers = append(newYjGroup.PackageLedgers, newPkgGroup)
+				}
+				candidates = append(candidates, newYjGroup)
 			}
 		}
 
@@ -110,5 +154,3 @@ func PlaceOrderHandler(conn *sql.DB) http.HandlerFunc {
 		json.NewEncoder(w).Encode(map[string]string{"message": "発注内容を発注残として登録しました。"})
 	}
 }
-
-// ▲▲▲ 修正ここまで ▲▲▲

@@ -1,60 +1,63 @@
-package backup
+// C:\Dev\WASABI\backorder\handler.go
+
+package backorder
 
 import (
 	"database/sql"
-	"encoding/csv"
 	"encoding/json"
-	"fmt"
-	"log"
 	"net/http"
-	"strconv"
 	"wasabi/db"
 	"wasabi/model"
+	"wasabi/units" // unitsパッケージをインポート
 )
 
-// ExportClientsHandler handles exporting the client master to a CSV file.
-func ExportClientsHandler(conn *sql.DB) http.HandlerFunc {
+// ▼▼▼ フロントエンドに渡すための専用のデータ構造を定義 ▼▼▼
+type BackorderView struct {
+	model.Backorder
+	FormattedPackageSpec string `json:"formattedPackageSpec"`
+}
+
+// GetBackordersHandler は発注残リストを返します。
+func GetBackordersHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		clients, err := db.GetAllClients(conn)
+		backorders, err := db.GetAllBackordersList(conn)
 		if err != nil {
-			http.Error(w, "Failed to get clients", http.StatusInternalServerError)
+			http.Error(w, "Failed to get backorder list", http.StatusInternalServerError)
 			return
 		}
 
-		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-		w.Header().Set("Content-Disposition", `attachment; filename="client_master.csv"`)
-		w.Write([]byte{0xEF, 0xBB, 0xBF})
-
-		csvWriter := csv.NewWriter(w)
-
-		if err := csvWriter.Write([]string{"client_code", "client_name"}); err != nil {
-			http.Error(w, "Failed to write CSV header", http.StatusInternalServerError)
-			return
-		}
-		for _, client := range clients {
-			if err := csvWriter.Write([]string{client.Code, client.Name}); err != nil {
-				http.Error(w, "Failed to write CSV row", http.StatusInternalServerError)
-				return
+		// ▼▼▼ 取得したデータをViewモデルに変換 ▼▼▼
+		backorderViews := make([]BackorderView, 0, len(backorders))
+		for _, bo := range backorders {
+			// units.FormatPackageSpec を使って正しい包装仕様を生成
+			// backordersテーブルにはJANコード単位の情報がないため、YJコード単位の情報で組み立てる
+			tempJcshms := model.JCShms{
+				JC037: bo.PackageForm,
+				JC039: bo.YjUnitName,
+				JC044: bo.YjPackUnitQty,
+				JA006: sql.NullFloat64{Float64: bo.JanPackInnerQty, Valid: true},
 			}
+			formattedSpec := units.FormatPackageSpec(&tempJcshms)
+
+			backorderViews = append(backorderViews, BackorderView{
+				Backorder:            bo,
+				FormattedPackageSpec: formattedSpec,
+			})
 		}
-		csvWriter.Flush()
+		// ▲▲▲ 変換ここまで ▲▲▲
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(backorderViews) // 変換後のデータを返す
 	}
 }
 
-// ImportClientsHandler handles importing clients from a CSV file.
-func ImportClientsHandler(conn *sql.DB) http.HandlerFunc {
+// ▼▼▼ [修正点] 以下の関数をファイル末尾に追加 ▼▼▼
+// DeleteBackorderHandler は発注残を削除します。
+func DeleteBackorderHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		file, _, err := r.FormFile("file")
-		if err != nil {
-			http.Error(w, "No file uploaded", http.StatusBadRequest)
-			return
-		}
-		defer file.Close()
-
-		csvReader := csv.NewReader(file)
-		records, err := csvReader.ReadAll()
-		if err != nil {
-			http.Error(w, "Failed to parse CSV file", http.StatusBadRequest)
+		var payload model.Backorder
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
 
@@ -65,157 +68,9 @@ func ImportClientsHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer tx.Rollback()
 
-		stmt, err := tx.Prepare("INSERT OR REPLACE INTO client_master (client_code, client_name) VALUES (?, ?)")
-		if err != nil {
-			http.Error(w, "Failed to prepare DB statement", http.StatusInternalServerError)
+		if err := db.DeleteBackorderInTx(tx, payload); err != nil {
+			http.Error(w, "Failed to delete backorder: "+err.Error(), http.StatusInternalServerError)
 			return
-		}
-		defer stmt.Close()
-
-		var importedCount int
-		for i, row := range records {
-			if i == 0 {
-				continue
-			}
-			if len(row) < 2 {
-				continue
-			}
-			if _, err := stmt.Exec(row[0], row[1]); err != nil {
-				log.Printf("Failed to import client row %d: %v", i+1, err)
-				http.Error(w, fmt.Sprintf("Failed to import client row %d", i+1), http.StatusInternalServerError)
-				return
-			}
-			importedCount++
-		}
-
-		if err := tx.Commit(); err != nil {
-			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
-			return
-		}
-		if err := db.InitializeSequenceFromMaxClientCode(conn); err != nil {
-			log.Printf("Warning: failed to re-initialize client sequence after import: %v", err)
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
-			"message": fmt.Sprintf("%d件の得意先をインポートしました。", importedCount),
-		})
-	}
-}
-
-// ExportProductsHandler handles exporting the product master to a CSV file.
-func ExportProductsHandler(conn *sql.DB) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// ▼▼▼ [修正点] 全件取得ではなく、編集可能なマスターのみを取得する関数に変更 ▼▼▼
-		products, err := db.GetEditableProductMasters(conn)
-		if err != nil {
-			http.Error(w, "Failed to get products", http.StatusInternalServerError)
-			return
-		}
-		// ▲▲▲ 修正ここまで ▲▲▲
-
-		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-		w.Header().Set("Content-Disposition", `attachment; filename="product_master_editable.csv"`)
-		w.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM
-
-		csvWriter := csv.NewWriter(w)
-
-		header := []string{
-			"product_code", "yj_code", "product_name", "origin", "kana_name", "maker_name",
-			"usage_classification", "package_form", "package_spec",
-			"yj_unit_name", "yj_pack_unit_qty", "flag_poison", "flag_deleterious", "flag_narcotic",
-			"flag_psychotropic", "flag_stimulant", "flag_stimulant_raw", "jan_pack_inner_qty",
-			"jan_unit_code", "jan_pack_unit_qty", "nhi_price", "purchase_price", "supplier_wholesale",
-		}
-		if err := csvWriter.Write(header); err != nil {
-			http.Error(w, "Failed to write CSV header", http.StatusInternalServerError)
-			return
-		}
-
-		// `GetEditableProductMasters`は`ProductMasterView`のスライスを返すため、
-		// `p.ProductMaster`を通じて各フィールドにアクセスするか、そのままアクセスする（Goの埋め込みのため）
-		for _, p := range products {
-			row := []string{
-				p.ProductCode, p.YjCode, p.ProductName, p.Origin, p.KanaName, p.MakerName,
-				p.UsageClassification, p.PackageForm, p.PackageSpec,
-				p.YjUnitName, fmt.Sprintf("%f", p.YjPackUnitQty), fmt.Sprintf("%d", p.FlagPoison),
-				fmt.Sprintf("%d", p.FlagDeleterious), fmt.Sprintf("%d", p.FlagNarcotic),
-				fmt.Sprintf("%d", p.FlagPsychotropic), fmt.Sprintf("%d", p.FlagStimulant),
-				fmt.Sprintf("%d", p.FlagStimulantRaw), fmt.Sprintf("%f", p.JanPackInnerQty),
-				fmt.Sprintf("%d", p.JanUnitCode), fmt.Sprintf("%f", p.JanPackUnitQty),
-				fmt.Sprintf("%f", p.NhiPrice), fmt.Sprintf("%f", p.PurchasePrice), p.SupplierWholesale,
-			}
-			if err := csvWriter.Write(row); err != nil {
-				http.Error(w, "Failed to write CSV row", http.StatusInternalServerError)
-				return
-			}
-		}
-		csvWriter.Flush()
-	}
-}
-
-// ImportProductsHandler handles importing products from a CSV file.
-func ImportProductsHandler(conn *sql.DB) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		file, _, err := r.FormFile("file")
-		if err != nil {
-			http.Error(w, "No file uploaded", http.StatusBadRequest)
-			return
-		}
-		defer file.Close()
-
-		csvReader := csv.NewReader(file)
-		records, err := csvReader.ReadAll()
-		if err != nil {
-			http.Error(w, "Failed to parse CSV file", http.StatusBadRequest)
-			return
-		}
-
-		tx, err := conn.Begin()
-		if err != nil {
-			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
-			return
-		}
-		defer tx.Rollback()
-
-		var importedCount int
-		for i, row := range records {
-			if i == 0 {
-				continue
-			}
-			if len(row) < 23 {
-				continue
-			}
-
-			yjPackUnitQty, _ := strconv.ParseFloat(row[10], 64)
-			flagPoison, _ := strconv.Atoi(row[11])
-			flagDeleterious, _ := strconv.Atoi(row[12])
-			flagNarcotic, _ := strconv.Atoi(row[13])
-			flagPsychotropic, _ := strconv.Atoi(row[14])
-			flagStimulant, _ := strconv.Atoi(row[15])
-			flagStimulantRaw, _ := strconv.Atoi(row[16])
-			janPackInnerQty, _ := strconv.ParseFloat(row[17], 64)
-			janUnitCode, _ := strconv.Atoi(row[18])
-			janPackUnitQty, _ := strconv.ParseFloat(row[19], 64)
-			nhiPrice, _ := strconv.ParseFloat(row[20], 64)
-			purchasePrice, _ := strconv.ParseFloat(row[21], 64)
-
-			input := model.ProductMasterInput{
-				ProductCode: row[0], YjCode: row[1], ProductName: row[2], Origin: row[3], KanaName: row[4],
-				MakerName: row[5], UsageClassification: row[6], PackageForm: row[7], PackageSpec: row[8],
-				YjUnitName: row[9], YjPackUnitQty: yjPackUnitQty, FlagPoison: flagPoison,
-				FlagDeleterious: flagDeleterious, FlagNarcotic: flagNarcotic, FlagPsychotropic: flagPsychotropic,
-				FlagStimulant: flagStimulant, FlagStimulantRaw: flagStimulantRaw,
-				JanPackInnerQty: janPackInnerQty, JanUnitCode: janUnitCode, JanPackUnitQty: janPackUnitQty,
-				NhiPrice: nhiPrice, PurchasePrice: purchasePrice, SupplierWholesale: row[22],
-			}
-
-			if err := db.UpsertProductMasterInTx(tx, input); err != nil {
-				log.Printf("Failed to import product row %d: %v", i+1, err)
-				http.Error(w, fmt.Sprintf("Failed to import product row %d", i+1), http.StatusInternalServerError)
-				return
-			}
-			importedCount++
 		}
 
 		if err := tx.Commit(); err != nil {
@@ -223,13 +78,7 @@ func ImportProductsHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		if err := db.InitializeSequenceFromMaxYjCode(conn); err != nil {
-			log.Printf("Warning: failed to re-initialize YJ sequence after import: %v", err)
-		}
-
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
-			"message": fmt.Sprintf("%d件の製品をインポートしました。", importedCount),
-		})
+		json.NewEncoder(w).Encode(map[string]string{"message": "発注残を削除しました。"})
 	}
 }

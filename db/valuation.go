@@ -30,7 +30,8 @@ type ValuationYjGroup struct {
 
 // GetInventoryValuation は指定日の在庫評価レポートを生成します
 func GetInventoryValuation(conn *sql.DB, filters model.ValuationFilters) ([]ValuationGroup, error) {
-	masterQuery := `SELECT ` + selectColumns + ` FROM product_master WHERE 1=1`
+	// === ステップ1: フィルターに合致する製品マスターを取得 ===
+	masterQuery := `SELECT ` + SelectColumns + ` FROM product_master WHERE 1=1`
 	var masterArgs []interface{}
 	if filters.KanaName != "" {
 		masterQuery += " AND (kana_name LIKE ? OR product_name LIKE ?)"
@@ -46,20 +47,96 @@ func GetInventoryValuation(conn *sql.DB, filters model.ValuationFilters) ([]Valu
 		return nil, fmt.Errorf("failed to get filtered product masters: %w", err)
 	}
 
-	mastersInYjGroup := make(map[string][]*model.ProductMaster)
+	// === ステップ2: 関連する全期間のトランザクションを一括取得 ===
+	var productCodes []string
+	for _, m := range allMasters {
+		productCodes = append(productCodes, m.ProductCode)
+	}
+	if len(productCodes) == 0 {
+		return []ValuationGroup{}, nil
+	}
+
+	transactionsByProductCode, err := getAllTransactionsForProducts(conn, productCodes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get transactions for valuation: %w", err)
+	}
+
+	// === ステップ3: YJコードごとに在庫を計算 ===
+	mastersByYjCode := make(map[string][]*model.ProductMaster)
 	for _, master := range allMasters {
 		if master.YjCode != "" {
-			mastersInYjGroup[master.YjCode] = append(mastersInYjGroup[master.YjCode], master)
+			mastersByYjCode[master.YjCode] = append(mastersByYjCode[master.YjCode], master)
 		}
 	}
 
 	yjGroupMap := make(map[string]ValuationYjGroup)
 
-	for yjCode, masters := range mastersInYjGroup {
+	for yjCode, mastersInYjGroup := range mastersByYjCode {
+		mastersByPackageKey := make(map[string][]*model.ProductMaster)
+		for _, m := range mastersInYjGroup {
+			key := fmt.Sprintf("%s|%s|%g|%s", m.YjCode, m.PackageForm, m.JanPackInnerQty, m.YjUnitName)
+			mastersByPackageKey[key] = append(mastersByPackageKey[key], m)
+		}
+
+		var totalStockForYj float64
+
+		for _, mastersInPackageGroup := range mastersByPackageKey {
+			var allTxsForPackage []*model.TransactionRecord
+			for _, m := range mastersInPackageGroup {
+				if txs, ok := transactionsByProductCode[m.ProductCode]; ok {
+					allTxsForPackage = append(allTxsForPackage, txs...)
+				}
+			}
+
+			var txsUpToDate []*model.TransactionRecord
+			for _, t := range allTxsForPackage {
+				if t.TransactionDate <= filters.Date {
+					txsUpToDate = append(txsUpToDate, t)
+				}
+			}
+
+			sort.Slice(txsUpToDate, func(i, j int) bool {
+				if txsUpToDate[i].TransactionDate != txsUpToDate[j].TransactionDate {
+					return txsUpToDate[i].TransactionDate < txsUpToDate[j].TransactionDate
+				}
+				return txsUpToDate[i].ID < txsUpToDate[j].ID
+			})
+
+			var runningBalance float64
+			latestInventoryDate := ""
+			inventorySumsByDate := make(map[string]float64)
+
+			for _, t := range txsUpToDate {
+				if t.Flag == 0 {
+					inventorySumsByDate[t.TransactionDate] += t.YjQuantity
+					if t.TransactionDate > latestInventoryDate {
+						latestInventoryDate = t.TransactionDate
+					}
+				}
+			}
+
+			if latestInventoryDate != "" {
+				runningBalance = inventorySumsByDate[latestInventoryDate]
+				for _, t := range txsUpToDate {
+					if t.TransactionDate > latestInventoryDate {
+						runningBalance += t.SignedYjQty()
+					}
+				}
+			} else {
+				for _, t := range txsUpToDate {
+					runningBalance += t.SignedYjQty()
+				}
+			}
+			totalStockForYj += runningBalance
+		}
+
+		if totalStockForYj == 0 && filters.KanaName == "" {
+			continue
+		}
+
 		var representativeMaster *model.ProductMaster
 		containsJcshms := false
-
-		for _, m := range masters {
+		for _, m := range mastersInYjGroup {
 			if m.Origin == "JCSHMS" {
 				representativeMaster = m
 				containsJcshms = true
@@ -67,38 +144,19 @@ func GetInventoryValuation(conn *sql.DB, filters model.ValuationFilters) ([]Valu
 			}
 		}
 		if representativeMaster == nil {
-			if len(masters) > 0 {
-				representativeMaster = masters[0]
+			if len(mastersInYjGroup) > 0 {
+				representativeMaster = mastersInYjGroup[0]
 			} else {
 				continue
 			}
 		}
 
-		var totalStock float64
-		for _, m := range masters {
-			stock, err := calculateStockForDate(conn, m.ProductCode, filters.Date)
-			if err != nil {
-				return nil, fmt.Errorf("failed to calculate stock for %s: %w", m.ProductCode, err)
-			}
-			totalStock += stock
-		}
-
-		if totalStock == 0 {
-			continue
-		}
-
-		// ▼▼▼ [修正点] 納入価金額の計算ロジックを全面的に変更 ▼▼▼
-		totalNhiValue := totalStock * representativeMaster.NhiPrice
-
+		totalNhiValue := totalStockForYj * representativeMaster.NhiPrice
 		var totalPurchaseValue float64
-		packagePurchasePrice := representativeMaster.PurchasePrice // これは包装価格
-		yjPackQty := representativeMaster.YjPackUnitQty            // これがYJ包装数量
-
-		if yjPackQty > 0 {
-			unitPurchasePrice := packagePurchasePrice / yjPackQty // YJ単位あたりの納入単価を計算
-			totalPurchaseValue = totalStock * unitPurchasePrice   // 在庫数(YJ単位)に単価を掛ける
+		if representativeMaster.YjPackUnitQty > 0 {
+			unitPurchasePrice := representativeMaster.PurchasePrice / representativeMaster.YjPackUnitQty
+			totalPurchaseValue = totalStockForYj * unitPurchasePrice
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
 
 		showAlert := false
 		if !containsJcshms {
@@ -112,7 +170,7 @@ func GetInventoryValuation(conn *sql.DB, filters model.ValuationFilters) ([]Valu
 			YjCode:        yjCode,
 			ProductName:   representativeMaster.ProductName,
 			KanaName:      representativeMaster.KanaName,
-			TotalYjStock:  totalStock,
+			TotalYjStock:  totalStockForYj,
 			YjUnitName:    representativeMaster.YjUnitName,
 			NhiValue:      totalNhiValue,
 			PurchaseValue: totalPurchaseValue,
@@ -122,8 +180,7 @@ func GetInventoryValuation(conn *sql.DB, filters model.ValuationFilters) ([]Valu
 
 	resultGroups := make(map[string]*ValuationGroup)
 	for yjCode, yjGroupData := range yjGroupMap {
-		// YJコードに対応するマスターが mastersInYjGroup に存在することを保証
-		if masterList, ok := mastersInYjGroup[yjCode]; ok && len(masterList) > 0 {
+		if masterList, ok := mastersByYjCode[yjCode]; ok && len(masterList) > 0 {
 			uc := masterList[0].UsageClassification
 			group, ok := resultGroups[uc]
 			if !ok {
@@ -168,7 +225,7 @@ func getAllProductMastersFiltered(conn *sql.DB, query string, args ...interface{
 
 	var masters []*model.ProductMaster
 	for rows.Next() {
-		m, err := scanProductMaster(rows)
+		m, err := ScanProductMaster(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -177,45 +234,30 @@ func getAllProductMastersFiltered(conn *sql.DB, query string, args ...interface{
 	return masters, nil
 }
 
-func calculateStockForDate(conn *sql.DB, productCode string, date string) (float64, error) {
-	var lastInventory model.TransactionRecord
-	var hasInventory bool
-
-	row := conn.QueryRow(`
-		SELECT `+TransactionColumns+` FROM transaction_records
-		WHERE jan_code = ? AND flag = 0 AND transaction_date <= ?
-		ORDER BY transaction_date DESC, id DESC LIMIT 1`, productCode, date)
-
-	rec, err := ScanTransactionRecord(row)
-	if err != nil && err != sql.ErrNoRows {
-		return 0, err
-	}
-	if err == nil {
-		hasInventory = true
-		lastInventory = *rec
+func getAllTransactionsForProducts(conn *sql.DB, productCodes []string) (map[string][]*model.TransactionRecord, error) {
+	transactionsByProductCode := make(map[string][]*model.TransactionRecord)
+	if len(productCodes) == 0 {
+		return transactionsByProductCode, nil
 	}
 
-	var query string
-	var queryArgs []interface{}
-	if hasInventory {
-		query = `SELECT SUM(CASE WHEN flag IN (1, 4, 11) THEN yj_quantity WHEN flag IN (2, 3, 5, 12) THEN -yj_quantity ELSE 0 END)
-				 FROM transaction_records
-				 WHERE jan_code = ? AND (transaction_date > ? OR (transaction_date = ? AND id > ?)) AND transaction_date <= ?`
-		queryArgs = []interface{}{productCode, lastInventory.TransactionDate, lastInventory.TransactionDate, lastInventory.ID, date}
-	} else {
-		query = `SELECT SUM(CASE WHEN flag IN (1, 4, 11) THEN yj_quantity WHEN flag IN (2, 3, 5, 12) THEN -yj_quantity ELSE 0 END)
-				 FROM transaction_records WHERE jan_code = ? AND transaction_date <= ?`
-		queryArgs = []interface{}{productCode, date}
+	var txArgs []interface{}
+	for _, pc := range productCodes {
+		txArgs = append(txArgs, pc)
 	}
 
-	var nullNetChange sql.NullFloat64
-	err = conn.QueryRow(query, queryArgs...).Scan(&nullNetChange)
-	if err != nil && err != sql.ErrNoRows {
-		return 0, err
+	txQuery := `SELECT ` + TransactionColumns + ` FROM transaction_records WHERE jan_code IN (?` + strings.Repeat(",?", len(productCodes)-1) + `)`
+	txRows, err := conn.Query(txQuery, txArgs...)
+	if err != nil {
+		return nil, err
 	}
+	defer txRows.Close()
 
-	if hasInventory {
-		return lastInventory.YjQuantity + nullNetChange.Float64, nil
+	for txRows.Next() {
+		t, err := ScanTransactionRecord(txRows)
+		if err != nil {
+			return nil, err
+		}
+		transactionsByProductCode[t.JanCode] = append(transactionsByProductCode[t.JanCode], t)
 	}
-	return nullNetChange.Float64, nil
+	return transactionsByProductCode, nil
 }

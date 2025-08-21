@@ -101,7 +101,19 @@ func GetAllBackordersMap(conn *sql.DB) (map[string]float64, error) {
 
 // GetAllBackordersList は全ての発注残をリスト形式で取得します。
 func GetAllBackordersList(conn *sql.DB) ([]model.Backorder, error) {
-	rows, err := conn.Query("SELECT yj_code, package_form, jan_pack_inner_qty, yj_unit_name, order_date, yj_quantity, product_name FROM backorders ORDER BY order_date, product_name")
+	// ▼▼▼ [修正点] product_masterとJOINして包装情報を取得するクエリに変更 ▼▼▼
+	const q = `
+		SELECT
+			b.yj_code, b.package_form, b.jan_pack_inner_qty, b.yj_unit_name,
+			b.order_date, b.yj_quantity, b.product_name,
+			pm.yj_pack_unit_qty, pm.jan_pack_unit_qty, pm.jan_unit_code
+		FROM backorders AS b
+		LEFT JOIN product_master AS pm ON b.yj_code = pm.yj_code
+		GROUP BY b.yj_code, b.package_form, b.jan_pack_inner_qty, b.yj_unit_name
+		ORDER BY b.order_date, b.product_name
+	`
+	rows, err := conn.Query(q)
+	// ▲▲▲ 修正ここまで ▲▲▲
 	if err != nil {
 		return nil, fmt.Errorf("failed to query all backorders list: %w", err)
 	}
@@ -110,10 +122,38 @@ func GetAllBackordersList(conn *sql.DB) ([]model.Backorder, error) {
 	var backorders []model.Backorder
 	for rows.Next() {
 		var bo model.Backorder
-		if err := rows.Scan(&bo.YjCode, &bo.PackageForm, &bo.JanPackInnerQty, &bo.YjUnitName, &bo.OrderDate, &bo.YjQuantity, &bo.ProductName); err != nil {
+		// ▼▼▼ [修正点] 追加したフィールドをスキャン対象に含める ▼▼▼
+		if err := rows.Scan(
+			&bo.YjCode, &bo.PackageForm, &bo.JanPackInnerQty, &bo.YjUnitName,
+			&bo.OrderDate, &bo.YjQuantity, &bo.ProductName,
+			&bo.YjPackUnitQty, &bo.JanPackUnitQty, &bo.JanUnitCode,
+		); err != nil {
+			// ▲▲▲ 修正ここまで ▲▲▲
 			return nil, err
 		}
 		backorders = append(backorders, bo)
 	}
 	return backorders, nil
 }
+
+// ▼▼▼ [修正点] 以下の関数をファイル末尾に追加 ▼▼▼
+// DeleteBackorderInTx は指定されたキーの発注残レコードを削除します。
+func DeleteBackorderInTx(tx *sql.Tx, backorder model.Backorder) error {
+	const q = `DELETE FROM backorders 
+				WHERE yj_code = ? AND package_form = ? AND jan_pack_inner_qty = ? AND yj_unit_name = ?`
+
+	res, err := tx.Exec(q, backorder.YjCode, backorder.PackageForm, backorder.JanPackInnerQty, backorder.YjUnitName)
+	if err != nil {
+		return fmt.Errorf("failed to delete backorder for yj %s: %w", backorder.YjCode, err)
+	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected for backorder yj %s: %w", backorder.YjCode, err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("no backorder found to delete for yj %s with specified package", backorder.YjCode)
+	}
+	return nil
+}
+
+// ▲▲▲ 修正ここまで ▲▲▲

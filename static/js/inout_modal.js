@@ -94,17 +94,27 @@ export function initModal() {
 }
 // ▲▲▲ 修正ここまで ▲▲▲
 
-export function showModal(rowElement, callback, searchApi = DEFAULT_SEARCH_API) {
+// ▼▼▼ [修正点] 第3引数を options オブジェクトに変更 ▼▼▼
+export function showModal(rowElement, callback, options = {}) {
   if (modal) {
-    // ▼▼▼ [修正点] モーダル表示時にbodyにクラスを追加 ▼▼▼
     document.body.classList.add('modal-open');
-    // ▲▲▲ 修正ここまで ▲▲▲
     activeRowElement = rowElement;
     activeCallback = callback; 
-    modal.dataset.searchApi = searchApi; // APIエンドポイントを保存
+    
+    // APIエンドポイントを options から取得、なければデフォルト値
+    const searchApi = options.searchApi || DEFAULT_SEARCH_API;
+    modal.dataset.searchApi = searchApi;
+    
     modal.classList.remove('hidden');
     searchInput.value = '';
     searchInput.focus();
-    searchResultsBody.innerHTML = '<tr><td colspan="6" class="center">製品名を入力して検索してください。</td></tr>';
+
+    // 事前に取得した結果リストがあれば、それを表示
+    if (options.initialResults) {
+        renderSearchResults(options.initialResults);
+    } else {
+        searchResultsBody.innerHTML = '<tr><td colspan="6" class="center">製品名を入力して検索してください。</td></tr>';
+    }
   }
 }
+// ▲▲▲ 修正ここまで ▲▲▲

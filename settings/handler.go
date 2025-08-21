@@ -91,3 +91,21 @@ func WholesalersHandler(conn *sql.DB) http.HandlerFunc {
 		}
 	}
 }
+
+// ClearTransactionsHandler は全ての取引データを削除するリクエストを処理します。
+func ClearTransactionsHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		if err := db.ClearAllTransactions(conn); err != nil {
+			http.Error(w, "Failed to clear all transactions: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"message": "全ての取引データを削除しました。"})
+	}
+}

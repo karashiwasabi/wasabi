@@ -1,3 +1,5 @@
+-- C:\Dev\WASABI\schema.sql
+
 -- 得意先マスターテーブル
 CREATE TABLE IF NOT EXISTS client_master (
   client_code TEXT PRIMARY KEY,
@@ -13,7 +15,9 @@ CREATE TABLE IF NOT EXISTS product_master (
     maker_name TEXT,
     usage_classification TEXT, -- JC013 (内外区分)
     package_form TEXT,         -- JC037 (包装)
-    package_spec TEXT,
+    -- ▼▼▼ [修正点] package_specカラムを削除 ▼▼▼
+    -- package_spec TEXT,
+    -- ▲▲▲ 修正ここまで ▲▲▲
     yj_unit_name TEXT,
     yj_pack_unit_qty REAL,
     flag_poison INTEGER,
@@ -29,7 +33,6 @@ CREATE TABLE IF NOT EXISTS product_master (
     purchase_price REAL,
     supplier_wholesale TEXT
 );
--- トランザクションレコード (最終版)
 CREATE TABLE IF NOT EXISTS transaction_records (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   transaction_date TEXT,
@@ -41,7 +44,7 @@ CREATE TABLE IF NOT EXISTS transaction_records (
   yj_code TEXT,
   product_name TEXT,
   kana_name TEXT,
-  usage_classification TEXT, -- New
+  usage_classification TEXT,
   package_form TEXT,
   package_spec TEXT,
   maker_name TEXT,
@@ -55,8 +58,8 @@ CREATE TABLE IF NOT EXISTS transaction_records (
   yj_pack_unit_qty REAL,
   yj_unit_name TEXT,
   unit_price REAL,
-  purchase_price REAL, -- New
-  supplier_wholesale TEXT, -- New
+  purchase_price REAL,
+  supplier_wholesale TEXT,
   subtotal REAL,
   tax_amount REAL,
   tax_rate REAL,
@@ -68,9 +71,15 @@ CREATE TABLE IF NOT EXISTS transaction_records (
   flag_psychotropic INTEGER,
   flag_stimulant INTEGER,
   flag_stimulant_raw INTEGER,
-  process_flag_ma TEXT,
-  processing_status TEXT
+  process_flag_ma TEXT
 );
+
+-- ▼▼▼ [修正点] ファイルの末尾などに以下のUNIQUE INDEX定義を追加 ▼▼▼
+CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_unique_slip
+  ON transaction_records(transaction_date, client_code, receipt_number, line_number)
+  WHERE receipt_number != '';
+-- ▲▲▲ 修正ここまで ▲▲▲
+
 -- JCSHMSマスタ
 CREATE TABLE IF NOT EXISTS jcshms (
   JC000 TEXT, JC001 TEXT, JC002 TEXT, JC003 TEXT, JC004 TEXT, JC005 TEXT, JC006 TEXT, JC007 TEXT, JC008 TEXT, JC009 TEXT,
@@ -102,8 +111,7 @@ CREATE TABLE IF NOT EXISTS code_sequences (
 );
 INSERT OR IGNORE INTO code_sequences(name, last_no) VALUES ('MA2Y', 0);
 INSERT OR IGNORE INTO code_sequences(name, last_no) VALUES ('CL', 0);
-
--- ▼▼▼ [修正点] 検索を高速化するためのインデックスを追加 ▼▼▼
+-- 検索を高速化するためのインデックスを追加
 CREATE INDEX IF NOT EXISTS idx_transactions_jan_code ON transaction_records (jan_code);
 CREATE INDEX IF NOT EXISTS idx_transactions_date ON transaction_records (transaction_date);
 CREATE INDEX IF NOT EXISTS idx_transactions_flag ON transaction_records (flag);
@@ -123,10 +131,8 @@ CREATE TABLE IF NOT EXISTS dead_stock_list (
   created_at TEXT NOT NULL,
   UNIQUE(product_code, expiry_date, lot_number)
 );
-
 CREATE INDEX IF NOT EXISTS idx_tx_jan_date
   ON transaction_records(jan_code, transaction_date);
-
 -- 予製レコードテーブル
 CREATE TABLE IF NOT EXISTS pre_compounding_records (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -136,7 +142,6 @@ CREATE TABLE IF NOT EXISTS pre_compounding_records (
   created_at TEXT NOT NULL,
   FOREIGN KEY (product_code) REFERENCES product_master(product_code)
 );
-
 CREATE INDEX IF NOT EXISTS idx_pre_compounding_product_code ON pre_compounding_records (product_code);
 
 -- 卸業者マスターテーブル
@@ -144,7 +149,6 @@ CREATE TABLE IF NOT EXISTS wholesalers (
   wholesaler_code TEXT PRIMARY KEY,
   wholesaler_name TEXT NOT NULL
 );
-
 -- 発注残管理テーブル (改善版)
 CREATE TABLE IF NOT EXISTS backorders (
   -- ▼ 複合主キー ▼

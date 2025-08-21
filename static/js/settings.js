@@ -110,8 +110,36 @@ export function initSettings() {
     addWholesalerBtn = document.getElementById('addWholesalerBtn');
     wholesalersTableBody = document.querySelector('#wholesalers-table tbody');
 
+    // ▼▼▼【ここから追加】▼▼▼
+    const clearTransactionsBtn = document.getElementById('clearAllTransactionsBtn');
+    // ▲▲▲【追加ここまで】▲▲▲
+
     saveBtn.addEventListener('click', saveSettings);
     addWholesalerBtn.addEventListener('click', addWholesaler);
+
+    // ▼▼▼【ここから追加】▼▼▼
+    clearTransactionsBtn.addEventListener('click', async () => {
+        if (!confirm('本当にすべての取引履歴（入出庫、納品、処方、棚卸など）を削除しますか？\n\nこの操作は元に戻せません。')) {
+            return;
+        }
+
+        window.showLoading();
+        try {
+            const res = await fetch('/api/transactions/clear_all', {
+                method: 'POST',
+            });
+            const resData = await res.json();
+            if (!res.ok) throw new Error(resData.message || '取引データの削除に失敗しました。');
+            
+            window.showNotification(resData.message, 'success');
+        } catch (err) {
+            console.error(err);
+            window.showNotification(err.message, 'error');
+        } finally {
+            window.hideLoading();
+        }
+    });
+    // ▲▲▲【追加ここまで】▲▲▲
 
     wholesalersTableBody.addEventListener('click', async (e) => {
         if (e.target.classList.contains('delete-wholesaler-btn')) {

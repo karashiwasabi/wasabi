@@ -1,3 +1,5 @@
+// C:\Dev\WASABI\db\search.go
+
 package db
 
 import (
@@ -18,8 +20,7 @@ func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterVi
 			ja.JA006, ja.JA008, ja.JA007
 		FROM jcshms AS j
 		LEFT JOIN jancode AS ja ON j.JC000 = ja.JA001
-		WHERE j.JC018 LIKE ? OR j.JC022 LIKE ?
-		ORDER BY j.JC022
+		WHERE j.JC018 LIKE ? OR j.JC022 LIKE ? ORDER BY j.JC022
 		LIMIT 500`
 
 	rows, err := conn.Query(q, "%"+nameQuery+"%", "%"+nameQuery+"%")
@@ -63,6 +64,7 @@ func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterVi
 
 		janUnitCodeInt, _ := strconv.Atoi(tempJcshms.JA007.String)
 
+		// ▼▼▼ [修正点] ProductMaster構造体から PackageSpec の設定を削除 ▼▼▼
 		view := model.ProductMasterView{
 			ProductMaster: model.ProductMaster{
 				ProductCode:         jc000.String,
@@ -72,7 +74,6 @@ func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterVi
 				MakerName:           jc030.String,
 				UsageClassification: jc013.String,
 				PackageForm:         jc037.String,
-				PackageSpec:         jc037.String,
 				YjUnitName:          units.ResolveName(jc039.String),
 				YjPackUnitQty:       jc044.Float64,
 				JanPackInnerQty:     tempJcshms.JA006.Float64,
@@ -82,6 +83,7 @@ func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterVi
 			},
 			FormattedPackageSpec: units.FormatPackageSpec(&tempJcshms),
 		}
+		// ▲▲▲ 修正ここまで ▲▲▲
 		results = append(results, view)
 	}
 	return results, nil
@@ -89,9 +91,9 @@ func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterVi
 
 // SearchAllProductMastersByName は製品名またはカナ名（部分一致）でproduct_masterテーブル全体を検索します。
 func SearchAllProductMastersByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterView, error) {
-	q := `SELECT ` + selectColumns + ` FROM product_master 
-		  WHERE kana_name LIKE ? OR product_name LIKE ? 
-		  ORDER BY kana_name LIMIT 500`
+	q := `SELECT ` + SelectColumns + ` FROM product_master 
+
+		  WHERE kana_name LIKE ? OR product_name LIKE ? ORDER BY kana_name LIMIT 500`
 
 	rows, err := conn.Query(q, "%"+nameQuery+"%", "%"+nameQuery+"%")
 	if err != nil {
@@ -101,13 +103,26 @@ func SearchAllProductMastersByName(conn *sql.DB, nameQuery string) ([]model.Prod
 
 	var mastersView []model.ProductMasterView
 	for rows.Next() {
-		m, err := scanProductMaster(rows)
+		m, err := ScanProductMaster(rows)
 		if err != nil {
 			return nil, err
 		}
+
+		// ▼▼▼ [修正点] 組み立て包装の生成に必要なデータを全て渡すように修正 ▼▼▼
+		tempJcshms := model.JCShms{
+			JC037: m.PackageForm,
+			JC039: m.YjUnitName,
+			JC044: m.YjPackUnitQty,
+			JA006: sql.NullFloat64{Float64: m.JanPackInnerQty, Valid: true},
+			JA008: sql.NullFloat64{Float64: m.JanPackUnitQty, Valid: true},
+			JA007: sql.NullString{String: fmt.Sprintf("%d", m.JanUnitCode), Valid: true},
+		}
+		// ▲▲▲ 修正ここまで ▲▲▲
+		formattedSpec := units.FormatPackageSpec(&tempJcshms)
+
 		mastersView = append(mastersView, model.ProductMasterView{
 			ProductMaster:        *m,
-			FormattedPackageSpec: m.PackageSpec, // Simplified for now
+			FormattedPackageSpec: formattedSpec,
 		})
 	}
 	return mastersView, nil

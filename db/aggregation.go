@@ -22,7 +22,7 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 	}
 
 	// === ステップ1: フィルターに合致する製品マスターを取得 ===
-	masterQuery := `SELECT ` + selectColumns + ` FROM product_master p WHERE 1=1 `
+	masterQuery := `SELECT ` + SelectColumns + ` FROM product_master p WHERE 1=1 `
 	var masterArgs []interface{}
 
 	if filters.KanaName != "" {
@@ -30,12 +30,10 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		masterArgs = append(masterArgs, "%"+filters.KanaName+"%", "%"+filters.KanaName+"%")
 	}
 
-	// ▼▼▼ [修正点] 剤型フィルターのロジックを修正 ▼▼▼
 	if filters.DosageForm != "" && filters.DosageForm != "all" {
 		masterQuery += " AND p.usage_classification = ? "
 		masterArgs = append(masterArgs, filters.DosageForm)
 	}
-	// ▲▲▲ 修正ここまで ▲▲▲
 
 	if len(filters.DrugTypes) > 0 && filters.DrugTypes[0] != "" {
 		var conditions []string
@@ -68,7 +66,7 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 	mastersByYjCode := make(map[string][]*model.ProductMaster)
 	var productCodes []string
 	for masterRows.Next() {
-		m, err := scanProductMaster(masterRows)
+		m, err := ScanProductMaster(masterRows)
 		if err != nil {
 			return nil, err
 		}
@@ -139,28 +137,31 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 
 			var startingBalance float64
 			latestInventoryDateBeforePeriod := ""
-			var lastInventoryQty float64
+			txsBeforePeriod := []*model.TransactionRecord{}
+			inventorySumsByDate := make(map[string]float64)
+
 			for _, t := range allTxsForPackage {
-				if t.TransactionDate < filters.StartDate && t.Flag == 0 {
-					if t.TransactionDate > latestInventoryDateBeforePeriod {
-						latestInventoryDateBeforePeriod = t.TransactionDate
-						lastInventoryQty = t.YjQuantity
+				if t.TransactionDate < filters.StartDate {
+					txsBeforePeriod = append(txsBeforePeriod, t)
+					if t.Flag == 0 {
+						inventorySumsByDate[t.TransactionDate] += t.YjQuantity
+						if t.TransactionDate > latestInventoryDateBeforePeriod {
+							latestInventoryDateBeforePeriod = t.TransactionDate
+						}
 					}
 				}
 			}
 
 			if latestInventoryDateBeforePeriod != "" {
-				startingBalance = lastInventoryQty
-				for _, t := range allTxsForPackage {
-					if t.TransactionDate > latestInventoryDateBeforePeriod && t.TransactionDate < filters.StartDate {
+				startingBalance = inventorySumsByDate[latestInventoryDateBeforePeriod]
+				for _, t := range txsBeforePeriod {
+					if t.TransactionDate > latestInventoryDateBeforePeriod {
 						startingBalance += t.SignedYjQty()
 					}
 				}
 			} else {
-				for _, t := range allTxsForPackage {
-					if t.TransactionDate < filters.StartDate {
-						startingBalance += t.SignedYjQty()
-					}
+				for _, t := range txsBeforePeriod {
+					startingBalance += t.SignedYjQty()
 				}
 			}
 
@@ -168,18 +169,38 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 			var netChange, maxUsage float64
 			runningBalance := startingBalance
 
+			periodInventorySums := make(map[string]float64)
+			for _, t := range allTxsForPackage {
+				if t.TransactionDate >= filters.StartDate && t.TransactionDate <= filters.EndDate && t.Flag == 0 {
+					periodInventorySums[t.TransactionDate] += t.YjQuantity
+				}
+			}
+
+			lastProcessedDate := ""
 			for _, t := range allTxsForPackage {
 				if t.TransactionDate >= filters.StartDate && t.TransactionDate <= filters.EndDate {
-					if t.Flag == 0 {
-						runningBalance = t.YjQuantity
-					} else {
+					if t.TransactionDate != lastProcessedDate && lastProcessedDate != "" {
+						if inventorySum, ok := periodInventorySums[lastProcessedDate]; ok {
+							runningBalance = inventorySum
+						}
+					}
+
+					if t.Flag != 0 {
 						runningBalance += t.SignedYjQty()
 					}
+
 					transactionsInPeriod = append(transactionsInPeriod, model.LedgerTransaction{TransactionRecord: *t, RunningBalance: runningBalance})
 					netChange += t.SignedYjQty()
 					if t.Flag == 3 && t.YjQuantity > maxUsage {
 						maxUsage = t.YjQuantity
 					}
+					lastProcessedDate = t.TransactionDate
+				}
+			}
+
+			if lastProcessedDate != "" {
+				if inventorySum, ok := periodInventorySums[lastProcessedDate]; ok {
+					runningBalance = inventorySum
 				}
 			}
 

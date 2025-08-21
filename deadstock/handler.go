@@ -1,12 +1,10 @@
-// C:\Dev\WASABI\deadstock\handler.go
-
 package deadstock
 
 import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
-	"strconv" // ▼▼▼ [修正点] 追加 ▼▼▼
+	"strconv"
 	"wasabi/db"
 	"wasabi/model"
 )
@@ -14,11 +12,9 @@ import (
 func GetDeadStockHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-
-		// ▼▼▼ [修正点] coefficientを取得する処理を追加 ▼▼▼
 		coefficient, err := strconv.ParseFloat(q.Get("coefficient"), 64)
 		if err != nil {
-			coefficient = 1.5 // Default value
+			coefficient = 1.5
 		}
 
 		filters := model.DeadStockFilters{
@@ -27,7 +23,6 @@ func GetDeadStockHandler(conn *sql.DB) http.HandlerFunc {
 			ExcludeZeroStock: q.Get("excludeZeroStock") == "true",
 			Coefficient:      coefficient,
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
 
 		tx, err := conn.Begin()
 		if err != nil {
@@ -36,7 +31,9 @@ func GetDeadStockHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer tx.Rollback()
 
+		// ▼▼▼ [修正点] conn を渡さないように、呼び出し方を元に戻す ▼▼▼
 		results, err := db.GetDeadStockList(tx, filters)
+		// ▲▲▲ 修正ここまで ▲▲▲
 		if err != nil {
 			http.Error(w, "Failed to get dead stock list: "+err.Error(), http.StatusInternalServerError)
 			return

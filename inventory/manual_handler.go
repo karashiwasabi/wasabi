@@ -64,12 +64,10 @@ func SaveManualInventoryHandler(conn *sql.DB) http.HandlerFunc {
 		var productCodes []string
 		recordsMap := make(map[string]float64)
 		for _, rec := range payload.Records {
-			// ▼▼▼ [修正点] 0以下の数量も許容する（マイナス棚卸など） ▼▼▼
-			// if rec.YjQuantity != 0 { // この行と対応する閉じ括弧を削除
-			productCodes = append(productCodes, rec.ProductCode)
-			recordsMap[rec.ProductCode] = rec.YjQuantity
-			// } // この行を削除
-			// ▲▲▲ 修正ここまで ▲▲▲
+			if rec.YjQuantity != 0 {
+				productCodes = append(productCodes, rec.ProductCode)
+				recordsMap[rec.ProductCode] = rec.YjQuantity
+			}
 		}
 
 		if len(productCodes) == 0 {
@@ -94,15 +92,21 @@ func SaveManualInventoryHandler(conn *sql.DB) http.HandlerFunc {
 			}
 
 			tr := model.TransactionRecord{
-				TransactionDate:  payload.Date,
-				Flag:             0, // 0 = Inventory
-				JanCode:          master.ProductCode,
-				YjQuantity:       recordsMap[code],
-				ReceiptNumber:    receiptNumber,
-				LineNumber:       fmt.Sprintf("%d", i+1),
-				ProcessFlagMA:    "COMPLETE",
-				ProcessingStatus: sql.NullString{String: "completed", Valid: true},
+				TransactionDate: payload.Date,
+				Flag:            0, // 0 = Inventory
+				JanCode:         master.ProductCode,
+				YjQuantity:      recordsMap[code],
+				ReceiptNumber:   receiptNumber,
+				LineNumber:      fmt.Sprintf("%d", i+1),
 			}
+
+			// ▼▼▼ [修正点] ProcessingStatusの設定を削除 ▼▼▼
+			if master.Origin == "JCSHMS" {
+				tr.ProcessFlagMA = "COMPLETE"
+			} else {
+				tr.ProcessFlagMA = "PROVISIONAL"
+			}
+			// ▲▲▲ 修正ここまで ▲▲▲
 
 			if master.JanPackInnerQty > 0 {
 				tr.JanQuantity = tr.YjQuantity / master.JanPackInnerQty

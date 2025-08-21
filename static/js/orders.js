@@ -11,7 +11,6 @@ function renderOrderCandidates(data, container, wholesalers) {
         return;
     }
 
-    const wholesalerOptionsHtml = wholesalers.map(w => `<option value="${w.code}">${w.name}</option>`).join('');
     let html = '';
     data.forEach(yjGroup => {
         const yjShortfall = yjGroup.totalReorderPoint - (yjGroup.endingBalance || 0);
@@ -20,22 +19,22 @@ function renderOrderCandidates(data, container, wholesalers) {
             <div class="agg-yj-header" style="background-color: #ff0015ff;">
                 <span>YJ: ${yjGroup.yjCode}</span>
                 <span class="product-name">${yjGroup.productName}</span>
-                <span class="balance-info">
-                    在庫: ${formatBalance(yjGroup.endingBalance)} | 
+                  <span class="balance-info">
+                     在庫: ${formatBalance(yjGroup.endingBalance)} | 
                     発注点: ${formatBalance(yjGroup.totalReorderPoint)} | 
                     不足数: ${formatBalance(yjShortfall)}
                 </span>
             </div>
-            <table class="data-table" style="margin-bottom: 20px;">
+              <table class="data-table" style="margin-bottom: 20px;">
                 <thead>
                     <tr>
                         <th style="width: 25%;">製品名（包装）</th>
-                        <th style="width: 15%;">メーカー</th>
-                        <th style="width: 15%;">包装仕様</th>
+                         <th style="width: 15%;">メーカー</th>
+                         <th style="width: 15%;">包装仕様</th>
                         <th style="width: 20%;">卸業者</th>
                         <th style="width: 10%;">発注単位</th>
-                        <th style="width: 5%;">発注数</th>
-                        <th style="width: 10%;">操作</th>
+                         <th style="width: 5%;">発注数</th>
+                         <th style="width: 10%;">操作</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -47,32 +46,29 @@ function renderOrderCandidates(data, container, wholesalers) {
                     if (pkgShortfall > 0) {
                         const recommendedOrder = master.yjPackUnitQty > 0 ? Math.ceil(pkgShortfall / master.yjPackUnitQty) : 0;
                         
-                        let rowWholesalerOptions = `<option value="">--- 選択 ---</option>` + wholesalerOptionsHtml;
-                        if (master.supplierWholesale) {
-                            rowWholesalerOptions = rowWholesalerOptions.replace(
-                                `value="${master.supplierWholesale}"`, 
-                                `value="${master.supplierWholesale}" selected`
-                            );
-                        }
-                        
-                        // ▼▼▼ [修正点] 発注残登録で使う情報をdata属性に埋め込む ▼▼▼
+                        let rowWholesalerOptions = '<option value="">--- 選択 ---</option>';
+                        wholesalers.forEach(w => {
+                            const isSelected = (w.code === master.supplierWholesale);
+                            rowWholesalerOptions += `<option value="${w.code}" ${isSelected ? 'selected' : ''}>${w.name}</option>`;
+                        });
+
                         html += `
                             <tr data-jan-code="${master.productCode}" 
-                                data-yj-code="${yjGroup.yjCode}"
-                                data-product-name="${master.productName}"
-                                data-package-form="${master.packageForm}"
-                                data-jan-pack-inner-qty="${master.janPackInnerQty}"
-                                data-yj-unit-name="${master.yjUnitName}">
-                                <td class="left">${master.productName}</td>
-                                <td class="left">${master.makerName || ''}</td>
-                                <td class="left">${master.packageSpec}</td>
+                                 data-yj-code="${yjGroup.yjCode}"
+                                 data-product-name="${master.productName}"
+                                 data-package-form="${master.packageForm}"
+                                 data-jan-pack-inner-qty="${master.janPackInnerQty}"
+                                 data-yj-unit-name="${master.yjUnitName}"
+                                 data-yj-pack-unit-qty="${master.yjPackUnitQty}">
+                                 <td class="left">${master.productName}</td>
+                                 <td class="left">${master.makerName || ''}</td>
+                                <td class="left">${master.formattedPackageSpec}</td>
                                 <td><select class="wholesaler-select" style="width: 100%;">${rowWholesalerOptions}</select></td>
                                 <td>${master.yjPackUnitQty} ${master.yjUnitName}</td>
                                 <td><input type="number" value="${recommendedOrder}" class="order-quantity-input" style="width: 80px;"></td>
                                 <td><button class="remove-order-item-btn btn">除外</button></td>
                             </tr>
                         `;
-                        // ▲▲▲ 修正ここまで ▲▲▲
                     }
                 });
             }
@@ -90,37 +86,31 @@ export function initOrders() {
     const outputContainer = document.getElementById('order-candidates-output');
     const startDateInput = document.getElementById('order-startDate');
     const endDateInput = document.getElementById('order-endDate');
-     // ▼▼▼ [修正点] kanaNameInputのIDを order-kanaName に合わせる ▼▼▼
     const kanaNameInput = document.getElementById('order-kanaName');
-    // ▲▲▲ 修正ここまで ▲▲▲
     const dosageFormInput = document.getElementById('order-dosageForm');
     const coefficientInput = document.getElementById('order-reorder-coefficient');
     const createCsvBtn = document.getElementById('createOrderCsvBtn');
-
     const today = new Date();
     const threeMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 3, today.getDate());
     endDateInput.value = today.toISOString().slice(0, 10);
     startDateInput.value = threeMonthsAgo.toISOString().slice(0, 10);
-
     runBtn.addEventListener('click', async () => {
         window.showLoading();
-        // ▼▼▼ [修正点] パラメータ作成部分を修正 ▼▼▼
         const params = new URLSearchParams({
             startDate: startDateInput.value.replace(/-/g, ''),
             endDate: endDateInput.value.replace(/-/g, ''),
-            kanaName: kanaNameInput.value,     // kanaNameは製品名/カナ名検索に使われる
-            dosageForm: dosageFormInput.value, // dosageFormは剤型検索に使われる
+            kanaName: kanaNameInput.value,
+            dosageForm: dosageFormInput.value,
             coefficient: coefficientInput.value,
         });
-        // ▲▲▲ 修正ここまで ▲▲▲
 
-        try {
+         try {
             const res = await fetch(`/api/orders/candidates?${params.toString()}`);
             if (!res.ok) {
                 const errText = await res.text();
-                throw new Error(errText || 'List generation failed');
+                 throw new Error(errText || 'List generation failed');
             }
-            const data = await res.json();
+             const data = await res.json();
             
             renderOrderCandidates(data.candidates, outputContainer, data.wholesalers || []);
 
@@ -130,8 +120,6 @@ export function initOrders() {
             window.hideLoading();
         }
     });
-    
-    // ▼▼▼ [修正点] createCsvBtnのイベントリスナーを全面的に書き換え ▼▼▼
     createCsvBtn.addEventListener('click', async () => {
         const rows = outputContainer.querySelectorAll('tbody tr');
         if (rows.length === 0) {
@@ -143,7 +131,7 @@ export function initOrders() {
         let csvContent = "";
         let hasItemsToOrder = false;
 
-        rows.forEach(row => {
+         rows.forEach(row => {
             const quantityInput = row.querySelector('.order-quantity-input');
             const quantity = parseInt(quantityInput.value, 10);
             
@@ -164,6 +152,7 @@ export function initOrders() {
                     yjUnitName: row.dataset.yjUnitName,
                     yjQuantity: quantity * yjUnitQty,
                     productName: row.dataset.productName,
+                    yjPackUnitQty: parseFloat(row.dataset.yjPackUnitQty) || 0,
                 });
             }
         });
@@ -184,8 +173,7 @@ export function initOrders() {
             if (!res.ok) throw new Error(resData.message || '発注残の登録に失敗しました。');
             
             window.showNotification(resData.message, 'success');
-
-            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csvContent], { type: 'text/csv;charset=utf-8;' });
             const link = document.createElement("a");
             const url = URL.createObjectURL(blob);
             const now = new Date();
@@ -204,8 +192,6 @@ export function initOrders() {
             window.hideLoading();
         }
     });
-    // ▲▲▲ 修正ここまで ▲▲▲
-
     outputContainer.addEventListener('click', (e) => {
         if (e.target.classList.contains('remove-order-item-btn')) {
             const row = e.target.closest('tr');

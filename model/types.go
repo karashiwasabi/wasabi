@@ -1,57 +1,62 @@
 // C:\Dev\WASABI\model\types.go
+
 package model
 
 import "database/sql"
 
 type ProductMaster struct {
-	ProductCode         string  `json:"productCode"`
-	YjCode              string  `json:"yjCode"`
-	ProductName         string  `json:"productName"`
-	Origin              string  `json:"origin"`
-	KanaName            string  `json:"kanaName"`
-	MakerName           string  `json:"makerName"`
-	UsageClassification string  `json:"usageClassification"`
-	PackageForm         string  `json:"packageForm"`
-	PackageSpec         string  `json:"packageSpec"`
-	YjUnitName          string  `json:"yjUnitName"`
-	YjPackUnitQty       float64 `json:"yjPackUnitQty"`
-	FlagPoison          int     `json:"flagPoison"`
-	FlagDeleterious     int     `json:"flagDeleterious"`
-	FlagNarcotic        int     `json:"flagNarcotic"`
-	FlagPsychotropic    int     `json:"flagPsychotropic"`
-	FlagStimulant       int     `json:"flagStimulant"`
-	FlagStimulantRaw    int     `json:"flagStimulantRaw"`
-	JanPackInnerQty     float64 `json:"janPackInnerQty"`
-	JanUnitCode         int     `json:"janUnitCode"`
-	JanPackUnitQty      float64 `json:"janPackUnitQty"`
-	NhiPrice            float64 `json:"nhiPrice"`
-	PurchasePrice       float64 `json:"purchasePrice"`
-	SupplierWholesale   string  `json:"supplierWholesale"`
+	ProductCode         string `json:"productCode"`
+	YjCode              string `json:"yjCode"`
+	ProductName         string `json:"productName"`
+	Origin              string `json:"origin"`
+	KanaName            string `json:"kanaName"`
+	MakerName           string `json:"makerName"`
+	UsageClassification string `json:"usageClassification"`
+	PackageForm         string `json:"packageForm"`
+	// ▼▼▼ [修正点] PackageSpecフィールドを削除 ▼▼▼
+	// PackageSpec         string  `json:"packageSpec"`
+	// ▲▲▲ 修正ここまで ▲▲▲
+	YjUnitName        string  `json:"yjUnitName"`
+	YjPackUnitQty     float64 `json:"yjPackUnitQty"`
+	FlagPoison        int     `json:"flagPoison"`
+	FlagDeleterious   int     `json:"flagDeleterious"`
+	FlagNarcotic      int     `json:"flagNarcotic"`
+	FlagPsychotropic  int     `json:"flagPsychotropic"`
+	FlagStimulant     int     `json:"flagStimulant"`
+	FlagStimulantRaw  int     `json:"flagStimulantRaw"`
+	JanPackInnerQty   float64 `json:"janPackInnerQty"`
+	JanUnitCode       int     `json:"janUnitCode"`
+	JanPackUnitQty    float64 `json:"janPackUnitQty"`
+	NhiPrice          float64 `json:"nhiPrice"`
+	PurchasePrice     float64 `json:"purchasePrice"`
+	SupplierWholesale string  `json:"supplierWholesale"`
 }
 type ProductMasterInput struct {
-	ProductCode         string  `json:"productCode"`
-	YjCode              string  `json:"yjCode"`
-	ProductName         string  `json:"productName"`
-	Origin              string  `json:"origin"`
-	KanaName            string  `json:"kanaName"`
-	MakerName           string  `json:"makerName"`
-	UsageClassification string  `json:"usageClassification"`
-	PackageForm         string  `json:"packageForm"`
-	PackageSpec         string  `json:"packageSpec"`
-	YjUnitName          string  `json:"yjUnitName"`
-	YjPackUnitQty       float64 `json:"yjPackUnitQty"`
-	FlagPoison          int     `json:"flagPoison"`
-	FlagDeleterious     int     `json:"flagDeleterious"`
-	FlagNarcotic        int     `json:"flagNarcotic"`
-	FlagPsychotropic    int     `json:"flagPsychotropic"`
-	FlagStimulant       int     `json:"flagStimulant"`
-	FlagStimulantRaw    int     `json:"flagStimulantRaw"`
-	JanPackInnerQty     float64 `json:"janPackInnerQty"`
-	JanUnitCode         int     `json:"janUnitCode"`
-	JanPackUnitQty      float64 `json:"janPackUnitQty"`
-	NhiPrice            float64 `json:"nhiPrice"`
-	PurchasePrice       float64 `json:"purchasePrice"`
-	SupplierWholesale   string  `json:"supplierWholesale"`
+	ProductCode         string `json:"productCode"`
+	YjCode              string `json:"yjCode"`
+	ProductName         string `json:"productName"`
+	Origin              string `json:"origin"`
+	KanaName            string `json:"kanaName"`
+	MakerName           string `json:"makerName"`
+	UsageClassification string `json:"usageClassification"`
+	PackageForm         string `json:"packageForm"`
+	// ▼▼▼ [修正点] PackageSpecフィールドを削除 ▼▼▼
+	// PackageSpec         string  `json:"packageSpec"`
+	// ▲▲▲ 修正ここまで ▲▲▲
+	YjUnitName        string  `json:"yjUnitName"`
+	YjPackUnitQty     float64 `json:"yjPackUnitQty"`
+	FlagPoison        int     `json:"flagPoison"`
+	FlagDeleterious   int     `json:"flagDeleterious"`
+	FlagNarcotic      int     `json:"flagNarcotic"`
+	FlagPsychotropic  int     `json:"flagPsychotropic"`
+	FlagStimulant     int     `json:"flagStimulant"`
+	FlagStimulantRaw  int     `json:"flagStimulantRaw"`
+	JanPackInnerQty   float64 `json:"janPackInnerQty"`
+	JanUnitCode       int     `json:"janUnitCode"`
+	JanPackUnitQty    float64 `json:"janPackUnitQty"`
+	NhiPrice          float64 `json:"nhiPrice"`
+	PurchasePrice     float64 `json:"purchasePrice"`
+	SupplierWholesale string  `json:"supplierWholesale"`
 }
 type JCShms struct {
 	JC009 string
@@ -74,45 +79,44 @@ type JCShms struct {
 	JA008 sql.NullFloat64
 }
 type TransactionRecord struct {
-	ID                  int            `json:"id"`
-	TransactionDate     string         `json:"transactionDate"`
-	ClientCode          string         `json:"clientCode"`
-	ReceiptNumber       string         `json:"receiptNumber"`
-	LineNumber          string         `json:"lineNumber"`
-	Flag                int            `json:"flag"`
-	JanCode             string         `json:"janCode"`
-	YjCode              string         `json:"yjCode"`
-	ProductName         string         `json:"productName"`
-	KanaName            string         `json:"kanaName"`
-	UsageClassification string         `json:"usageClassification"`
-	PackageForm         string         `json:"packageForm"`
-	PackageSpec         string         `json:"packageSpec"`
-	MakerName           string         `json:"makerName"`
-	DatQuantity         float64        `json:"datQuantity"`
-	JanPackInnerQty     float64        `json:"janPackInnerQty"`
-	JanQuantity         float64        `json:"janQuantity"`
-	JanPackUnitQty      float64        `json:"janPackUnitQty"`
-	JanUnitName         string         `json:"janUnitName"`
-	JanUnitCode         string         `json:"janUnitCode"`
-	YjQuantity          float64        `json:"yjQuantity"`
-	YjPackUnitQty       float64        `json:"yjPackUnitQty"`
-	YjUnitName          string         `json:"yjUnitName"`
-	UnitPrice           float64        `json:"unitPrice"`
-	PurchasePrice       float64        `json:"purchasePrice"`
-	SupplierWholesale   string         `json:"supplierWholesale"`
-	Subtotal            float64        `json:"subtotal"`
-	TaxAmount           float64        `json:"taxAmount"`
-	TaxRate             float64        `json:"taxRate"`
-	ExpiryDate          string         `json:"expiryDate"`
-	LotNumber           string         `json:"lotNumber"`
-	FlagPoison          int            `json:"flagPoison"`
-	FlagDeleterious     int            `json:"flagDeleterious"`
-	FlagNarcotic        int            `json:"flagNarcotic"`
-	FlagPsychotropic    int            `json:"flagPsychotropic"`
-	FlagStimulant       int            `json:"flagStimulant"`
-	FlagStimulantRaw    int            `json:"flagStimulantRaw"`
-	ProcessFlagMA       string         `json:"processFlagMA"`
-	ProcessingStatus    sql.NullString `json:"processingStatus"`
+	ID                  int     `json:"id"`
+	TransactionDate     string  `json:"transactionDate"`
+	ClientCode          string  `json:"clientCode"`
+	ReceiptNumber       string  `json:"receiptNumber"`
+	LineNumber          string  `json:"lineNumber"`
+	Flag                int     `json:"flag"`
+	JanCode             string  `json:"janCode"`
+	YjCode              string  `json:"yjCode"`
+	ProductName         string  `json:"productName"`
+	KanaName            string  `json:"kanaName"`
+	UsageClassification string  `json:"usageClassification"`
+	PackageForm         string  `json:"packageForm"`
+	PackageSpec         string  `json:"packageSpec"`
+	MakerName           string  `json:"makerName"`
+	DatQuantity         float64 `json:"datQuantity"`
+	JanPackInnerQty     float64 `json:"janPackInnerQty"`
+	JanQuantity         float64 `json:"janQuantity"`
+	JanPackUnitQty      float64 `json:"janPackUnitQty"`
+	JanUnitName         string  `json:"janUnitName"`
+	JanUnitCode         string  `json:"janUnitCode"`
+	YjQuantity          float64 `json:"yjQuantity"`
+	YjPackUnitQty       float64 `json:"yjPackUnitQty"`
+	YjUnitName          string  `json:"yjUnitName"`
+	UnitPrice           float64 `json:"unitPrice"`
+	PurchasePrice       float64 `json:"purchasePrice"`
+	SupplierWholesale   string  `json:"supplierWholesale"`
+	Subtotal            float64 `json:"subtotal"`
+	TaxAmount           float64 `json:"taxAmount"`
+	TaxRate             float64 `json:"taxRate"`
+	ExpiryDate          string  `json:"expiryDate"`
+	LotNumber           string  `json:"lotNumber"`
+	FlagPoison          int     `json:"flagPoison"`
+	FlagDeleterious     int     `json:"flagDeleterious"`
+	FlagNarcotic        int     `json:"flagNarcotic"`
+	FlagPsychotropic    int     `json:"flagPsychotropic"`
+	FlagStimulant       int     `json:"flagStimulant"`
+	FlagStimulantRaw    int     `json:"flagStimulantRaw"`
+	ProcessFlagMA       string  `json:"processFlagMA"`
 }
 
 func (t *TransactionRecord) SignedYjQty() float64 {
@@ -175,21 +179,19 @@ type StockLedgerYJGroup struct {
 	TotalPrecompounded    float64                   `json:"totalPrecompounded"`
 }
 type StockLedgerPackageGroup struct {
-	PackageKey      string              `json:"packageKey"`
-	JanUnitName     string              `json:"janUnitName"`
-	StartingBalance interface{}         `json:"startingBalance"`
-	Transactions    []LedgerTransaction `json:"transactions"`
-	NetChange       float64             `json:"netChange"`
-	EndingBalance   interface{}         `json:"endingBalance"`
-	// ▼▼▼ [修正点] 以下の1行を追加 ▼▼▼
-	EffectiveEndingBalance float64 `json:"effectiveEndingBalance"`
-	// ▲▲▲ 修正ここまで ▲▲▲
-	MaxUsage           float64          `json:"maxUsage"`
-	ReorderPoint       float64          `json:"reorderPoint"`
-	IsReorderNeeded    bool             `json:"isReorderNeeded"`
-	Masters            []*ProductMaster `json:"masters"` // masterからmastersに変更し、スライス型にする
-	BaseReorderPoint   float64          `json:"baseReorderPoint"`
-	PrecompoundedTotal float64          `json:"precompoundedTotal"`
+	PackageKey             string              `json:"packageKey"`
+	JanUnitName            string              `json:"janUnitName"`
+	StartingBalance        interface{}         `json:"startingBalance"`
+	Transactions           []LedgerTransaction `json:"transactions"`
+	NetChange              float64             `json:"netChange"`
+	EndingBalance          interface{}         `json:"endingBalance"`
+	EffectiveEndingBalance float64             `json:"effectiveEndingBalance"`
+	MaxUsage               float64             `json:"maxUsage"`
+	ReorderPoint           float64             `json:"reorderPoint"`
+	IsReorderNeeded        bool                `json:"isReorderNeeded"`
+	Masters                []*ProductMaster    `json:"masters"`
+	BaseReorderPoint       float64             `json:"baseReorderPoint"`
+	PrecompoundedTotal     float64             `json:"precompoundedTotal"`
 }
 type LedgerTransaction struct {
 	TransactionRecord
@@ -214,17 +216,26 @@ type UnifiedInputRecord struct {
 	ExpiryDate      string  `json:"expiryDate"`
 	LotNumber       string  `json:"lotNumber"`
 }
+
 type DeadStockGroup struct {
-	YjCode      string             `json:"yjCode"`
-	ProductName string             `json:"productName"`
-	TotalStock  float64            `json:"totalStock"`
-	Packages    []DeadStockPackage `json:"packages"`
+	YjCode        string                  `json:"yjCode"`
+	ProductName   string                  `json:"productName"`
+	TotalStock    float64                 `json:"totalStock"`
+	PackageGroups []DeadStockPackageGroup `json:"packageGroups"`
 }
-type DeadStockPackage struct {
+
+type DeadStockPackageGroup struct {
+	PackageKey string             `json:"packageKey"`
+	TotalStock float64            `json:"totalStock"`
+	Products   []DeadStockProduct `json:"products"`
+}
+
+type DeadStockProduct struct {
 	ProductMaster
 	CurrentStock float64           `json:"currentStock"`
 	SavedRecords []DeadStockRecord `json:"savedRecords"`
 }
+
 type DeadStockRecord struct {
 	ID               int     `json:"id"`
 	ProductCode      string  `json:"productCode"`
@@ -261,4 +272,20 @@ type Backorder struct {
 	OrderDate       string  `json:"orderDate"`
 	YjQuantity      float64 `json:"yjQuantity"`
 	ProductName     string  `json:"productName"`
+	// ▼▼▼ [修正点] 包装仕様の計算に必要なフィールドを追加 ▼▼▼
+	YjPackUnitQty  float64 `json:"yjPackUnitQty"`
+	JanPackUnitQty float64 `json:"janPackUnitQty"`
+	JanUnitCode    int     `json:"janUnitCode"`
+	// ▲▲▲ 修正ここまで ▲▲▲
+}
+
+type PriceUpdate struct {
+	ProductCode      string  `json:"productCode"`
+	NewPurchasePrice float64 `json:"newPrice"`
+	NewSupplier      string  `json:"newWholesaler"`
+}
+
+type QuoteData struct {
+	ProductMaster
+	Quotes map[string]float64 `json:"quotes"`
 }

@@ -122,7 +122,6 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 			}
 		}
 
-		// ▼▼▼ [修正点] マスター取得をコネクション(conn)ではなくトランザクション(tx)で行う ▼▼▼
 		mastersMap, err := db.GetProductMastersByCodesMap(tx, keyList)
 		if err != nil {
 			http.Error(w, "Failed to pre-fetch product masters", http.StatusInternalServerError)
@@ -133,7 +132,6 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 			http.Error(w, "Failed to pre-fetch JCSHMS data", http.StatusInternalServerError)
 			return
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
 
 		for i, rec := range payload.Records {
 			if rec.ProductCode == "" {
@@ -149,21 +147,28 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 			subtotal := yjQuantity * master.NhiPrice
 
 			tr := model.TransactionRecord{
-				TransactionDate:  dateStr,
-				ClientCode:       clientCode,
-				ReceiptNumber:    receiptNumber,
-				LineNumber:       fmt.Sprintf("%d", i+1),
-				Flag:             flag,
-				JanCode:          master.ProductCode,
-				JanQuantity:      rec.JanQuantity,
-				DatQuantity:      rec.DatQuantity, // 「個数」をセット
-				YjQuantity:       yjQuantity,
-				Subtotal:         subtotal,
-				ExpiryDate:       rec.ExpiryDate,
-				LotNumber:        rec.LotNumber,
-				ProcessFlagMA:    "COMPLETE",
-				ProcessingStatus: sql.NullString{String: "completed", Valid: true},
+				TransactionDate: dateStr,
+				ClientCode:      clientCode,
+				ReceiptNumber:   receiptNumber,
+				LineNumber:      fmt.Sprintf("%d", i+1),
+				Flag:            flag,
+				JanCode:         master.ProductCode,
+				JanQuantity:     rec.JanQuantity,
+				DatQuantity:     rec.DatQuantity,
+				YjQuantity:      yjQuantity,
+				Subtotal:        subtotal,
+				ExpiryDate:      rec.ExpiryDate,
+				LotNumber:       rec.LotNumber,
 			}
+
+			// ▼▼▼ [修正点] ProcessingStatusの設定を削除 ▼▼▼
+			if master.Origin == "JCSHMS" {
+				tr.ProcessFlagMA = "COMPLETE"
+			} else {
+				tr.ProcessFlagMA = "PROVISIONAL"
+			}
+			// ▲▲▲ 修正ここまで ▲▲▲
+
 			mappers.MapProductMasterToTransaction(&tr, master)
 			finalRecords = append(finalRecords, tr)
 		}
@@ -182,7 +187,6 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		// ▼▼▼ [修正点] 新規得意先情報をレスポンスに追加 ▼▼▼
 		response := map[string]interface{}{
 			"message":       "Saved successfully",
 			"receiptNumber": receiptNumber,
@@ -194,6 +198,5 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 			}
 		}
 		json.NewEncoder(w).Encode(response)
-		// ▲▲▲ 修正ここまで ▲▲▲
 	}
 }

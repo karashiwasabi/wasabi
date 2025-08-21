@@ -15,7 +15,7 @@ import (
 	"wasabi/parsers"
 )
 
-// insertTransactionQuery defines the SQL statement for inserting transaction records.
+// ▼▼▼ [修正点] INSERT文から processing_status と対応するプレースホルダを削除 ▼▼▼
 const insertTransactionQuery = `
 INSERT OR REPLACE INTO transaction_records (
     transaction_date, client_code, receipt_number, line_number, flag,
@@ -24,8 +24,10 @@ INSERT OR REPLACE INTO transaction_records (
     yj_quantity, yj_pack_unit_qty, yj_unit_name, unit_price, purchase_price, supplier_wholesale,
     subtotal, tax_amount, tax_rate, expiry_date, lot_number, flag_poison,
     flag_deleterious, flag_narcotic, flag_psychotropic, flag_stimulant,
-    flag_stimulant_raw, process_flag_ma, processing_status
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    flag_stimulant_raw, process_flag_ma
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+
+// ▲▲▲ 修正ここまで ▲▲▲
 
 // UploadDatHandler はDATファイルのアップロードを処理します。
 func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
@@ -100,7 +102,6 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 			}
 		}
 
-		// ▼▼▼ [修正点] マスター取得をコネクション(conn)ではなくトランザクション(tx)で行う ▼▼▼
 		mastersMap, err := db.GetProductMastersByCodesMap(tx, keyList)
 		if err != nil {
 			tx.Rollback()
@@ -113,7 +114,6 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 			http.Error(w, "Failed to pre-fetch JCSHMS data", http.StatusInternalServerError)
 			return
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
 
 		stmt, err := tx.Prepare(insertTransactionQuery)
 		if err != nil {
@@ -149,14 +149,15 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 			}
 			mappers.MapProductMasterToTransaction(&ar, master)
 
+			// ▼▼▼ [修正点] ProcessingStatusの設定を削除 ▼▼▼
 			if master.Origin == "JCSHMS" {
 				ar.ProcessFlagMA = "COMPLETE"
-				ar.ProcessingStatus = sql.NullString{String: "completed", Valid: true}
 			} else {
 				ar.ProcessFlagMA = "PROVISIONAL"
-				ar.ProcessingStatus = sql.NullString{String: "provisional", Valid: true}
 			}
+			// ▲▲▲ 修正ここまで ▲▲▲
 
+			// ▼▼▼ [修正点] Execの引数から ar.ProcessingStatus を削除 ▼▼▼
 			_, err = stmt.Exec(
 				ar.TransactionDate, ar.ClientCode, ar.ReceiptNumber, ar.LineNumber, ar.Flag,
 				ar.JanCode, ar.YjCode, ar.ProductName, ar.KanaName, ar.UsageClassification, ar.PackageForm, ar.PackageSpec, ar.MakerName,
@@ -164,8 +165,9 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 				ar.YjQuantity, ar.YjPackUnitQty, ar.YjUnitName, ar.UnitPrice, ar.PurchasePrice, ar.SupplierWholesale,
 				ar.Subtotal, ar.TaxAmount, ar.TaxRate, ar.ExpiryDate, ar.LotNumber, ar.FlagPoison,
 				ar.FlagDeleterious, ar.FlagNarcotic, ar.FlagPsychotropic, ar.FlagStimulant,
-				ar.FlagStimulantRaw, ar.ProcessFlagMA, ar.ProcessingStatus,
+				ar.FlagStimulantRaw, ar.ProcessFlagMA,
 			)
+			// ▲▲▲ 修正ここまで ▲▲▲
 			if err != nil {
 				tx.Rollback()
 				http.Error(w, fmt.Sprintf("Failed to insert record for JAN %s: %v", ar.JanCode, err), http.StatusInternalServerError)
@@ -200,7 +202,6 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// ▼▼▼ [修正点] 消込処理を新しいテーブル構造に合わせて修正 ▼▼▼
 		var deliveredItems []model.Backorder
 		for _, rec := range finalRecords {
 			if rec.Flag == 1 { // 納品フラグ
@@ -219,7 +220,6 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 				log.Printf("WARN: Failed to reconcile backorders: %v", err)
 			}
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		json.NewEncoder(w).Encode(map[string]interface{}{

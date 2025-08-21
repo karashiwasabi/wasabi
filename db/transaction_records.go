@@ -6,10 +6,11 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 	"wasabi/model"
 )
 
-// TransactionColumns is a reusable list of all columns in the transaction_records table.
+// ▼▼▼ [修正点] カラム一覧から processing_status を削除 ▼▼▼
 const TransactionColumns = `
     id, transaction_date, client_code, receipt_number, line_number, flag,
     jan_code, yj_code, product_name, kana_name, usage_classification, package_form, package_spec, maker_name,
@@ -17,11 +18,14 @@ const TransactionColumns = `
     yj_quantity, yj_pack_unit_qty, yj_unit_name, unit_price, purchase_price, supplier_wholesale,
 	subtotal, tax_amount, tax_rate, expiry_date, lot_number, flag_poison,
     flag_deleterious, flag_narcotic, flag_psychotropic, flag_stimulant,
-    flag_stimulant_raw, process_flag_ma, processing_status`
+    flag_stimulant_raw, process_flag_ma`
+
+// ▲▲▲ 修正ここまで ▲▲▲
 
 // ScanTransactionRecord maps a database row to a TransactionRecord struct.
 func ScanTransactionRecord(row interface{ Scan(...interface{}) error }) (*model.TransactionRecord, error) {
 	var r model.TransactionRecord
+	// ▼▼▼ [修正点] スキャン対象から &r.ProcessingStatus を削除 ▼▼▼
 	err := row.Scan(
 		&r.ID, &r.TransactionDate, &r.ClientCode, &r.ReceiptNumber, &r.LineNumber, &r.Flag,
 		&r.JanCode, &r.YjCode, &r.ProductName, &r.KanaName, &r.UsageClassification, &r.PackageForm, &r.PackageSpec, &r.MakerName,
@@ -29,8 +33,9 @@ func ScanTransactionRecord(row interface{ Scan(...interface{}) error }) (*model.
 		&r.YjQuantity, &r.YjPackUnitQty, &r.YjUnitName, &r.UnitPrice, &r.PurchasePrice, &r.SupplierWholesale,
 		&r.Subtotal, &r.TaxAmount, &r.TaxRate, &r.ExpiryDate, &r.LotNumber, &r.FlagPoison,
 		&r.FlagDeleterious, &r.FlagNarcotic, &r.FlagPsychotropic, &r.FlagStimulant,
-		&r.FlagStimulantRaw, &r.ProcessFlagMA, &r.ProcessingStatus,
+		&r.FlagStimulantRaw, &r.ProcessFlagMA,
 	)
+	// ▲▲▲ 修正ここまで ▲▲▲
 	if err != nil {
 		return nil, err
 	}
@@ -39,6 +44,7 @@ func ScanTransactionRecord(row interface{ Scan(...interface{}) error }) (*model.
 
 // PersistTransactionRecordsInTx inserts or replaces a slice of transaction records within a transaction.
 func PersistTransactionRecordsInTx(tx *sql.Tx, records []model.TransactionRecord) error {
+	// ▼▼▼ [修正点] INSERT文から processing_status と対応するプレースホルダを削除 ▼▼▼
 	const q = `
 INSERT OR REPLACE INTO transaction_records (
     transaction_date, client_code, receipt_number, line_number, flag,
@@ -47,8 +53,9 @@ INSERT OR REPLACE INTO transaction_records (
     yj_quantity, yj_pack_unit_qty, yj_unit_name, unit_price, purchase_price, supplier_wholesale,
 	subtotal, tax_amount, tax_rate, expiry_date, lot_number, flag_poison,
     flag_deleterious, flag_narcotic, flag_psychotropic, flag_stimulant,
-    flag_stimulant_raw, process_flag_ma, processing_status
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    flag_stimulant_raw, process_flag_ma
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+	// ▲▲▲ 修正ここまで ▲▲▲
 
 	stmt, err := tx.Prepare(q)
 	if err != nil {
@@ -57,7 +64,8 @@ INSERT OR REPLACE INTO transaction_records (
 	defer stmt.Close()
 
 	for _, rec := range records {
-		_, err = stmt.Exec( // ここは再宣言ではないので = を使用
+		// ▼▼▼ [修正点] Execの引数から rec.ProcessingStatus を削除 ▼▼▼
+		_, err = stmt.Exec(
 			rec.TransactionDate, rec.ClientCode, rec.ReceiptNumber, rec.LineNumber, rec.Flag,
 			rec.JanCode, rec.YjCode, rec.ProductName, rec.KanaName, rec.UsageClassification, rec.PackageForm, rec.PackageSpec, rec.MakerName,
 			rec.DatQuantity, rec.JanPackInnerQty, rec.JanQuantity,
@@ -66,8 +74,9 @@ INSERT OR REPLACE INTO transaction_records (
 			rec.YjQuantity, rec.YjPackUnitQty, rec.YjUnitName, rec.UnitPrice, rec.PurchasePrice, rec.SupplierWholesale,
 			rec.Subtotal, rec.TaxAmount, rec.TaxRate, rec.ExpiryDate, rec.LotNumber, rec.FlagPoison,
 			rec.FlagDeleterious, rec.FlagNarcotic, rec.FlagPsychotropic, rec.FlagStimulant,
-			rec.FlagStimulantRaw, rec.ProcessFlagMA, rec.ProcessingStatus,
+			rec.FlagStimulantRaw, rec.ProcessFlagMA,
 		)
+		// ▲▲▲ 修正ここまで ▲▲▲
 		if err != nil {
 			log.Printf("FAILED to insert into transaction_records: JAN=%s, Error: %v", rec.JanCode, err)
 			return fmt.Errorf("failed to exec statement for transaction_records (JAN: %s): %w", rec.JanCode, err)
@@ -88,7 +97,7 @@ func GetReceiptNumbersByDate(conn *sql.DB, date string) ([]string, error) {
 	var numbers []string
 	for rows.Next() {
 		var number string
-		if err = rows.Scan(&number); err != nil { // ここは再宣言ではないので = を使用
+		if err = rows.Scan(&number); err != nil {
 			return nil, err
 		}
 		numbers = append(numbers, number)
@@ -118,7 +127,9 @@ func GetTransactionsByReceiptNumber(conn *sql.DB, receiptNumber string) ([]model
 
 // GetProvisionalTransactions retrieves all records marked as 'provisional'.
 func GetProvisionalTransactions(tx *sql.Tx) ([]model.TransactionRecord, error) {
-	q := `SELECT ` + TransactionColumns + ` FROM transaction_records WHERE processing_status = 'provisional'`
+	// ▼▼▼ [修正点] WHERE句の条件を process_flag_ma に変更 ▼▼▼
+	q := `SELECT ` + TransactionColumns + ` FROM transaction_records WHERE process_flag_ma = 'PROVISIONAL'`
+	// ▲▲▲ 修正ここまで ▲▲▲
 	rows, err := tx.Query(q)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get provisional transactions: %w", err)
@@ -138,6 +149,7 @@ func GetProvisionalTransactions(tx *sql.Tx) ([]model.TransactionRecord, error) {
 
 // UpdateFullTransactionInTx updates an existing transaction record with enriched master data.
 func UpdateFullTransactionInTx(tx *sql.Tx, record *model.TransactionRecord) error {
+	// ▼▼▼ [修正点] UPDATE文から processing_status を削除 ▼▼▼
 	const q = `
 		UPDATE transaction_records SET
 			jan_code = ?, yj_code = ?, product_name = ?, kana_name = ?, usage_classification = ?, package_form = ?, 
@@ -146,9 +158,11 @@ func UpdateFullTransactionInTx(tx *sql.Tx, record *model.TransactionRecord) erro
 			unit_price = ?, purchase_price = ?, supplier_wholesale = ?,
 			flag_poison = ?, flag_deleterious = ?, flag_narcotic = ?, flag_psychotropic = ?,
 			flag_stimulant = ?, flag_stimulant_raw = ?,
-			process_flag_ma = ?, processing_status = ?
+			process_flag_ma = ?
 		WHERE id = ?`
+	// ▲▲▲ 修正ここまで ▲▲▲
 
+	// ▼▼▼ [修正点] Execの引数から record.ProcessingStatus を削除 ▼▼▼
 	_, err := tx.Exec(q,
 		record.JanCode, record.YjCode, record.ProductName, record.KanaName, record.UsageClassification, record.PackageForm,
 		record.PackageSpec, record.MakerName, record.JanPackInnerQty, record.JanPackUnitQty,
@@ -156,9 +170,10 @@ func UpdateFullTransactionInTx(tx *sql.Tx, record *model.TransactionRecord) erro
 		record.UnitPrice, record.PurchasePrice, record.SupplierWholesale,
 		record.FlagPoison, record.FlagDeleterious, record.FlagNarcotic, record.FlagPsychotropic,
 		record.FlagStimulant, record.FlagStimulantRaw,
-		record.ProcessFlagMA, record.ProcessingStatus,
+		record.ProcessFlagMA,
 		record.ID,
 	)
+	// ▲▲▲ 修正ここまで ▲▲▲
 	if err != nil {
 		return fmt.Errorf("failed to update transaction ID %d: %w", record.ID, err)
 	}
@@ -193,4 +208,59 @@ func DeleteUsageTransactionsInDateRange(tx *sql.Tx, minDate, maxDate string) err
 		return fmt.Errorf("failed to delete usage transactions: %w", err)
 	}
 	return nil
+}
+
+// DeleteZeroFillInventoryTransactionsは、指定された日付とJANコードリストに一致する
+// ゼロ埋め用の棚卸レコード（LineNumberが'Z'で始まるもの）を削除します。
+func DeleteZeroFillInventoryTransactions(tx *sql.Tx, date string, janCodes []string) error {
+	if len(janCodes) == 0 {
+		return nil // 削除対象がなければ何もしない
+	}
+
+	// SQLインジェクションを防ぐため、プレースホルダ(?)を動的に生成
+	placeholders := strings.Repeat("?,", len(janCodes)-1) + "?"
+
+	// 'Z'で始まるゼロ埋めレコードのみを対象とするDELETE文
+	q := fmt.Sprintf(`
+		DELETE FROM transaction_records 
+		WHERE flag = 0 
+		  AND transaction_date = ? 
+		  AND line_number LIKE 'Z%%' 
+		  AND jan_code IN (%s)`, placeholders)
+
+	// interface{}のスライスに引数をまとめる
+	args := make([]interface{}, 0, len(janCodes)+1)
+	args = append(args, date)
+	for _, jan := range janCodes {
+		args = append(args, jan)
+	}
+
+	_, err := tx.Exec(q, args...)
+	if err != nil {
+		return fmt.Errorf("failed to delete zero-fill inventory transactions for date %s: %w", date, err)
+	}
+	return nil
+}
+
+// ClearAllTransactions はtransaction_recordsテーブルの全レコードを削除します。
+func ClearAllTransactions(conn *sql.DB) error {
+	tx, err := conn.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to start transaction for clearing transactions: %w", err)
+	}
+	defer tx.Rollback()
+
+	// 全レコードを削除
+	if _, err := tx.Exec(`DELETE FROM transaction_records`); err != nil {
+		return fmt.Errorf("failed to execute delete from transaction_records: %w", err)
+	}
+
+	// SQLiteの自動採番シーケンスをリセット
+	// これにより、次に登録されるデータのIDが1から始まります。
+	if _, err := tx.Exec(`UPDATE sqlite_sequence SET seq = 0 WHERE name = 'transaction_records'`); err != nil {
+		// テーブルが空の場合、sqlite_sequenceにエントリがないことがあるため、エラーを無視しても問題ない
+		log.Printf("Could not reset sequence for transaction_records (this is normal if table was empty): %v", err)
+	}
+
+	return tx.Commit()
 }
