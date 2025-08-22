@@ -1,3 +1,4 @@
+// C:\Dev\WASABI\db\valuation.go
 package db
 
 import (
@@ -6,26 +7,15 @@ import (
 	"sort"
 	"strings"
 	"wasabi/model"
+	"wasabi/units"
 )
 
 // ValuationGroup は剤型ごとの集計結果を保持します
 type ValuationGroup struct {
-	UsageClassification string             `json:"usageClassification"`
-	YjGroups            []ValuationYjGroup `json:"yjGroups"`
-	TotalNhiValue       float64            `json:"totalNhiValue"`
-	TotalPurchaseValue  float64            `json:"totalPurchaseValue"`
-}
-
-// ValuationYjGroup はYJコードごとの集計結果を保持します
-type ValuationYjGroup struct {
-	YjCode        string  `json:"yjCode"`
-	ProductName   string  `json:"productName"`
-	KanaName      string  `json:"kanaName"`
-	TotalYjStock  float64 `json:"totalYjStock"`
-	YjUnitName    string  `json:"yjUnitName"`
-	NhiValue      float64 `json:"nhiValue"`
-	PurchaseValue float64 `json:"purchaseValue"`
-	ShowAlert     bool    `json:"showAlert"`
+	UsageClassification string                     `json:"usageClassification"`
+	DetailRows          []model.ValuationDetailRow `json:"detailRows"`
+	TotalNhiValue       float64                    `json:"totalNhiValue"`
+	TotalPurchaseValue  float64                    `json:"totalPurchaseValue"`
 }
 
 // GetInventoryValuation は指定日の在庫評価レポートを生成します
@@ -47,6 +37,13 @@ func GetInventoryValuation(conn *sql.DB, filters model.ValuationFilters) ([]Valu
 		return nil, fmt.Errorf("failed to get filtered product masters: %w", err)
 	}
 
+	yjHasJcshmsMaster := make(map[string]bool)
+	for _, master := range allMasters {
+		if master.Origin == "JCSHMS" {
+			yjHasJcshmsMaster[master.YjCode] = true
+		}
+	}
+
 	// === ステップ2: 関連する全期間のトランザクションを一括取得 ===
 	var productCodes []string
 	for _, m := range allMasters {
@@ -61,143 +58,152 @@ func GetInventoryValuation(conn *sql.DB, filters model.ValuationFilters) ([]Valu
 		return nil, fmt.Errorf("failed to get transactions for valuation: %w", err)
 	}
 
-	// === ステップ3: YJコードごとに在庫を計算 ===
-	mastersByYjCode := make(map[string][]*model.ProductMaster)
+	// === ステップ3: 包装グループごとに在庫を計算し、詳細行を作成 ===
+	mastersByPackageKey := make(map[string][]*model.ProductMaster)
 	for _, master := range allMasters {
-		if master.YjCode != "" {
-			mastersByYjCode[master.YjCode] = append(mastersByYjCode[master.YjCode], master)
-		}
+		key := fmt.Sprintf("%s|%s|%g|%s", master.YjCode, master.PackageForm, master.JanPackInnerQty, master.YjUnitName)
+		mastersByPackageKey[key] = append(mastersByPackageKey[key], master)
 	}
 
-	yjGroupMap := make(map[string]ValuationYjGroup)
+	var detailRows []model.ValuationDetailRow
 
-	for yjCode, mastersInYjGroup := range mastersByYjCode {
-		mastersByPackageKey := make(map[string][]*model.ProductMaster)
-		for _, m := range mastersInYjGroup {
-			key := fmt.Sprintf("%s|%s|%g|%s", m.YjCode, m.PackageForm, m.JanPackInnerQty, m.YjUnitName)
-			mastersByPackageKey[key] = append(mastersByPackageKey[key], m)
+	for _, mastersInPackageGroup := range mastersByPackageKey {
+		// (トランザクション集計と在庫計算ロジック)
+		var allTxsForPackage []*model.TransactionRecord
+		for _, m := range mastersInPackageGroup {
+			if txs, ok := transactionsByProductCode[m.ProductCode]; ok {
+				allTxsForPackage = append(allTxsForPackage, txs...)
+			}
 		}
 
-		var totalStockForYj float64
+		var txsUpToDate []*model.TransactionRecord
+		for _, t := range allTxsForPackage {
+			if t.TransactionDate <= filters.Date {
+				txsUpToDate = append(txsUpToDate, t)
+			}
+		}
 
-		for _, mastersInPackageGroup := range mastersByPackageKey {
-			var allTxsForPackage []*model.TransactionRecord
-			for _, m := range mastersInPackageGroup {
-				if txs, ok := transactionsByProductCode[m.ProductCode]; ok {
-					allTxsForPackage = append(allTxsForPackage, txs...)
+		sort.Slice(txsUpToDate, func(i, j int) bool {
+			if txsUpToDate[i].TransactionDate != txsUpToDate[j].TransactionDate {
+				return txsUpToDate[i].TransactionDate < txsUpToDate[j].TransactionDate
+			}
+			return txsUpToDate[i].ID < txsUpToDate[j].ID
+		})
+
+		var runningBalance float64
+		latestInventoryDate := ""
+		inventorySumsByDate := make(map[string]float64)
+
+		for _, t := range txsUpToDate {
+			if t.Flag == 0 {
+				inventorySumsByDate[t.TransactionDate] += t.YjQuantity
+				if t.TransactionDate > latestInventoryDate {
+					latestInventoryDate = t.TransactionDate
 				}
 			}
+		}
 
-			var txsUpToDate []*model.TransactionRecord
-			for _, t := range allTxsForPackage {
-				if t.TransactionDate <= filters.Date {
-					txsUpToDate = append(txsUpToDate, t)
-				}
-			}
-
-			sort.Slice(txsUpToDate, func(i, j int) bool {
-				if txsUpToDate[i].TransactionDate != txsUpToDate[j].TransactionDate {
-					return txsUpToDate[i].TransactionDate < txsUpToDate[j].TransactionDate
-				}
-				return txsUpToDate[i].ID < txsUpToDate[j].ID
-			})
-
-			var runningBalance float64
-			latestInventoryDate := ""
-			inventorySumsByDate := make(map[string]float64)
-
+		if latestInventoryDate != "" {
+			runningBalance = inventorySumsByDate[latestInventoryDate]
 			for _, t := range txsUpToDate {
-				if t.Flag == 0 {
-					inventorySumsByDate[t.TransactionDate] += t.YjQuantity
-					if t.TransactionDate > latestInventoryDate {
-						latestInventoryDate = t.TransactionDate
-					}
-				}
-			}
-
-			if latestInventoryDate != "" {
-				runningBalance = inventorySumsByDate[latestInventoryDate]
-				for _, t := range txsUpToDate {
-					if t.TransactionDate > latestInventoryDate {
-						runningBalance += t.SignedYjQty()
-					}
-				}
-			} else {
-				for _, t := range txsUpToDate {
+				if t.TransactionDate > latestInventoryDate {
 					runningBalance += t.SignedYjQty()
 				}
 			}
-			totalStockForYj += runningBalance
+		} else {
+			for _, t := range txsUpToDate {
+				runningBalance += t.SignedYjQty()
+			}
 		}
 
-		if totalStockForYj == 0 && filters.KanaName == "" {
+		if runningBalance == 0 {
 			continue
 		}
 
-		var representativeMaster *model.ProductMaster
-		containsJcshms := false
-		for _, m := range mastersInYjGroup {
-			if m.Origin == "JCSHMS" {
-				representativeMaster = m
-				containsJcshms = true
-				break
+		// ▼▼▼ [修正点] 代表製品名をJCSHMS由来のものから優先的に選択するロジックを追加 ▼▼▼
+		var repMaster *model.ProductMaster
+		if len(mastersInPackageGroup) > 0 {
+			// まずリストの最初のマスターをフォールバックとして設定
+			repMaster = mastersInPackageGroup[0]
+			// JCSHMS由来のマスターを探す
+			for _, m := range mastersInPackageGroup {
+				if m.Origin == "JCSHMS" {
+					repMaster = m // JCSHMS由来のマスターが見つかれば、それを代表とする
+					break
+				}
 			}
+		} else {
+			continue // マスターがなければこの包装グループはスキップ
 		}
-		if representativeMaster == nil {
-			if len(mastersInYjGroup) > 0 {
-				representativeMaster = mastersInYjGroup[0]
-			} else {
-				continue
-			}
-		}
-
-		totalNhiValue := totalStockForYj * representativeMaster.NhiPrice
-		var totalPurchaseValue float64
-		if representativeMaster.YjPackUnitQty > 0 {
-			unitPurchasePrice := representativeMaster.PurchasePrice / representativeMaster.YjPackUnitQty
-			totalPurchaseValue = totalStockForYj * unitPurchasePrice
-		}
+		// ▲▲▲ 修正ここまで ▲▲▲
 
 		showAlert := false
-		if !containsJcshms {
-			uc := strings.TrimSpace(representativeMaster.UsageClassification)
-			if uc != "5" && uc != "機" && uc != "6" && uc != "他" {
-				showAlert = true
-			}
+		if repMaster.Origin != "JCSHMS" && !yjHasJcshmsMaster[repMaster.YjCode] {
+			showAlert = true
 		}
 
-		yjGroupMap[yjCode] = ValuationYjGroup{
-			YjCode:        yjCode,
-			ProductName:   representativeMaster.ProductName,
-			KanaName:      representativeMaster.KanaName,
-			TotalYjStock:  totalStockForYj,
-			YjUnitName:    representativeMaster.YjUnitName,
-			NhiValue:      totalNhiValue,
-			PurchaseValue: totalPurchaseValue,
-			ShowAlert:     showAlert,
+		// 包装仕様を生成
+		tempJcshms := model.JCShms{
+			JC037: repMaster.PackageForm, JC039: repMaster.YjUnitName, JC044: repMaster.YjPackUnitQty,
+			JA006: sql.NullFloat64{Float64: repMaster.JanPackInnerQty, Valid: true},
+			JA008: sql.NullFloat64{Float64: repMaster.JanPackUnitQty, Valid: true},
+			JA007: sql.NullString{String: fmt.Sprintf("%d", repMaster.JanUnitCode), Valid: true},
 		}
+		spec := units.FormatPackageSpec(&tempJcshms)
+
+		// 薬価・納入価を計算
+		packageNhiPrice := repMaster.NhiPrice * repMaster.YjPackUnitQty
+		totalNhiValue := runningBalance * repMaster.NhiPrice
+		var totalPurchaseValue float64
+		if repMaster.YjPackUnitQty > 0 {
+			unitPurchasePrice := repMaster.PurchasePrice / repMaster.YjPackUnitQty
+			totalPurchaseValue = runningBalance * unitPurchasePrice
+		}
+
+		detailRows = append(detailRows, model.ValuationDetailRow{
+			YjCode:               repMaster.YjCode,
+			ProductName:          repMaster.ProductName,
+			ProductCode:          repMaster.ProductCode,
+			PackageSpec:          spec,
+			Stock:                runningBalance,
+			YjUnitName:           repMaster.YjUnitName,
+			PackageNhiPrice:      packageNhiPrice,
+			PackagePurchasePrice: repMaster.PurchasePrice,
+			TotalNhiValue:        totalNhiValue,
+			TotalPurchaseValue:   totalPurchaseValue,
+			ShowAlert:            showAlert,
+		})
+	}
+
+	// === ステップ4: 剤型ごとにグルーピング ===
+	mastersByJanCode := make(map[string]*model.ProductMaster)
+	for _, m := range allMasters {
+		mastersByJanCode[m.ProductCode] = m
 	}
 
 	resultGroups := make(map[string]*ValuationGroup)
-	for yjCode, yjGroupData := range yjGroupMap {
-		if masterList, ok := mastersByYjCode[yjCode]; ok && len(masterList) > 0 {
-			uc := masterList[0].UsageClassification
-			group, ok := resultGroups[uc]
-			if !ok {
-				group = &ValuationGroup{UsageClassification: uc}
-				resultGroups[uc] = group
-			}
-			group.YjGroups = append(group.YjGroups, yjGroupData)
-			group.TotalNhiValue += yjGroupData.NhiValue
-			group.TotalPurchaseValue += yjGroupData.PurchaseValue
+	for _, row := range detailRows {
+		master, ok := mastersByJanCode[row.ProductCode]
+		if !ok {
+			continue
 		}
+		uc := master.UsageClassification
+		group, ok := resultGroups[uc]
+		if !ok {
+			group = &ValuationGroup{UsageClassification: uc}
+			resultGroups[uc] = group
+		}
+		group.DetailRows = append(group.DetailRows, row)
+		group.TotalNhiValue += row.TotalNhiValue
+		group.TotalPurchaseValue += row.TotalPurchaseValue
 	}
 
+	// (並び替えロジックは変更なし)
 	order := map[string]int{"1": 1, "内": 1, "2": 2, "外": 2, "3": 3, "歯": 3, "4": 4, "注": 4, "5": 5, "機": 5, "6": 6, "他": 6}
 	var finalResult []ValuationGroup
 	for _, group := range resultGroups {
-		sort.Slice(group.YjGroups, func(i, j int) bool {
-			return group.YjGroups[i].KanaName < group.YjGroups[j].KanaName
+		sort.Slice(group.DetailRows, func(i, j int) bool {
+			return mastersByJanCode[group.DetailRows[i].ProductCode].KanaName < mastersByJanCode[group.DetailRows[j].ProductCode].KanaName
 		})
 		finalResult = append(finalResult, *group)
 	}

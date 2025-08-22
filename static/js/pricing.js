@@ -1,11 +1,14 @@
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\pricing.js
+
 import { wholesalerMap } from './master_data.js';
 
 let view, wholesalerSelect, exportBtn, uploadInput, bulkUpdateBtn, outputContainer, makerFilterInput;
 let fullPricingData = []; 
-let orderedWholesalers = []; // 卸の順序を保持する変数を追加
+let orderedWholesalers = []; 
 let setLowestPriceBtn;
-let unregisteredFilterCheckbox; // ★ 新しいフィルター用の変数を追加
-let exportUnregisteredBtn; // ★ 新しいエクスポートボタン用の変数を追加
+let unregisteredFilterCheckbox; 
+let exportUnregisteredBtn; 
+let lastSelectedWholesaler = ''; 
 
 /**
  * テーブルを描画する関数
@@ -16,8 +19,8 @@ function renderComparisonTable(data) {
         return;
     }
 
-    // 順序が保証されないSetではなく、サーバーから受け取った順序リストを使用する
-    const wholesalerHeaders = orderedWholesalers.length > 0 ? orderedWholesalers.map(w => `<th>${w}</th>`).join('') : '';
+    const wholesalerHeaders = orderedWholesalers.length > 0 ?
+        orderedWholesalers.map(w => `<th>${w}</th>`).join('') : '';
     
     const wholesalerReverseMap = new Map();
     for (const [code, name] of wholesalerMap.entries()) {
@@ -35,7 +38,7 @@ function renderComparisonTable(data) {
                     <th colspan="${orderedWholesalers.length || 1}">卸提示価格</th>
                     <th rowspan="2">採用卸</th>
                     <th rowspan="2">決定納入価</th>
-                 </tr>
+                </tr>
                 <tr>
                     ${wholesalerHeaders}
                 </tr>
@@ -47,14 +50,11 @@ function renderComparisonTable(data) {
 
         let wholesalerOptions = '<option value="">--- 選択 ---</option>';
         
-        // 順序リストを元にプルダウンを生成
-        orderedWholesalers.forEach(wName => {
-            const wCode = wholesalerReverseMap.get(wName) || '';
+        for (const [wCode, wName] of wholesalerMap.entries()) {
             const isSelected = (wCode === p.supplierWholesale);
             wholesalerOptions += `<option value="${wCode}" ${isSelected ? 'selected' : ''}>${wName}</option>`;
-        });
+        }
 
-        // 順序リストを元に価格セルを生成
         const quoteCells = orderedWholesalers.length > 0 ? orderedWholesalers.map(w => {
             const price = (p.quotes || {})[w];
             if (price === undefined) return '<td>-</td>';
@@ -64,7 +64,7 @@ function renderComparisonTable(data) {
         }).join('') : '<td>-</td>';
         
         const initialPrice = p.purchasePrice > 0 ? p.purchasePrice.toFixed(2) : '';
-
+        
         tableHTML += `
             <tr data-product-code="${productCode}">
                 <td class="left">${p.productName}</td>
@@ -137,7 +137,7 @@ async function handleBulkUpdate() {
         
         if (productCode && selectedWholesalerCode && !isNaN(price)) {
             payload.push({ productCode, newPrice: price, newWholesaler: selectedWholesalerCode });
-         } else if (productCode && !selectedWholesalerCode) {
+        } else if (productCode && !selectedWholesalerCode) {
              payload.push({ productCode, newPrice: 0, newWholesaler: '' });
         }
     });
@@ -149,12 +149,10 @@ async function handleBulkUpdate() {
  */
 function applyFiltersAndRender() {
     let dataToRender = fullPricingData;
-    // 「未登録のみ」フィルターの適用
     if (unregisteredFilterCheckbox.checked) {
-        dataToRender = dataToRender.filter(p => !p.supplierWholescale);
+        dataToRender = dataToRender.filter(p => !p.supplierWholesale);
     }
 
-    // メーカー名フィルターの適用
     const filterText = makerFilterInput.value.trim().toLowerCase();
     if (filterText) {
         dataToRender = dataToRender.filter(p => 
@@ -205,12 +203,10 @@ async function handleUpload() {
             throw new Error(errText || 'アップロード処理に失敗しました。'); 
         }
         
-        // サーバーから返されたデータ（マスター＋見積もり）で既存のデータを更新
         const responseData = await res.json();
         fullPricingData = responseData.productData;
-        orderedWholesalers = responseData.wholesalerOrder; // 卸の順序を保存
-        applyFiltersAndRender(); 
-        
+        orderedWholesalers = responseData.wholesalerOrder;
+        applyFiltersAndRender();
     } catch (err) {
         window.showNotification(err.message, 'error');
     } finally {
@@ -225,9 +221,28 @@ async function handleUpload() {
 async function handleExport(unregisteredOnly = false) {
     let dataToExport = fullPricingData;
     let fileNameSuffix = "全品";
-    // 未登録品のみをエクスポートする場合のフィルタリング
+
     if (unregisteredOnly) {
-        dataToExport = fullPricingData.filter(p => !p.supplierWholesale);
+        // ▼▼▼ [修正点] ご指定のフィルターロジックをここに追加 ▼▼▼
+        // 1. まず「採用卸が未登録」で絞り込む
+        const unregisteredItems = fullPricingData.filter(p => !p.supplierWholesale);
+
+        // 2. 次にご指定の追加条件で絞り込む
+        dataToExport = unregisteredItems.filter(p => {
+            const uc = p.usageClassification;
+            // 剤型が「機」または「他」の場合は含める
+            if (uc === '機' || uc === '他') {
+                return true;
+            }
+            // 剤型が「内」「外」「歯」「注」で、かつJCSHMS由来の場合は含める
+            if (['内', '外', '歯', '注'].includes(uc) && p.origin === 'JCSHMS') {
+                return true;
+            }
+            // 上記以外は除外
+            return false;
+        });
+        // ▲▲▲ 修正ここまで ▲▲▲
+
         fileNameSuffix = "未登録品";
         if (dataToExport.length === 0) {
             window.showNotification('エクスポート対象の未登録品がありません。', 'error');
@@ -278,7 +293,7 @@ async function loadInitialMasters() {
         if (!res.ok) throw new Error('製品マスターの読み込みに失敗しました。');
         const responseData = await res.json();
         fullPricingData = responseData;
-        orderedWholesalers = []; // 初期表示では見積もりがないので卸リストは空
+        orderedWholesalers = [];
         applyFiltersAndRender();
     } catch(err) {
         outputContainer.innerHTML = `<p style="color:red;">${err.message}</p>`;
@@ -294,6 +309,9 @@ function loadWholesalerDropdown() {
         opt.value = code; 
         opt.textContent = name; 
         wholesalerSelect.appendChild(opt); 
+    }
+    if (lastSelectedWholesaler) {
+        wholesalerSelect.value = lastSelectedWholesaler;
     }
 }
 
@@ -357,7 +375,7 @@ function handleSupplierChange(event) {
 export function initPricingView() {
     view = document.getElementById('pricing-view');
     if (!view) return;
-    // DOM要素の取得
+    
     wholesalerSelect = document.getElementById('pricing-wholesaler-select');
     exportBtn = document.getElementById('pricing-export-btn');
     uploadInput = document.getElementById('pricing-upload-input'); 
@@ -368,21 +386,24 @@ export function initPricingView() {
     unregisteredFilterCheckbox = document.getElementById('pricing-unregistered-filter');
     exportUnregisteredBtn = document.getElementById('pricing-export-unregistered-btn');
     
-    // イベントリスナーの設定
     view.addEventListener('show', () => {
         loadWholesalerDropdown();
-        loadInitialMasters(); // 最初に全マスターを読み込む
+        loadInitialMasters();
     });
     
     uploadInput.addEventListener('change', handleUpload); 
     bulkUpdateBtn.addEventListener('click', handleBulkUpdate); 
     setLowestPriceBtn.addEventListener('click', handleSetLowestPrice);
     
-    exportBtn.addEventListener('click', () => handleExport(false)); // 全品エクスポート
-    exportUnregisteredBtn.addEventListener('click', () => handleExport(true)); // 未登録品エクスポート
+    exportBtn.addEventListener('click', () => handleExport(false)); 
+    exportUnregisteredBtn.addEventListener('click', () => handleExport(true));
 
     makerFilterInput.addEventListener('input', applyFiltersAndRender);
     unregisteredFilterCheckbox.addEventListener('change', applyFiltersAndRender);
 
     outputContainer.addEventListener('change', handleSupplierChange);
+    
+    wholesalerSelect.addEventListener('change', () => {
+        lastSelectedWholesaler = wholesalerSelect.value;
+    });
 }

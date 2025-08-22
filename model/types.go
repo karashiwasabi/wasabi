@@ -5,32 +5,30 @@ package model
 import "database/sql"
 
 type ProductMaster struct {
-	ProductCode         string `json:"productCode"`
-	YjCode              string `json:"yjCode"`
-	ProductName         string `json:"productName"`
-	Origin              string `json:"origin"`
-	KanaName            string `json:"kanaName"`
-	MakerName           string `json:"makerName"`
-	UsageClassification string `json:"usageClassification"`
-	PackageForm         string `json:"packageForm"`
-	// ▼▼▼ [修正点] PackageSpecフィールドを削除 ▼▼▼
-	// PackageSpec         string  `json:"packageSpec"`
-	// ▲▲▲ 修正ここまで ▲▲▲
-	YjUnitName        string  `json:"yjUnitName"`
-	YjPackUnitQty     float64 `json:"yjPackUnitQty"`
-	FlagPoison        int     `json:"flagPoison"`
-	FlagDeleterious   int     `json:"flagDeleterious"`
-	FlagNarcotic      int     `json:"flagNarcotic"`
-	FlagPsychotropic  int     `json:"flagPsychotropic"`
-	FlagStimulant     int     `json:"flagStimulant"`
-	FlagStimulantRaw  int     `json:"flagStimulantRaw"`
-	JanPackInnerQty   float64 `json:"janPackInnerQty"`
-	JanUnitCode       int     `json:"janUnitCode"`
-	JanPackUnitQty    float64 `json:"janPackUnitQty"`
-	NhiPrice          float64 `json:"nhiPrice"`
-	PurchasePrice     float64 `json:"purchasePrice"`
-	SupplierWholesale string  `json:"supplierWholesale"`
+	ProductCode         string  `json:"productCode"`
+	YjCode              string  `json:"yjCode"`
+	ProductName         string  `json:"productName"`
+	Origin              string  `json:"origin"`
+	KanaName            string  `json:"kanaName"`
+	MakerName           string  `json:"makerName"`
+	UsageClassification string  `json:"usageClassification"`
+	PackageForm         string  `json:"packageForm"`
+	YjUnitName          string  `json:"yjUnitName"`
+	YjPackUnitQty       float64 `json:"yjPackUnitQty"`
+	FlagPoison          int     `json:"flagPoison"`
+	FlagDeleterious     int     `json:"flagDeleterious"`
+	FlagNarcotic        int     `json:"flagNarcotic"`
+	FlagPsychotropic    int     `json:"flagPsychotropic"`
+	FlagStimulant       int     `json:"flagStimulant"`
+	FlagStimulantRaw    int     `json:"flagStimulantRaw"`
+	JanPackInnerQty     float64 `json:"janPackInnerQty"`
+	JanUnitCode         int     `json:"janUnitCode"`
+	JanPackUnitQty      float64 `json:"janPackUnitQty"`
+	NhiPrice            float64 `json:"nhiPrice"`
+	PurchasePrice       float64 `json:"purchasePrice"`
+	SupplierWholesale   string  `json:"supplierWholesale"`
 }
+
 type ProductMasterInput struct {
 	ProductCode         string `json:"productCode"`
 	YjCode              string `json:"yjCode"`
@@ -78,6 +76,16 @@ type JCShms struct {
 	JA007 sql.NullString
 	JA008 sql.NullFloat64
 }
+
+// ValuationPackageDetail は包装ごとの評価詳細を保持します
+type ValuationPackageDetail struct {
+	ProductCode   string  `json:"productCode"`   // JANコード
+	PackageSpec   string  `json:"packageSpec"`   // 包装仕様
+	Stock         float64 `json:"stock"`         // この包装での在庫数 (YJ単位)
+	NhiPrice      float64 `json:"nhiPrice"`      // 包装薬価
+	PurchasePrice float64 `json:"purchasePrice"` // 包装納入価
+}
+
 type TransactionRecord struct {
 	ID                  int     `json:"id"`
 	TransactionDate     string  `json:"transactionDate"`
@@ -252,6 +260,10 @@ type DeadStockFilters struct {
 	EndDate          string
 	ExcludeZeroStock bool
 	Coefficient      float64
+	// ▼▼▼ [修正点] 絞り込み用のフィールドを追加 ▼▼▼
+	KanaName   string // 製品名・カナ名による絞り込み
+	DosageForm string // 剤型による絞り込み
+	// ▲▲▲ 修正ここまで ▲▲▲
 }
 type PreCompoundingRecord struct {
 	ID            int     `json:"id"`
@@ -289,3 +301,22 @@ type QuoteData struct {
 	ProductMaster
 	Quotes map[string]float64 `json:"quotes"`
 }
+
+// ▼▼▼ ここから追加 ▼▼▼
+// ValuationDetailRow は在庫評価画面の1行分の詳細データを保持します
+type ValuationDetailRow struct {
+	YjCode               string  `json:"yjCode"`
+	ProductName          string  `json:"productName"`
+	ProductCode          string  `json:"productCode"` // JANコード
+	PackageSpec          string  `json:"packageSpec"`
+	Stock                float64 `json:"stock"`
+	YjUnitName           string  `json:"yjUnitName"`
+	PackageNhiPrice      float64 `json:"packageNhiPrice"`      // 包装薬価 (JAN単位)
+	PackagePurchasePrice float64 `json:"packagePurchasePrice"` // 包装納入価
+	TotalNhiValue        float64 `json:"totalNhiValue"`        // 薬価評価額
+	TotalPurchaseValue   float64 `json:"totalPurchaseValue"`   // 納入価評価額
+	// ▼▼▼ この行を追加 ▼▼▼
+	ShowAlert bool `json:"showAlert"`
+}
+
+// ▲▲▲ 追加ここまで ▲▲▲

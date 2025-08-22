@@ -1,3 +1,5 @@
+// C:\Dev\WASABI\main.go
+
 package main
 
 import (
@@ -25,6 +27,7 @@ import (
 	"wasabi/precomp"
 	"wasabi/pricing"
 	"wasabi/reprocess"
+	"wasabi/returns" // ▼▼▼ import を追加 ▼▼▼
 	"wasabi/settings"
 	"wasabi/stock"
 	"wasabi/transaction"
@@ -93,6 +96,9 @@ func main() {
 	mux.HandleFunc("/api/precomp/clear", precomp.ClearPrecompHandler(conn))
 	mux.HandleFunc("/api/orders/candidates", orders.GenerateOrderCandidatesHandler(conn))
 	mux.HandleFunc("/api/orders/place", orders.PlaceOrderHandler(conn))
+	// ▼▼▼ この行を追加 ▼▼▼
+	mux.HandleFunc("/api/returns/candidates", returns.GenerateReturnCandidatesHandler(conn))
+	// ▲▲▲ 追加ここまで ▲▲▲
 	mux.HandleFunc("/api/backorders", backorder.GetBackordersHandler(conn))
 	mux.HandleFunc("/api/backorders/delete", backorder.DeleteBackorderHandler(conn))
 	mux.HandleFunc("/api/masters/reload_jcshms", loader.ReloadJcshmsHandler(conn))
@@ -102,6 +108,9 @@ func main() {
 	mux.HandleFunc("/api/pricing/all_masters", pricing.GetAllMastersForPricingHandler(conn))
 	mux.HandleFunc("/api/masters/by_yj_code", db.GetMastersByYjCodeHandler(conn))
 	mux.HandleFunc("/api/stock/current", stock.GetCurrentStockHandler(conn))
+	// ▼▼▼ [修正点] この行を末尾に追加 ▼▼▼
+	mux.HandleFunc("/api/stock/all_current", stock.GetAllCurrentStockHandler(conn))
+	// ▲▲▲ 修正ここまで ▲▲▲
 	mux.HandleFunc("/api/medrec/download", medrec.DownloadHandler(conn))
 
 	// Serve Frontend

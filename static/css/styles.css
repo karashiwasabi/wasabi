@@ -141,9 +141,6 @@ th { text-align: center; background-color: #f0f0f0; }
   }
   
   /* 印刷時の改ページ制御 */
-  .print-this-view .agg-yj-header {
-      page-break-before: always;
-  }
   .print-this-view .agg-yj-header:first-child {
       page-break-before: auto;
   }

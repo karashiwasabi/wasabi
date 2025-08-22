@@ -3,11 +3,17 @@
 package dat
 
 import (
+	"bufio"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
 	"wasabi/db"
 	"wasabi/mappers"
 	"wasabi/mastermanager"
@@ -15,7 +21,6 @@ import (
 	"wasabi/parsers"
 )
 
-// ▼▼▼ [修正点] INSERT文から processing_status と対応するプレースホルダを削除 ▼▼▼
 const insertTransactionQuery = `
 INSERT OR REPLACE INTO transaction_records (
     transaction_date, client_code, receipt_number, line_number, flag,
@@ -26,8 +31,6 @@ INSERT OR REPLACE INTO transaction_records (
     flag_deleterious, flag_narcotic, flag_psychotropic, flag_stimulant,
     flag_stimulant_raw, process_flag_ma
 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-
-// ▲▲▲ 修正ここまで ▲▲▲
 
 // UploadDatHandler はDATファイルのアップロードを処理します。
 func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
@@ -54,11 +57,91 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 		for _, fileHeader := range r.MultipartForm.File["file"] {
 			file, err := fileHeader.Open()
 			if err != nil {
-				log.Printf("Failed to open file %s: %v", fileHeader.Filename, err)
+				log.Printf("Failed to open uploaded file %s: %v", fileHeader.Filename, err)
 				continue
 			}
-			defer file.Close()
-			parsed, err := parsers.ParseDat(file)
+
+			tempFile, err := os.CreateTemp("", "dat-*.tmp")
+			if err != nil {
+				log.Printf("Failed to create temp file: %v", err)
+				file.Close()
+				continue
+			}
+
+			_, err = io.Copy(tempFile, file)
+			file.Close()
+			if err != nil {
+				log.Printf("Failed to copy to temp file: %v", err)
+				tempFile.Close()
+				os.Remove(tempFile.Name())
+				continue
+			}
+
+			tempFile.Seek(0, 0)
+			scanner := bufio.NewScanner(tempFile)
+			var destDir string
+			var newBaseName string
+
+			if scanner.Scan() {
+				firstLine := scanner.Text()
+				if strings.HasPrefix(firstLine, "S") && len(firstLine) >= 39 {
+					timestampStr := firstLine[27:39]
+
+					yy := timestampStr[0:2]
+					mm := timestampStr[2:4]
+					dd := timestampStr[4:6]
+					h := timestampStr[6:8]
+					m := timestampStr[8:10]
+					s := timestampStr[10:12]
+
+					newBaseName = fmt.Sprintf("20%s%s%s_%s%s%s", yy, mm, dd, h, m, s)
+				}
+			}
+
+			// ▼▼▼ [修正点] 保存先フォルダのロジックを変更 ▼▼▼
+			if newBaseName != "" {
+				// タイムスタンプが取得できた場合、保存先は download/DAT/
+				destDir = filepath.Join("download", "DAT")
+			} else {
+				// 取得できなかった場合、保存先は download/DAT/unorganized/
+				destDir = filepath.Join("download", "DAT", "unorganized")
+				newBaseName = time.Now().Format("20060102150405") // ファイル名は現在時刻にする
+				log.Printf("Warning: Could not parse timestamp from %s. Saving to %s", fileHeader.Filename, destDir)
+			}
+			// ▲▲▲ 修正ここまで ▲▲▲
+
+			if err := os.MkdirAll(destDir, 0755); err != nil {
+				log.Printf("Failed to create destination directory %s: %v", destDir, err)
+				tempFile.Close()
+				os.Remove(tempFile.Name())
+				continue
+			}
+
+			ext := filepath.Ext(fileHeader.Filename)
+			destPath := filepath.Join(destDir, newBaseName+ext)
+
+			for i := 1; ; i++ {
+				if _, err := os.Stat(destPath); os.IsNotExist(err) {
+					break
+				}
+				destPath = filepath.Join(destDir, fmt.Sprintf("%s(%d)%s", newBaseName, i, ext))
+			}
+
+			tempFile.Close()
+			if err := os.Rename(tempFile.Name(), destPath); err != nil {
+				log.Printf("Failed to move temp file to %s: %v", destPath, err)
+				os.Remove(tempFile.Name())
+				continue
+			}
+			log.Printf("Successfully saved and organized file to: %s", destPath)
+
+			finalFile, err := os.Open(destPath)
+			if err != nil {
+				log.Printf("Failed to reopen organized file %s: %v", destPath, err)
+				continue
+			}
+			defer finalFile.Close()
+			parsed, err := parsers.ParseDat(finalFile)
 			if err != nil {
 				log.Printf("Failed to parse file %s: %v", fileHeader.Filename, err)
 				continue
@@ -149,15 +232,12 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 			}
 			mappers.MapProductMasterToTransaction(&ar, master)
 
-			// ▼▼▼ [修正点] ProcessingStatusの設定を削除 ▼▼▼
 			if master.Origin == "JCSHMS" {
 				ar.ProcessFlagMA = "COMPLETE"
 			} else {
 				ar.ProcessFlagMA = "PROVISIONAL"
 			}
-			// ▲▲▲ 修正ここまで ▲▲▲
 
-			// ▼▼▼ [修正点] Execの引数から ar.ProcessingStatus を削除 ▼▼▼
 			_, err = stmt.Exec(
 				ar.TransactionDate, ar.ClientCode, ar.ReceiptNumber, ar.LineNumber, ar.Flag,
 				ar.JanCode, ar.YjCode, ar.ProductName, ar.KanaName, ar.UsageClassification, ar.PackageForm, ar.PackageSpec, ar.MakerName,
@@ -167,7 +247,6 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 				ar.FlagDeleterious, ar.FlagNarcotic, ar.FlagPsychotropic, ar.FlagStimulant,
 				ar.FlagStimulantRaw, ar.ProcessFlagMA,
 			)
-			// ▲▲▲ 修正ここまで ▲▲▲
 			if err != nil {
 				tx.Rollback()
 				http.Error(w, fmt.Sprintf("Failed to insert record for JAN %s: %v", ar.JanCode, err), http.StatusInternalServerError)

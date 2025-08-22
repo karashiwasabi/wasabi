@@ -64,7 +64,7 @@ func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterVi
 
 		janUnitCodeInt, _ := strconv.Atoi(tempJcshms.JA007.String)
 
-		// ▼▼▼ [修正点] ProductMaster構造体から PackageSpec の設定を削除 ▼▼▼
+		// ▼▼▼ [修正点] ProductMaster構造体からJanUnitNameの設定を削除 ▼▼▼
 		view := model.ProductMasterView{
 			ProductMaster: model.ProductMaster{
 				ProductCode:         jc000.String,
@@ -108,7 +108,6 @@ func SearchAllProductMastersByName(conn *sql.DB, nameQuery string) ([]model.Prod
 			return nil, err
 		}
 
-		// ▼▼▼ [修正点] 組み立て包装の生成に必要なデータを全て渡すように修正 ▼▼▼
 		tempJcshms := model.JCShms{
 			JC037: m.PackageForm,
 			JC039: m.YjUnitName,
@@ -117,7 +116,6 @@ func SearchAllProductMastersByName(conn *sql.DB, nameQuery string) ([]model.Prod
 			JA008: sql.NullFloat64{Float64: m.JanPackUnitQty, Valid: true},
 			JA007: sql.NullString{String: fmt.Sprintf("%d", m.JanUnitCode), Valid: true},
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
 		formattedSpec := units.FormatPackageSpec(&tempJcshms)
 
 		mastersView = append(mastersView, model.ProductMasterView{

@@ -19,6 +19,7 @@ import { initJcshmsUpdate } from './jcshms_update.js';
 import { initBackorderView } from './backorder.js';
 import { initValuationView } from './valuation.js';
 import { initPricingView } from './pricing.js';
+import { initReturnsView } from './returns.js'; // ▼▼▼ import を追加 ▼▼▼
 
 // (Global UI Elements and helper functions are unchanged)
 window.showLoading = () => document.getElementById('loading-overlay').classList.remove('hidden');
@@ -56,6 +57,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const backorderBtn = document.getElementById('backorderBtn');
     const valuationBtn = document.getElementById('valuationBtn');
     const pricingBtn = document.getElementById('pricingBtn');
+    const returnsBtn = document.getElementById('returnsBtn'); // ▼▼▼ この行を追加 ▼▼▼
 
     // --- Initialize all modules ---
     initInOut();
@@ -77,6 +79,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initBackorderView();
     initValuationView();
     initPricingView();
+    initReturnsView(); // ▼▼▼ この行を追加 ▼▼▼
 
     function showView(viewIdToShow) {
         const notificationBox = document.getElementById('notification-box');
@@ -140,6 +143,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         showView('pricing-view');
         document.getElementById('pricing-view').dispatchEvent(new Event('show'));
     });
+    // ▼▼▼ このイベントリスナーを追加 ▼▼▼
+    returnsBtn.addEventListener('click', () => showView('returns-view'));
+    // ▲▲▲ 追加ここまで ▲▲▲
     // --- Initial State ---
     showView('in-out-view');
     resetInOutView();

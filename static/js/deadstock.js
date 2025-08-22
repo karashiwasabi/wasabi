@@ -2,7 +2,9 @@
 
 import { showModal } from './inout_modal.js';
 
-let view, outputContainer, startDateInput, endDateInput, excludeZeroStockCheckbox, createCsvBtn;
+// ▼▼▼ [修正点] 新しい入力欄の変数を追加 ▼▼▼
+let view, outputContainer, startDateInput, endDateInput, excludeZeroStockCheckbox, createCsvBtn, kanaNameInput, dosageFormInput;
+// ▲▲▲ 修正ここまで ▲▲▲
 
 /**
  * 期限・ロット入力行のHTMLを生成する
@@ -147,6 +149,10 @@ export function initDeadStock() {
     endDateInput = document.getElementById('ds-endDate');
     excludeZeroStockCheckbox = document.getElementById('ds-exclude-zero-stock');
     createCsvBtn = document.getElementById('create-deadstock-csv-btn');
+    // ▼▼▼ [修正点] 新しい入力欄の要素を取得 ▼▼▼
+    kanaNameInput = document.getElementById('ds-kanaName');
+    dosageFormInput = document.getElementById('ds-dosageForm');
+    // ▲▲▲ 修正ここまで ▲▲▲
 
     const today = new Date();
     const threeMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 3, today.getDate());
@@ -236,11 +242,15 @@ export function initDeadStock() {
 
         if (target.id === 'run-dead-stock-btn') {
             window.showLoading();
+            // ▼▼▼ [修正点] 新しい絞り込み条件をAPIパラメータに追加 ▼▼▼
             const params = new URLSearchParams({
                 startDate: startDateInput.value.replace(/-/g, ''),
                 endDate: endDateInput.value.replace(/-/g, ''),
                 excludeZeroStock: excludeZeroStockCheckbox.checked,
+                kanaName: kanaNameInput.value,
+                dosageForm: dosageFormInput.value,
             });
+            // ▲▲▲ 修正ここまで ▲▲▲
 
             try {
                 const res = await fetch(`/api/deadstock/list?${params.toString()}`);

@@ -26,3 +26,19 @@ func GetCurrentStockHandler(conn *sql.DB) http.HandlerFunc {
 		json.NewEncoder(w).Encode(map[string]float64{"stock": stock})
 	}
 }
+
+// ▼▼▼ [修正点] 全製品の在庫を返すハンドラを末尾に追加 ▼▼▼
+// GetAllCurrentStockHandler は全製品の現在の理論在庫を返します。
+func GetAllCurrentStockHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		stockMap, err := db.GetAllCurrentStockMap(conn)
+		if err != nil {
+			http.Error(w, "Failed to calculate all stocks: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(stockMap)
+	}
+}
+
+// ▲▲▲ 修正ここまで ▲▲▲

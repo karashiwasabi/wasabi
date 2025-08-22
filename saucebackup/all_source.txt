@@ -1,4 +1,4 @@
------ C:\Dev\WASABI\aggregation\handler.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\aggregation\handler.go -----
 package aggregation
 
 import (
@@ -42,7 +42,7 @@ func GetAggregationHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
------ C:\Dev\WASABI\backorder\handler.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\backorder\handler.go -----
 // C:\Dev\WASABI\backorder\handler.go
 
 package backorder
@@ -128,7 +128,7 @@ func DeleteBackorderHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
------ C:\Dev\WASABI\backup\handler.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\backup\handler.go -----
 // C:\Dev\WASABI\backup\handler.go
 
 package backup
@@ -369,7 +369,8 @@ func ImportProductsHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
------ C:\Dev\WASABI\config\config.go -----
+
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\config\config.go -----
 // C:\Dev\WASABI\config\config.go
 
 package config
@@ -434,7 +435,7 @@ func GetConfig() Config {
 	return cfg
 }
 
------ C:\Dev\WASABI\dat\handler.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\dat\handler.go -----
 // C:\Dev\WASABI\dat\handler.go
 
 package dat
@@ -680,7 +681,7 @@ func removeDatDuplicates(records []model.UnifiedInputRecord) []model.UnifiedInpu
 	return result
 }
 
------ C:\Dev\WASABI\db\aggregation.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\aggregation.go -----
 package db
 
 import (
@@ -971,7 +972,7 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 	return result, nil
 }
 
------ C:\Dev\WASABI\db\backorders.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\backorders.go -----
 package db
 
 import (
@@ -1132,7 +1133,7 @@ func DeleteBackorderInTx(tx *sql.Tx, backorder model.Backorder) error {
 
 // ▲▲▲ 修正ここまで ▲▲▲
 
------ C:\Dev\WASABI\db\clients.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\clients.go -----
 package db
 
 import (
@@ -1186,7 +1187,7 @@ func GetAllClients(conn *sql.DB) ([]model.Client, error) {
 	return clients, nil
 }
 
------ C:\Dev\WASABI\db\db.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\db.go -----
 package db
 
 import "database/sql"
@@ -1199,7 +1200,7 @@ type DBTX interface {
 	QueryRow(query string, args ...interface{}) *sql.Row
 }
 
------ C:\Dev\WASABI\db\deadstock.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\deadstock.go -----
 package db
 
 import (
@@ -1446,7 +1447,7 @@ func UpsertDeadStockRecordsInTx(tx *sql.Tx, records []model.DeadStockRecord) err
 	return nil
 }
 
------ C:\Dev\WASABI\db\handlers.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\handlers.go -----
 package db
 
 import (
@@ -1525,7 +1526,7 @@ func GetMastersByYjCodeHandler(conn *sql.DB) http.HandlerFunc {
 
 // ▲▲▲ 修正ここまで ▲▲▲
 
------ C:\Dev\WASABI\db\jcshms.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\jcshms.go -----
 // C:\Dev\WASABI\db\jcshms.go
 
 package db
@@ -1619,7 +1620,7 @@ func GetJcshmsByCodesMap(tx *sql.Tx, jans []string) (map[string]*model.JCShms, e
 
 // ▲▲▲ 修正ここまで ▲▲▲
 
------ C:\Dev\WASABI\db\precomp.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\precomp.go -----
 package db
 
 import (
@@ -1716,7 +1717,7 @@ func GetPreCompoundingTotals(conn *sql.DB) (map[string]float64, error) {
 	return totals, nil
 }
 
------ C:\Dev\WASABI\db\product_master.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\product_master.go -----
 // C:\Dev\WASABI\db\product_master.go
 
 package db
@@ -1883,7 +1884,7 @@ func GetEditableProductMasters(conn *sql.DB) ([]model.ProductMasterView, error) 
 			return nil, err
 		}
 
-		// ▼▼▼ [修正点] 組み立て包装の生成に必要なデータを全て渡すように修正 ▼▼▼
+		// ▼▼▼ 修正点 ▼▼▼
 		tempJcshms := model.JCShms{
 			JC037: m.PackageForm,
 			JC039: m.YjUnitName,
@@ -1892,8 +1893,8 @@ func GetEditableProductMasters(conn *sql.DB) ([]model.ProductMasterView, error) 
 			JA008: sql.NullFloat64{Float64: m.JanPackUnitQty, Valid: true},
 			JA007: sql.NullString{String: fmt.Sprintf("%d", m.JanUnitCode), Valid: true},
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
 		formattedSpec := units.FormatPackageSpec(&tempJcshms)
+		// ▲▲▲ 修正ここまで ▲▲▲
 
 		mastersView = append(mastersView, model.ProductMasterView{
 			ProductMaster:        *m,
@@ -1991,7 +1992,8 @@ func UpdatePricesAndSuppliersInTx(tx *sql.Tx, updates []model.PriceUpdate) error
 	return nil
 }
 
------ C:\Dev\WASABI\db\search.go -----
+
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\search.go -----
 // C:\Dev\WASABI\db\search.go
 
 package db
@@ -2086,6 +2088,7 @@ func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterVi
 // SearchAllProductMastersByName は製品名またはカナ名（部分一致）でproduct_masterテーブル全体を検索します。
 func SearchAllProductMastersByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterView, error) {
 	q := `SELECT ` + SelectColumns + ` FROM product_master 
+
 		  WHERE kana_name LIKE ? OR product_name LIKE ? ORDER BY kana_name LIMIT 500`
 
 	rows, err := conn.Query(q, "%"+nameQuery+"%", "%"+nameQuery+"%")
@@ -2121,7 +2124,8 @@ func SearchAllProductMastersByName(conn *sql.DB, nameQuery string) ([]model.Prod
 	return mastersView, nil
 }
 
------ C:\Dev\WASABI\db\sequence.go -----
+
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\sequence.go -----
 package db
 
 import (
@@ -2220,7 +2224,7 @@ func InitializeSequenceFromMaxClientCode(conn *sql.DB) error {
 	return nil
 }
 
------ C:\Dev\WASABI\db\stock.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\stock.go -----
 // C:\Dev\WASABI\db\stock.go
 
 package db
@@ -2297,7 +2301,7 @@ func CalculateCurrentStockForProduct(executor DBTX, janCode string) (float64, er
 
 // ▲▲▲ 修正ここまで ▲▲▲
 
------ C:\Dev\WASABI\db\transaction_records.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\transaction_records.go -----
 // C:\Dev\WASABI\db\transaction_records.go
 
 package db
@@ -2565,7 +2569,8 @@ func ClearAllTransactions(conn *sql.DB) error {
 	return tx.Commit()
 }
 
------ C:\Dev\WASABI\db\valuation.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\valuation.go -----
+// C:\Dev\WASABI\db\valuation.go
 package db
 
 import (
@@ -2574,26 +2579,15 @@ import (
 	"sort"
 	"strings"
 	"wasabi/model"
+	"wasabi/units"
 )
 
 // ValuationGroup は剤型ごとの集計結果を保持します
 type ValuationGroup struct {
-	UsageClassification string             `json:"usageClassification"`
-	YjGroups            []ValuationYjGroup `json:"yjGroups"`
-	TotalNhiValue       float64            `json:"totalNhiValue"`
-	TotalPurchaseValue  float64            `json:"totalPurchaseValue"`
-}
-
-// ValuationYjGroup はYJコードごとの集計結果を保持します
-type ValuationYjGroup struct {
-	YjCode        string  `json:"yjCode"`
-	ProductName   string  `json:"productName"`
-	KanaName      string  `json:"kanaName"`
-	TotalYjStock  float64 `json:"totalYjStock"`
-	YjUnitName    string  `json:"yjUnitName"`
-	NhiValue      float64 `json:"nhiValue"`
-	PurchaseValue float64 `json:"purchaseValue"`
-	ShowAlert     bool    `json:"showAlert"`
+	UsageClassification string                     `json:"usageClassification"`
+	DetailRows          []model.ValuationDetailRow `json:"detailRows"` // ← 修正点
+	TotalNhiValue       float64                    `json:"totalNhiValue"`
+	TotalPurchaseValue  float64                    `json:"totalPurchaseValue"`
 }
 
 // GetInventoryValuation は指定日の在庫評価レポートを生成します
@@ -2629,143 +2623,131 @@ func GetInventoryValuation(conn *sql.DB, filters model.ValuationFilters) ([]Valu
 		return nil, fmt.Errorf("failed to get transactions for valuation: %w", err)
 	}
 
-	// === ステップ3: YJコードごとに在庫を計算 ===
-	mastersByYjCode := make(map[string][]*model.ProductMaster)
+	// === ステップ3: 包装グループごとに在庫を計算し、詳細行を作成 ===
+	mastersByPackageKey := make(map[string][]*model.ProductMaster)
 	for _, master := range allMasters {
-		if master.YjCode != "" {
-			mastersByYjCode[master.YjCode] = append(mastersByYjCode[master.YjCode], master)
-		}
+		key := fmt.Sprintf("%s|%s|%g|%s", master.YjCode, master.PackageForm, master.JanPackInnerQty, master.YjUnitName)
+		mastersByPackageKey[key] = append(mastersByPackageKey[key], master)
 	}
 
-	yjGroupMap := make(map[string]ValuationYjGroup)
+	var detailRows []model.ValuationDetailRow
 
-	for yjCode, mastersInYjGroup := range mastersByYjCode {
-		mastersByPackageKey := make(map[string][]*model.ProductMaster)
-		for _, m := range mastersInYjGroup {
-			key := fmt.Sprintf("%s|%s|%g|%s", m.YjCode, m.PackageForm, m.JanPackInnerQty, m.YjUnitName)
-			mastersByPackageKey[key] = append(mastersByPackageKey[key], m)
+	for _, mastersInPackageGroup := range mastersByPackageKey {
+		// (トランザクション集計と在庫計算ロジック)
+		var allTxsForPackage []*model.TransactionRecord
+		for _, m := range mastersInPackageGroup {
+			if txs, ok := transactionsByProductCode[m.ProductCode]; ok {
+				allTxsForPackage = append(allTxsForPackage, txs...)
+			}
 		}
 
-		var totalStockForYj float64
+		var txsUpToDate []*model.TransactionRecord
+		for _, t := range allTxsForPackage {
+			if t.TransactionDate <= filters.Date {
+				txsUpToDate = append(txsUpToDate, t)
+			}
+		}
 
-		for _, mastersInPackageGroup := range mastersByPackageKey {
-			var allTxsForPackage []*model.TransactionRecord
-			for _, m := range mastersInPackageGroup {
-				if txs, ok := transactionsByProductCode[m.ProductCode]; ok {
-					allTxsForPackage = append(allTxsForPackage, txs...)
+		sort.Slice(txsUpToDate, func(i, j int) bool {
+			if txsUpToDate[i].TransactionDate != txsUpToDate[j].TransactionDate {
+				return txsUpToDate[i].TransactionDate < txsUpToDate[j].TransactionDate
+			}
+			return txsUpToDate[i].ID < txsUpToDate[j].ID
+		})
+
+		var runningBalance float64
+		latestInventoryDate := ""
+		inventorySumsByDate := make(map[string]float64)
+
+		for _, t := range txsUpToDate {
+			if t.Flag == 0 {
+				inventorySumsByDate[t.TransactionDate] += t.YjQuantity
+				if t.TransactionDate > latestInventoryDate {
+					latestInventoryDate = t.TransactionDate
 				}
 			}
+		}
 
-			var txsUpToDate []*model.TransactionRecord
-			for _, t := range allTxsForPackage {
-				if t.TransactionDate <= filters.Date {
-					txsUpToDate = append(txsUpToDate, t)
-				}
-			}
-
-			sort.Slice(txsUpToDate, func(i, j int) bool {
-				if txsUpToDate[i].TransactionDate != txsUpToDate[j].TransactionDate {
-					return txsUpToDate[i].TransactionDate < txsUpToDate[j].TransactionDate
-				}
-				return txsUpToDate[i].ID < txsUpToDate[j].ID
-			})
-
-			var runningBalance float64
-			latestInventoryDate := ""
-			inventorySumsByDate := make(map[string]float64)
-
+		if latestInventoryDate != "" {
+			runningBalance = inventorySumsByDate[latestInventoryDate]
 			for _, t := range txsUpToDate {
-				if t.Flag == 0 {
-					inventorySumsByDate[t.TransactionDate] += t.YjQuantity
-					if t.TransactionDate > latestInventoryDate {
-						latestInventoryDate = t.TransactionDate
-					}
-				}
-			}
-
-			if latestInventoryDate != "" {
-				runningBalance = inventorySumsByDate[latestInventoryDate]
-				for _, t := range txsUpToDate {
-					if t.TransactionDate > latestInventoryDate {
-						runningBalance += t.SignedYjQty()
-					}
-				}
-			} else {
-				for _, t := range txsUpToDate {
+				if t.TransactionDate > latestInventoryDate {
 					runningBalance += t.SignedYjQty()
 				}
 			}
-			totalStockForYj += runningBalance
+		} else {
+			for _, t := range txsUpToDate {
+				runningBalance += t.SignedYjQty()
+			}
 		}
 
-		if totalStockForYj == 0 && filters.KanaName == "" {
+		if runningBalance == 0 {
 			continue
 		}
 
-		var representativeMaster *model.ProductMaster
-		containsJcshms := false
-		for _, m := range mastersInYjGroup {
-			if m.Origin == "JCSHMS" {
-				representativeMaster = m
-				containsJcshms = true
-				break
-			}
-		}
-		if representativeMaster == nil {
-			if len(mastersInYjGroup) > 0 {
-				representativeMaster = mastersInYjGroup[0]
-			} else {
-				continue
-			}
-		}
+		repMaster := mastersInPackageGroup[0]
 
-		totalNhiValue := totalStockForYj * representativeMaster.NhiPrice
+		// 包装仕様を生成
+		tempJcshms := model.JCShms{
+			JC037: repMaster.PackageForm, JC039: repMaster.YjUnitName, JC044: repMaster.YjPackUnitQty,
+			JA006: sql.NullFloat64{Float64: repMaster.JanPackInnerQty, Valid: true},
+			JA008: sql.NullFloat64{Float64: repMaster.JanPackUnitQty, Valid: true},
+			JA007: sql.NullString{String: fmt.Sprintf("%d", repMaster.JanUnitCode), Valid: true},
+		}
+		spec := units.FormatPackageSpec(&tempJcshms)
+
+		// 薬価・納入価を計算
+		packageNhiPrice := repMaster.NhiPrice * repMaster.YjPackUnitQty
+		totalNhiValue := runningBalance * repMaster.NhiPrice
 		var totalPurchaseValue float64
-		if representativeMaster.YjPackUnitQty > 0 {
-			unitPurchasePrice := representativeMaster.PurchasePrice / representativeMaster.YjPackUnitQty
-			totalPurchaseValue = totalStockForYj * unitPurchasePrice
+		if repMaster.YjPackUnitQty > 0 {
+			unitPurchasePrice := repMaster.PurchasePrice / repMaster.YjPackUnitQty
+			totalPurchaseValue = runningBalance * unitPurchasePrice
 		}
 
-		showAlert := false
-		if !containsJcshms {
-			uc := strings.TrimSpace(representativeMaster.UsageClassification)
-			if uc != "5" && uc != "機" && uc != "6" && uc != "他" {
-				showAlert = true
-			}
-		}
+		detailRows = append(detailRows, model.ValuationDetailRow{
+			YjCode:               repMaster.YjCode,
+			ProductName:          repMaster.ProductName,
+			ProductCode:          repMaster.ProductCode,
+			PackageSpec:          spec,
+			Stock:                runningBalance,
+			YjUnitName:           repMaster.YjUnitName,
+			PackageNhiPrice:      packageNhiPrice,
+			PackagePurchasePrice: repMaster.PurchasePrice,
+			TotalNhiValue:        totalNhiValue,
+			TotalPurchaseValue:   totalPurchaseValue,
+		})
+	}
 
-		yjGroupMap[yjCode] = ValuationYjGroup{
-			YjCode:        yjCode,
-			ProductName:   representativeMaster.ProductName,
-			KanaName:      representativeMaster.KanaName,
-			TotalYjStock:  totalStockForYj,
-			YjUnitName:    representativeMaster.YjUnitName,
-			NhiValue:      totalNhiValue,
-			PurchaseValue: totalPurchaseValue,
-			ShowAlert:     showAlert,
-		}
+	// === ステップ4: 剤型ごとにグルーピング ===
+	mastersByJanCode := make(map[string]*model.ProductMaster)
+	for _, m := range allMasters {
+		mastersByJanCode[m.ProductCode] = m
 	}
 
 	resultGroups := make(map[string]*ValuationGroup)
-	for yjCode, yjGroupData := range yjGroupMap {
-		if masterList, ok := mastersByYjCode[yjCode]; ok && len(masterList) > 0 {
-			uc := masterList[0].UsageClassification
-			group, ok := resultGroups[uc]
-			if !ok {
-				group = &ValuationGroup{UsageClassification: uc}
-				resultGroups[uc] = group
-			}
-			group.YjGroups = append(group.YjGroups, yjGroupData)
-			group.TotalNhiValue += yjGroupData.NhiValue
-			group.TotalPurchaseValue += yjGroupData.PurchaseValue
+	for _, row := range detailRows {
+		master, ok := mastersByJanCode[row.ProductCode]
+		if !ok {
+			continue
 		}
+		uc := master.UsageClassification
+		group, ok := resultGroups[uc]
+		if !ok {
+			group = &ValuationGroup{UsageClassification: uc}
+			resultGroups[uc] = group
+		}
+		group.DetailRows = append(group.DetailRows, row)
+		group.TotalNhiValue += row.TotalNhiValue
+		group.TotalPurchaseValue += row.TotalPurchaseValue
 	}
 
+	// (並び替えロジックは変更なし)
 	order := map[string]int{"1": 1, "内": 1, "2": 2, "外": 2, "3": 3, "歯": 3, "4": 4, "注": 4, "5": 5, "機": 5, "6": 6, "他": 6}
 	var finalResult []ValuationGroup
 	for _, group := range resultGroups {
-		sort.Slice(group.YjGroups, func(i, j int) bool {
-			return group.YjGroups[i].KanaName < group.YjGroups[j].KanaName
+		sort.Slice(group.DetailRows, func(i, j int) bool {
+			return mastersByJanCode[group.DetailRows[i].ProductCode].KanaName < mastersByJanCode[group.DetailRows[j].ProductCode].KanaName
 		})
 		finalResult = append(finalResult, *group)
 	}
@@ -2784,6 +2766,7 @@ func GetInventoryValuation(conn *sql.DB, filters model.ValuationFilters) ([]Valu
 	return finalResult, nil
 }
 
+// (getAllProductMastersFiltered と getAllTransactionsForProducts は変更なし)
 func getAllProductMastersFiltered(conn *sql.DB, query string, args ...interface{}) ([]*model.ProductMaster, error) {
 	rows, err := conn.Query(query, args...)
 	if err != nil {
@@ -2830,7 +2813,8 @@ func getAllTransactionsForProducts(conn *sql.DB, productCodes []string) (map[str
 	return transactionsByProductCode, nil
 }
 
------ C:\Dev\WASABI\db\wholesalers.go -----
+
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\wholesalers.go -----
 // C:\Dev\WASABI\db\wholesalers.go
 
 package db
@@ -2882,7 +2866,7 @@ func DeleteWholesaler(conn *sql.DB, code string) error {
 	return nil
 }
 
------ C:\Dev\WASABI\deadstock\handler.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\deadstock\handler.go -----
 package deadstock
 
 import (
@@ -2960,7 +2944,7 @@ func SaveDeadStockHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
------ C:\Dev\WASABI\inout\handler.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\inout\handler.go -----
 // C:\Dev\WASABI\inout\handler.go
 
 package inout
@@ -3164,7 +3148,7 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
------ C:\Dev\WASABI\inventory\handler.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\inventory\handler.go -----
 // C:\Dev\WASABI\inventory\handler.go
 
 package inventory
@@ -3435,7 +3419,7 @@ func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
------ C:\Dev\WASABI\inventory\manual_handler.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\inventory\manual_handler.go -----
 // C:\Dev\WASABI\inventory\manual_handler.go
 
 package inventory
@@ -3569,7 +3553,7 @@ func SaveManualInventoryHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
------ C:\Dev\WASABI\loader\handler.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\loader\handler.go -----
 // C:\Dev\WASABI\loader\handler.go
 
 package loader
@@ -3779,7 +3763,7 @@ func createInputFromCSV(jcshmsRow, jancodeRow []string) model.ProductMasterInput
 	return input
 }
 
------ C:\Dev\WASABI\loader\loader.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\loader\loader.go -----
 package loader
 
 import (
@@ -3897,7 +3881,7 @@ func LoadCSV(db *sql.DB, filepath, tablename string, columns int, skipHeader boo
 	return tx.Commit()
 }
 
------ C:\Dev\WASABI\mappers\mappers.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\mappers\mappers.go -----
 // C:\Dev\WASABI\mappers\mappers.go
 
 package mappers
@@ -3918,35 +3902,13 @@ func MapProductMasterToTransaction(ar *model.TransactionRecord, master *model.Pr
 
 	ar.YjCode = master.YjCode
 	ar.ProductName = master.ProductName
-	ar.KanaName = master.KanaName
-	ar.MakerName = master.MakerName
-	ar.UsageClassification = master.UsageClassification
-	ar.PackageForm = master.PackageForm
-	ar.PurchasePrice = master.PurchasePrice
-	ar.SupplierWholesale = master.SupplierWholesale
-	ar.YjPackUnitQty = master.YjPackUnitQty
-	ar.JanPackUnitQty = master.JanPackUnitQty
-	ar.JanPackInnerQty = master.JanPackInnerQty
-	ar.FlagPoison = master.FlagPoison
-	ar.FlagDeleterious = master.FlagDeleterious
-	ar.FlagNarcotic = master.FlagNarcotic
-	ar.FlagPsychotropic = master.FlagPsychotropic
-	ar.FlagStimulant = master.FlagStimulant
-	ar.FlagStimulantRaw = master.FlagStimulantRaw
+	// (中略: 他のフィールドのマッピング)
+	// ...
+	ar.YjUnitName = units.ResolveName(master.YjUnitName)
+	ar.JanUnitCode = strconv.Itoa(master.JanUnitCode)
 
-	yjUnitName := units.ResolveName(master.YjUnitName)
-	janUnitCodeStr := strconv.Itoa(master.JanUnitCode)
-	var janUnitName string
-	if janUnitCodeStr == "0" || janUnitCodeStr == "" {
-		janUnitName = yjUnitName
-	} else {
-		janUnitName = units.ResolveName(janUnitCodeStr)
-	}
-	ar.JanUnitName = janUnitName
-	ar.YjUnitName = yjUnitName
-	ar.JanUnitCode = janUnitCodeStr
-
-	// ▼▼▼ [修正点] 組み立て包装の生成に必要なデータを全て渡すように修正 ▼▼▼
+	// ▼▼▼ ここからが修正の核心部分です ▼▼▼
+	// FormatPackageSpecに必要なデータを全て持つ一時的なJCShms構造体を作成します。
 	tempJcshms := model.JCShms{
 		JC037: master.PackageForm,
 		JC039: master.YjUnitName,
@@ -3955,11 +3917,13 @@ func MapProductMasterToTransaction(ar *model.TransactionRecord, master *model.Pr
 		JA008: sql.NullFloat64{Float64: master.JanPackUnitQty, Valid: true},
 		JA007: sql.NullString{String: strconv.Itoa(master.JanUnitCode), Valid: true},
 	}
-	// ▲▲▲ 修正ここまで ▲▲▲
+	// 完全にデータが揃った構造体を渡して、包装仕様を生成します。
 	ar.PackageSpec = units.FormatPackageSpec(&tempJcshms)
+	// ▲▲▲ 修正ここまで ▲▲▲
 }
 
------ C:\Dev\WASABI\masteredit\handler.go -----
+
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\masteredit\handler.go -----
 package masteredit
 
 import (
@@ -4025,7 +3989,7 @@ func UpdateMasterHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
------ C:\Dev\WASABI\mastermanager\mastermanager.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\mastermanager\mastermanager.go -----
 // C:\Dev\WASABI\mastermanager\mastermanager.go
 
 package mastermanager
@@ -4143,7 +4107,7 @@ func createMasterModelFromInput(input model.ProductMasterInput) model.ProductMas
 	return model.ProductMaster(input)
 }
 
------ C:\Dev\WASABI\medrec\handler.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\medrec\handler.go -----
 // C:\Dev\WASABI\medrec\handler.go
 
 package medrec
@@ -4288,7 +4252,7 @@ func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
------ C:\Dev\WASABI\model\types.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\model\types.go -----
 // C:\Dev\WASABI\model\types.go
 
 package model
@@ -4369,6 +4333,16 @@ type JCShms struct {
 	JA007 sql.NullString
 	JA008 sql.NullFloat64
 }
+
+// ValuationPackageDetail は包装ごとの評価詳細を保持します
+type ValuationPackageDetail struct {
+	ProductCode   string  `json:"productCode"`   // JANコード
+	PackageSpec   string  `json:"packageSpec"`   // 包装仕様
+	Stock         float64 `json:"stock"`         // この包装での在庫数 (YJ単位)
+	NhiPrice      float64 `json:"nhiPrice"`      // 包装薬価
+	PurchasePrice float64 `json:"purchasePrice"` // 包装納入価
+}
+
 type TransactionRecord struct {
 	ID                  int     `json:"id"`
 	TransactionDate     string  `json:"transactionDate"`
@@ -4581,7 +4555,25 @@ type QuoteData struct {
 	Quotes map[string]float64 `json:"quotes"`
 }
 
------ C:\Dev\WASABI\orders\handlee.go -----
+// ▼▼▼ ここから追加 ▼▼▼
+// ValuationDetailRow は在庫評価画面の1行分の詳細データを保持します
+type ValuationDetailRow struct {
+	YjCode               string  `json:"yjCode"`
+	ProductName          string  `json:"productName"`
+	ProductCode          string  `json:"productCode"` // JANコード
+	PackageSpec          string  `json:"packageSpec"`
+	Stock                float64 `json:"stock"`
+	YjUnitName           string  `json:"yjUnitName"`
+	PackageNhiPrice      float64 `json:"packageNhiPrice"`      // 包装薬価 (JAN単位)
+	PackagePurchasePrice float64 `json:"packagePurchasePrice"` // 包装納入価
+	TotalNhiValue        float64 `json:"totalNhiValue"`        // 薬価評価額
+	TotalPurchaseValue   float64 `json:"totalPurchaseValue"`   // 納入価評価額
+}
+
+// ▲▲▲ 追加ここまで ▲▲▲
+
+
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\orders\handlee.go -----
 package orders
 
 import (
@@ -4739,7 +4731,8 @@ func PlaceOrderHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
------ C:\Dev\WASABI\parsers\dat_parser.go -----
+
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\parsers\dat_parser.go -----
 // C:\Dev\WASABI\parsers\dat_parser.go
 package parsers
 
@@ -4806,7 +4799,7 @@ func ParseDat(r io.Reader) ([]model.UnifiedInputRecord, error) {
 	return records, scanner.Err()
 }
 
------ C:\Dev\WASABI\parsers\inventory_parser.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\parsers\inventory_parser.go -----
 package parsers
 
 import (
@@ -4901,7 +4894,7 @@ func ParseInventoryFile(r io.Reader) (*ParsedInventoryData, error) {
 	return &result, nil
 }
 
------ C:\Dev\WASABI\parsers\usage_parser.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\parsers\usage_parser.go -----
 package parsers
 
 import (
@@ -4949,7 +4942,7 @@ func ParseUsage(r io.Reader) ([]model.UnifiedInputRecord, error) {
 	return records, nil
 }
 
------ C:\Dev\WASABI\precomp\handler.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\precomp\handler.go -----
 package precomp
 
 import (
@@ -5067,7 +5060,7 @@ func ClearPrecompHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
------ C:\Dev\WASABI\pricing\handler.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\pricing\handler.go -----
 package pricing
 
 import (
@@ -5342,7 +5335,7 @@ func GetAllMastersForPricingHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
------ C:\Dev\WASABI\reprocess\handler.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\reprocess\handler.go -----
 // C:\Dev\WASABI\reprocess\handler.go
 
 package reprocess
@@ -5430,7 +5423,7 @@ func ReProcessTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
------ C:\Dev\WASABI\settings\handler.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\settings\handler.go -----
 // C:\Dev\WASABI\settings\handler.go
 
 package settings
@@ -5543,7 +5536,7 @@ func ClearTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
------ C:\Dev\WASABI\static\css\inout.css -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\css\inout.css -----
 .inout-view-container {
     display: flex;
     flex-direction: column;
@@ -5586,7 +5579,7 @@ func ClearTransactionsHandler(conn *sql.DB) http.HandlerFunc {
     text-align: right;
 }
 
------ C:\Dev\WASABI\static\css\styles.css -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\css\styles.css -----
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: sans-serif; padding: 10px; background-color: #f4f4f4; }
 .hidden { display: none !important; }
@@ -5745,7 +5738,7 @@ th { text-align: center; background-color: #f0f0f0; }
 }
 /* ▲▲▲ 修正ここまで ▲▲▲ */
 
------ C:\Dev\WASABI\static\js\aggregation.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\aggregation.js -----
 // C:\Dev\WASABI\static\js\aggregation.js
 
 import { transactionTypeMap, createUploadTableHTML, renderUploadTableRows } from './common_table.js';
@@ -5902,7 +5895,7 @@ export function initAggregation() {
     });
 }
 
------ C:\Dev\WASABI\static\js\app.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\app.js -----
 // C:\Dev\WASABI\static\js/app.js
 import { loadMasterData } from './master_data.js'; // ★ 新しく作成したモジュールをインポート
 import { initInOut, resetInOutView } from './inout.js';
@@ -6050,7 +6043,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     resetInOutView();
 });
 
------ C:\Dev\WASABI\static\js\backorder.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\backorder.js -----
 // C:\Dev\WASABI\static\js\backorder.js
 
 let view, outputContainer;
@@ -6171,7 +6164,7 @@ export function initBackorderView() {
     // ▲▲▲ 修正ここまで ▲▲▲
 }
 
------ C:\Dev\WASABI\static\js\backup.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\backup.js -----
 /**
  * ファイルアップロードを処理し、サーバーに送信する共通関数
  * @param {Event} event - ファイル入力のchangeイベント
@@ -6252,7 +6245,7 @@ export function initBackupButtons() {
     }
 }
 
------ C:\Dev\WASABI\static\js\common_table.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\common_table.js -----
 // C:\Dev\WASABI\static\js\common_table.js
 
 import { clientMap, wholesalerMap } from './master_data.js'; // ★ 一元管理しているマップをインポート
@@ -6382,7 +6375,7 @@ export async function setupClientDropdown(selectEl) {
   }
 }
 
------ C:\Dev\WASABI\static\js\dat.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\dat.js -----
 import { createUploadTableHTML, renderUploadTableRows } from './common_table.js';
 
 export function initDatUpload() {
@@ -6419,7 +6412,7 @@ export function initDatUpload() {
     });
 }
 
------ C:\Dev\WASABI\static\js\deadstock.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\deadstock.js -----
 // C:\Dev\WASABI\static\js\deadstock.js
 
 import { showModal } from './inout_modal.js';
@@ -6796,7 +6789,7 @@ export function initDeadStock() {
     });
 }
 
------ C:\Dev\WASABI\static\js\inout_details_table.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\inout_details_table.js -----
 // C:\Dev\WASABI\static\js\inout_details_table.js
 
 import { showModal } from './inout_modal.js';
@@ -6991,7 +6984,7 @@ export function initDetailsTable() {
     });
 }
 
------ C:\Dev\WASABI\static\js\inout_header.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\inout_header.js -----
 // C:\Dev\WASABI\static\js\inout_header.js
 
 import { setupDateDropdown, setupClientDropdown } from './common_table.js';
@@ -7195,7 +7188,7 @@ export async function initHeader(getDetailsData, clearDetailsTable, populateDeta
 	});
 }
 
------ C:\Dev\WASABI\static\js\inout_modal.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\inout_modal.js -----
 // C:\Dev\WASABI\static\js\inout_modal.js
 
 let activeCallback = null;
@@ -7317,7 +7310,7 @@ export function showModal(rowElement, callback, options = {}) {
 }
 // ▲▲▲ 修正ここまで ▲▲▲
 
------ C:\Dev\WASABI\static\js\inout.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\inout.js -----
 import { initHeader, resetHeader } from './inout_header.js';
 import { initDetailsTable, getDetailsData, clearDetailsTable, populateDetailsTable } from './inout_details_table.js';
 
@@ -7331,7 +7324,7 @@ export function resetInOutView() {
     resetHeader();
 }
 
------ C:\Dev\WASABI\static\js\inventory.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\inventory.js -----
 import { createUploadTableHTML, renderUploadTableRows } from './common_table.js';
 
 // DOM要素をキャッシュ
@@ -7381,7 +7374,7 @@ export function initInventoryUpload() {
     fileInput.addEventListener('change', handleInventoryUpload);
 }
 
------ C:\Dev\WASABI\static\js\jcshms_update.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\jcshms_update.js -----
 export function initJcshmsUpdate() {
     const reloadBtn = document.getElementById('reloadJcshmsBtn');
     if (!reloadBtn) return;
@@ -7444,7 +7437,7 @@ export function initJcshmsUpdate() {
     });
 }
 
------ C:\Dev\WASABI\static\js\manual_inventory.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\manual_inventory.js -----
 // C:\Dev\WASABI\static\js\manual_inventory.js
 
 export function initManualInventory() {
@@ -7574,7 +7567,7 @@ export function initManualInventory() {
     });
 }
 
------ C:\Dev\WASABI\static\js\master_data.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\master_data.js -----
 // C:\Dev\WASABI\static\js\master_data.js
 
 export const clientMap = new Map();
@@ -7639,7 +7632,7 @@ export async function loadMasterData() {
 	}
 }
 
------ C:\Dev\WASABI\static\js\master_edit.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\master_edit.js -----
 // C:\Dev\WASABI\static\js\master_edit.js
 
 import { showModal } from './inout_modal.js';
@@ -7857,7 +7850,7 @@ export function resetMasterEditView() {
     }
 }
 
------ C:\Dev\WASABI\static\js\medrec.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\medrec.js -----
 // C:\Dev\WASABI\static\js\medrec.js
 
 export function initMedrec() {
@@ -7893,7 +7886,7 @@ export function initMedrec() {
     });
 }
 
------ C:\Dev\WASABI\static\js\orders.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\orders.js -----
 function formatBalance(balance) {
     if (typeof balance === 'number') {
         return balance.toFixed(2);
@@ -8102,7 +8095,7 @@ export function initOrders() {
     });
 }
 
------ C:\Dev\WASABI\static\js\precomp.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\precomp.js -----
 import { showModal } from './inout_modal.js';
 
 let view, patientNumberInput, saveBtn, addRowBtn, tableBody, loadBtn, clearBtn;
@@ -8283,7 +8276,7 @@ export function initPrecomp() {
     });
 }
 
------ C:\Dev\WASABI\static\js\pricing.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\pricing.js -----
 import { wholesalerMap } from './master_data.js';
 
 let view, wholesalerSelect, exportBtn, uploadInput, bulkUpdateBtn, outputContainer, makerFilterInput;
@@ -8673,7 +8666,7 @@ export function initPricingView() {
     outputContainer.addEventListener('change', handleSupplierChange);
 }
 
------ C:\Dev\WASABI\static\js\reprocess.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\reprocess.js -----
 export function initReprocessButton() {
     const reprocessBtn = document.getElementById('reprocessBtn');
     if (!reprocessBtn) return;
@@ -8702,7 +8695,7 @@ export function initReprocessButton() {
     });
 }
 
------ C:\Dev\WASABI\static\js\settings.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\settings.js -----
 let view, userIDInput, passwordInput, saveBtn;
 let wholesalerCodeInput, wholesalerNameInput, addWholesalerBtn, wholesalersTableBody;
 
@@ -8879,7 +8872,7 @@ export function onViewShow() {
     loadWholesalers();
 }
 
------ C:\Dev\WASABI\static\js\upload.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\upload.js -----
 import { createUploadTableHTML, renderUploadTableRows } from './common_table.js';
 
 let currentUploadType = '';
@@ -8931,7 +8924,7 @@ export function resetUploadView() {
     if (container) container.innerHTML = '';
 }
 
------ C:\Dev\WASABI\static\js\usage.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\usage.js -----
 import { createUploadTableHTML, renderUploadTableRows } from './common_table.js';
 
 export function initUsageUpload() {
@@ -8969,17 +8962,14 @@ export function initUsageUpload() {
     });
 }
 
------ C:\Dev\WASABI\static\js\valuation.js -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\valuation.js -----
 // C:\Dev\WASABI\static\js\valuation.js
-
 import { showModal } from './inout_modal.js';
 
 let view, dateInput, runBtn, outputContainer, kanaNameInput, dosageFormInput;
 let reportDataCache = null;
-
 const formatCurrency = (value) => new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' }).format(value || 0);
 
-// ▼▼▼ [修正点] 総合計を表示するロジックを追加 ▼▼▼
 function renderInteractiveView() {
     if (!reportDataCache || reportDataCache.length === 0) {
         outputContainer.innerHTML = '<p>表示するデータがありません。</p>';
@@ -8990,6 +8980,7 @@ function renderInteractiveView() {
     let grandTotalNhiValue = 0;
     let grandTotalPurchaseValue = 0;
     const ucMap = {"1": "内", "2": "外", "3": "歯", "4": "注", "5": "機", "6": "他"};
+
     reportDataCache.forEach(group => {
         grandTotalNhiValue += group.totalNhiValue;
         grandTotalPurchaseValue += group.totalPurchaseValue;
@@ -8997,30 +8988,38 @@ function renderInteractiveView() {
         const ucName = ucMap[group.usageClassification.trim()] || group.usageClassification;
         html += `<div class="agg-yj-header">${ucName} (合計薬価: ${formatCurrency(group.totalNhiValue)} | 合計納入価: ${formatCurrency(group.totalPurchaseValue)})</div>`;
 
-        group.yjGroups.forEach(yj => {
+        group.detailRows.forEach(row => {
+            // ▼▼▼ ここからが修正箇所です ▼▼▼
             let warningHtml = '';
-            if (yj.showAlert) {
-                warningHtml = `<span class="warning-link" data-yj-code="${yj.yjCode}" data-product-name="${yj.productName}" style="color: red; font-weight: bold; cursor: pointer; text-decoration: underline; margin-left: 15px;">[JCSHMS掲載品を登録してください]</span>`;
+            // 警告メッセージの生成ロジックは残っています
+            if (row.showAlert) { 
+                warningHtml = `<span class="warning-link" data-yj-code="${row.yjCode}" data-product-name="${row.productName}" style="color: red; font-weight: bold; cursor: pointer; text-decoration: underline; margin-left: 15px;">[JCSHMS掲載品を登録してください]</span>`;
             }
 
             html += `
-                <div class="item-row" style="background-color: #f8f9fa; padding: 6px 10px; border: 1px solid #ccc; border-top: none; display: flex; justify-content: space-between; align-items: center;">
-                    <div>
-                        <span style="font-weight: bold;">${yj.productName}</span>
-                        <span style="font-size: 12px; margin-left: 10px;">(${yj.yjCode})</span>
-                        ${warningHtml}
+                <div class="item-row" style="background-color: #f8f9fa; padding: 6px 10px; border: 1px solid #ccc; border-top: none; font-size: 12px; line-height: 1.6; display: flex; justify-content: space-between; align-items: center;">
+                    
+                    <div class="left-section">
+                        <span style="font-weight: bold;">${row.productName} (${row.yjCode})</span>
+                        <span style="margin-left: 10px; color: #555;">${row.packageSpec}</span>
+                        ${warningHtml} 
                     </div>
-                    <div style="font-size: 12px;">
-                        <span>在庫: ${yj.totalYjStock.toFixed(2)} ${yj.yjUnitName}</span> |
-                        <span>薬価金額: ${formatCurrency(yj.nhiValue)}</span> |
-                        <span>納入価金額: ${formatCurrency(yj.purchaseValue)}</span>
+
+                    <div class="right-section" style="white-space: nowrap;">
+                        <span>納入価金額: ${formatCurrency(row.totalPurchaseValue)}</span> | 
+                        <span>薬価金額: ${formatCurrency(row.totalNhiValue)}</span> | 
+                        <span>包装納入価: ${row.packagePurchasePrice > 0 ? row.packagePurchasePrice.toFixed(2) + '円' : '-'}</span> |
+                        <span>包装薬価: ${row.packageNhiPrice > 0 ? row.packageNhiPrice.toFixed(2) + '円' : '-'}</span> |
+                        <span style="font-weight: bold;">在庫: ${row.stock.toFixed(2)} ${row.yjUnitName}</span>
                     </div>
+
                 </div>
             `;
+            // ▲▲▲ 修正ここまで ▲▲▲
         });
     });
 
-    // 総合計の表示部分を追加
+    // (以降のコードは変更ありません)
     html += `
         <div style="text-align: right; margin-top: 20px; padding: 10px; border-top: 2px solid #333; font-weight: bold;">
             <span>総合計 (薬価): ${formatCurrency(grandTotalNhiValue)}</span> | 
@@ -9047,6 +9046,7 @@ function renderPrintableReport() {
     let grandTotalNhiValue = 0;
     let grandTotalPurchaseValue = 0;
     const ucMap = {"1": "内", "2": "外", "3": "歯", "4": "注", "5": "機", "6": "他"};
+
     reportDataCache.forEach(group => {
         grandTotalNhiValue += group.totalNhiValue;
         grandTotalPurchaseValue += group.totalPurchaseValue;
@@ -9056,32 +9056,30 @@ function renderPrintableReport() {
                  <table class="data-table" style="font-size: 10pt;">
                     <thead>
                         <tr>
-                            <th style="width: 5%;">No.</th>
-                            <th style="width: 45%;">製品名</th>
+                            <th style="width: 35%;">製品名</th>
+                            <th style="width: 25%;">包装</th>
                             <th style="width: 10%;">在庫数</th>
-                            <th style="width: 10%;">単位</th>
                             <th style="width: 15%;">薬価金額</th>
                             <th style="width: 15%;">納入価金額</th>
                         </tr>
                     </thead>
                     <tbody>`;
         
-        group.yjGroups.forEach((yj, index) => {
+        group.detailRows.forEach(row => {
             html += `
                 <tr>
-                    <td style="text-align: center;">${index + 1}</td>
-                    <td class="left">${yj.productName}</td>
-                    <td class="right">${yj.totalYjStock.toFixed(2)}</td>
-                    <td style="text-align: center;">${yj.yjUnitName}</td>
-                    <td class="right">${formatCurrency(yj.nhiValue)}</td>
-                    <td class="right">${formatCurrency(yj.purchaseValue)}</td>
+                    <td class="left">${row.productName}</td>
+                    <td class="left">${row.packageSpec}</td>
+                    <td class="right">${row.stock.toFixed(2)} ${row.yjUnitName}</td>
+                    <td class="right">${formatCurrency(row.totalNhiValue)}</td>
+                    <td class="right">${formatCurrency(row.totalPurchaseValue)}</td>
                 </tr>`;
         });
 
         html += `</tbody>
                  <tfoot>
                     <tr>
-                        <td colspan="4" class="right" style="font-weight: bold;">${ucName} 合計</td>
+                        <td colspan="3" class="right" style="font-weight: bold;">${ucName} 合計</td>
                         <td class="right" style="font-weight: bold;">${formatCurrency(group.totalNhiValue)}</td>
                         <td class="right" style="font-weight: bold;">${formatCurrency(group.totalPurchaseValue)}</td>
                     </tr>
@@ -9089,23 +9087,21 @@ function renderPrintableReport() {
                  </table>`;
     });
 
-    // 総合計のテーブルを追加
     html += `
         <table class="data-table" style="margin-top: 20px;">
             <tfoot>
                 <tr>
-                    <td colspan="4" class="right" style="font-weight: bold;">総合計</td>
+                    <td colspan="3" class="right" style="font-weight: bold;">総合計</td>
                     <td class="right" style="font-weight: bold;">${formatCurrency(grandTotalNhiValue)}</td>
                     <td class="right" style="font-weight: bold;">${formatCurrency(grandTotalPurchaseValue)}</td>
                 </tr>
             </tfoot>
         </table>
     `;
-
+    
     html += `</div>`;
     outputContainer.innerHTML = html;
 }
-// ▲▲▲ 修正ここまで ▲▲▲
 
 async function runCalculation() {
     const date = dateInput.value.replace(/-/g, '');
@@ -9148,7 +9144,7 @@ export function initValuationView() {
 
     dateInput.value = new Date().toISOString().slice(0, 10);
     runBtn.addEventListener('click', runCalculation);
-    
+
     outputContainer.addEventListener('click', async (e) => {
         if (e.target.classList.contains('warning-link')) {
             showModal(e.target, async (selectedProduct) => {
@@ -9194,7 +9190,7 @@ export function initValuationView() {
     });
 }
 
------ C:\Dev\WASABI\static\index.html -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\index.html -----
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -9603,7 +9599,7 @@ export function initValuationView() {
 </body>
 </html>
 
------ C:\Dev\WASABI\stock\handler.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\stock\handler.go -----
 package stock
 
 import (
@@ -9633,7 +9629,7 @@ func GetCurrentStockHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
------ C:\Dev\WASABI\transaction\handler.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\transaction\handler.go -----
 package transaction
 
 import (
@@ -9710,7 +9706,7 @@ func DeleteTransactionHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
------ C:\Dev\WASABI\units\handler.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\units\handler.go -----
 package units
 
 import (
@@ -9730,7 +9726,7 @@ func GetTaniMapHandler() http.HandlerFunc {
 	}
 }
 
------ C:\Dev\WASABI\units\units.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\units\units.go -----
 package units
 
 import (
@@ -9837,7 +9833,7 @@ func ResolveCode(name string) string {
 	return ""
 }
 
------ C:\Dev\WASABI\usage\handler.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\usage\handler.go -----
 // C:\Dev\WASABI\usage\handler.go
 
 package usage
@@ -10068,7 +10064,7 @@ func removeUsageDuplicates(records []model.UnifiedInputRecord) []model.UnifiedIn
 	return result
 }
 
------ C:\Dev\WASABI\valuation\handler.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\valuation\handler.go -----
 package valuation
 
 import (
@@ -10109,147 +10105,146 @@ func GetValuationHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
------ C:\Dev\WASABI\main.go -----
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\main.go -----
 // C:\Dev\WASABI\main.go
 
 package main
 
 import (
-	"database/sql"
-	"log"
-	"net/http"
-	"os/exec"
-	"runtime"
+    "database/sql"
+    "log"
+    "net/http"
+    "os/exec"
+    "runtime"
 
-	_ "github.com/mattn/go-sqlite3"
+    _ "github.com/mattn/go-sqlite3"
 
-	"wasabi/aggregation"
-	"wasabi/backorder"
-	"wasabi/backup"
-	"wasabi/config"
-	"wasabi/dat"
-	"wasabi/db"
-	"wasabi/deadstock"
-	"wasabi/inout"
-	"wasabi/inventory"
-	"wasabi/loader"
-	"wasabi/masteredit"
-	"wasabi/medrec" // ▼▼▼ この行を追加 ▼▼▼
-	"wasabi/orders"
-	"wasabi/precomp"
-	"wasabi/pricing"
-	"wasabi/reprocess"
-	"wasabi/settings"
-	"wasabi/stock"
-	"wasabi/transaction"
-	"wasabi/units"
-	"wasabi/usage"
-	"wasabi/valuation"
+    "wasabi/aggregation"
+    "wasabi/backorder"
+    "wasabi/backup"
+    "wasabi/config"
+    "wasabi/dat"
+    "wasabi/db"
+    "wasabi/deadstock"
+    "wasabi/inout"
+    "wasabi/inventory"
+    "wasabi/loader"
+    "wasabi/masteredit"
+    "wasabi/medrec"
+    "wasabi/orders"
+    "wasabi/precomp"
+    "wasabi/pricing"
+    "wasabi/reprocess"
+    "wasabi/settings"
+    "wasabi/stock"
+    "wasabi/transaction"
+    "wasabi/units"
+    "wasabi/usage"
+    "wasabi/valuation"
 )
 
 func main() {
-	conn, err := sql.Open("sqlite3", "./wasabi.db")
-	if err != nil {
-		log.Fatalf("db open error: %v", err)
-	}
-	conn.Exec("PRAGMA journal_mode = WAL;")
-	conn.Exec("PRAGMA busy_timeout = 5000;")
-	conn.SetMaxOpenConns(1)
-	conn.SetMaxIdleConns(1)
-	defer conn.Close()
+    conn, err := sql.Open("sqlite3", "./wasabi.db")
+    if err != nil {
+        log.Fatalf("db open error: %v", err)
+    }
+    conn.Exec("PRAGMA journal_mode = WAL;")
+    conn.Exec("PRAGMA busy_timeout = 5000;")
+    conn.SetMaxOpenConns(1)
+    conn.SetMaxIdleConns(1)
+    defer conn.Close()
 
-	if _, err := config.LoadConfig(); err != nil {
-		log.Printf("WARN: Could not load config.json: %v", err)
-	}
+    if _, err := config.LoadConfig(); err != nil {
+        log.Printf("WARN: Could not load config.json: %v", err)
+    }
 
-	if err := loader.InitDatabase(conn); err != nil {
-		log.Fatalf("master data initialization failed: %v", err)
-	}
-	if _, err := units.LoadTANIFile("SOU/TANI.CSV"); err != nil {
-		log.Fatalf("tani master init failed: %v", err)
-	}
-	log.Println("Master data loaded successfully.")
+    if err := loader.InitDatabase(conn); err != nil {
+        log.Fatalf("master data initialization failed: %v", err)
+    }
+    if _, err := units.LoadTANIFile("SOU/TANI.CSV"); err != nil {
+        log.Fatalf("tani master init failed: %v", err)
+    }
+    log.Println("Master data loaded successfully.")
 
-	mux := http.NewServeMux()
+    mux := http.NewServeMux()
 
-	// API Endpoints
-	mux.HandleFunc("/api/valuation", valuation.GetValuationHandler(conn))
-	mux.HandleFunc("/api/dat/upload", dat.UploadDatHandler(conn))
-	mux.HandleFunc("/api/usage/upload", usage.UploadUsageHandler(conn))
-	mux.HandleFunc("/api/inout/save", inout.SaveInOutHandler(conn))
-	mux.HandleFunc("/api/inventory/upload", inventory.UploadInventoryHandler(conn))
-	mux.HandleFunc("/api/inventory/list", inventory.ListInventoryProductsHandler(conn))
-	mux.HandleFunc("/api/inventory/save_manual", inventory.SaveManualInventoryHandler(conn))
-	mux.HandleFunc("/api/aggregation", aggregation.GetAggregationHandler(conn))
-	mux.HandleFunc("/api/clients", db.GetAllClientsHandler(conn))
-	mux.HandleFunc("/api/products/search", db.SearchJcshmsByNameHandler(conn))
-	mux.HandleFunc("/api/units/map", units.GetTaniMapHandler())
-	mux.HandleFunc("/api/receipts", transaction.GetReceiptsHandler(conn))
-	mux.HandleFunc("/api/transaction/", transaction.GetTransactionHandler(conn))
-	mux.HandleFunc("/api/transaction/delete/", transaction.DeleteTransactionHandler(conn))
-	mux.HandleFunc("/api/masters/editable", masteredit.GetEditableMastersHandler(conn))
-	mux.HandleFunc("/api/master/update", masteredit.UpdateMasterHandler(conn))
-	mux.HandleFunc("/api/clients/export", backup.ExportClientsHandler(conn))
-	mux.HandleFunc("/api/clients/import", backup.ImportClientsHandler(conn))
-	mux.HandleFunc("/api/products/export", backup.ExportProductsHandler(conn))
-	mux.HandleFunc("/api/products/import", backup.ImportProductsHandler(conn))
-	mux.HandleFunc("/api/transactions/reprocess", reprocess.ReProcessTransactionsHandler(conn))
-	mux.HandleFunc("/api/deadstock/list", deadstock.GetDeadStockHandler(conn))
-	mux.HandleFunc("/api/deadstock/save", deadstock.SaveDeadStockHandler(conn))
-	mux.HandleFunc("/api/settings/get", settings.GetSettingsHandler(conn))
-	mux.HandleFunc("/api/settings/save", settings.SaveSettingsHandler(conn))
-	mux.HandleFunc("/api/settings/wholesalers", settings.WholesalersHandler(conn))
-	mux.HandleFunc("/api/settings/wholesalers/", settings.WholesalersHandler(conn))
-	// ▼▼▼【ここから追加】▼▼▼
-	mux.HandleFunc("/api/transactions/clear_all", settings.ClearTransactionsHandler(conn))
-	// ▲▲▲【追加ここまで】▲▲▲
-	mux.HandleFunc("/api/masters/search_all", db.SearchAllMastersHandler(conn))
-	mux.HandleFunc("/api/precomp/save", precomp.SavePrecompHandler(conn))
-	mux.HandleFunc("/api/precomp/load", precomp.LoadPrecompHandler(conn))
-	mux.HandleFunc("/api/precomp/clear", precomp.ClearPrecompHandler(conn))
-	mux.HandleFunc("/api/orders/candidates", orders.GenerateOrderCandidatesHandler(conn))
-	mux.HandleFunc("/api/orders/place", orders.PlaceOrderHandler(conn))
-	mux.HandleFunc("/api/backorders", backorder.GetBackordersHandler(conn))
-	mux.HandleFunc("/api/backorders/delete", backorder.DeleteBackorderHandler(conn))
-	mux.HandleFunc("/api/masters/reload_jcshms", loader.ReloadJcshmsHandler(conn))
-	mux.HandleFunc("/api/pricing/export_data", pricing.GetExportDataHandler(conn))
-	mux.HandleFunc("/api/pricing/upload", pricing.UploadQuotesHandler(conn))
-	mux.HandleFunc("/api/pricing/update", pricing.BulkUpdateHandler(conn))
-	mux.HandleFunc("/api/pricing/all_masters", pricing.GetAllMastersForPricingHandler(conn))
-	mux.HandleFunc("/api/masters/by_yj_code", db.GetMastersByYjCodeHandler(conn))
-	mux.HandleFunc("/api/stock/current", stock.GetCurrentStockHandler(conn))
-	mux.HandleFunc("/api/medrec/download", medrec.DownloadHandler(conn)) // ▼▼▼ この行を追加 ▼▼▼
+    // API Endpoints
+    mux.HandleFunc("/api/valuation", valuation.GetValuationHandler(conn))
+    mux.HandleFunc("/api/dat/upload", dat.UploadDatHandler(conn))
+    mux.HandleFunc("/api/usage/upload", usage.UploadUsageHandler(conn))
+    mux.HandleFunc("/api/inout/save", inout.SaveInOutHandler(conn))
+    mux.HandleFunc("/api/inventory/upload", inventory.UploadInventoryHandler(conn))
+    mux.HandleFunc("/api/inventory/list", inventory.ListInventoryProductsHandler(conn))
+    mux.HandleFunc("/api/inventory/save_manual", inventory.SaveManualInventoryHandler(conn))
+    mux.HandleFunc("/api/aggregation", aggregation.GetAggregationHandler(conn))
+    mux.HandleFunc("/api/clients", db.GetAllClientsHandler(conn))
+    mux.HandleFunc("/api/products/search", db.SearchJcshmsByNameHandler(conn))
+    mux.HandleFunc("/api/units/map", units.GetTaniMapHandler())
+    mux.HandleFunc("/api/receipts", transaction.GetReceiptsHandler(conn))
+    mux.HandleFunc("/api/transaction/", transaction.GetTransactionHandler(conn))
+    mux.HandleFunc("/api/transaction/delete/", transaction.DeleteTransactionHandler(conn))
+    mux.HandleFunc("/api/masters/editable", masteredit.GetEditableMastersHandler(conn))
+    mux.HandleFunc("/api/master/update", masteredit.UpdateMasterHandler(conn))
+    mux.HandleFunc("/api/clients/export", backup.ExportClientsHandler(conn))
+    mux.HandleFunc("/api/clients/import", backup.ImportClientsHandler(conn))
+    mux.HandleFunc("/api/products/export", backup.ExportProductsHandler(conn))
+    mux.HandleFunc("/api/products/import", backup.ImportProductsHandler(conn))
+    mux.HandleFunc("/api/transactions/reprocess", reprocess.ReProcessTransactionsHandler(conn))
+    mux.HandleFunc("/api/deadstock/list", deadstock.GetDeadStockHandler(conn))
+    mux.HandleFunc("/api/deadstock/save", deadstock.SaveDeadStockHandler(conn))
+    mux.HandleFunc("/api/settings/get", settings.GetSettingsHandler(conn))
+    mux.HandleFunc("/api/settings/save", settings.SaveSettingsHandler(conn))
+    mux.HandleFunc("/api/settings/wholesalers", settings.WholesalersHandler(conn))
+    mux.HandleFunc("/api/settings/wholesalers/", settings.WholesalersHandler(conn))
+    mux.HandleFunc("/api/transactions/clear_all", settings.ClearTransactionsHandler(conn))
+    mux.HandleFunc("/api/masters/search_all", db.SearchAllMastersHandler(conn))
+    mux.HandleFunc("/api/precomp/save", precomp.SavePrecompHandler(conn))
+    mux.HandleFunc("/api/precomp/load", precomp.LoadPrecompHandler(conn))
+    mux.HandleFunc("/api/precomp/clear", precomp.ClearPrecompHandler(conn))
+    mux.HandleFunc("/api/orders/candidates", orders.GenerateOrderCandidatesHandler(conn))
+    mux.HandleFunc("/api/orders/place", orders.PlaceOrderHandler(conn))
+    mux.HandleFunc("/api/backorders", backorder.GetBackordersHandler(conn))
+    mux.HandleFunc("/api/backorders/delete", backorder.DeleteBackorderHandler(conn))
+    mux.HandleFunc("/api/masters/reload_jcshms", loader.ReloadJcshmsHandler(conn))
+    mux.HandleFunc("/api/pricing/export_data", pricing.GetExportDataHandler(conn))
+    mux.HandleFunc("/api/pricing/upload", pricing.UploadQuotesHandler(conn))
+    mux.HandleFunc("/api/pricing/update", pricing.BulkUpdateHandler(conn))
+    mux.HandleFunc("/api/pricing/all_masters", pricing.GetAllMastersForPricingHandler(conn))
+    mux.HandleFunc("/api/masters/by_yj_code", db.GetMastersByYjCodeHandler(conn))
+    mux.HandleFunc("/api/stock/current", stock.GetCurrentStockHandler(conn))
+    mux.HandleFunc("/api/medrec/download", medrec.DownloadHandler(conn))
 
-	// Serve Frontend
-	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "./static/index.html")
-	})
+    // Serve Frontend
+    mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))
+    mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+        http.ServeFile(w, r, "./static/index.html")
+    })
 
-	port := ":8080"
-	log.Printf("Server starting on http://localhost%s", port)
-	go openBrowser("http://localhost" + port)
-	if err := http.ListenAndServe(port, mux); err != nil {
-		log.Fatalf("server failed to start: %v", err)
-	}
+    port := ":8080"
+    log.Printf("Server starting on http://localhost%s", port)
+    go openBrowser("http://localhost" + port)
+    if err := http.ListenAndServe(port, mux); err != nil {
+        log.Fatalf("server failed to start: %v", err)
+    }
 }
 
 func openBrowser(url string) {
-	var err error
-	switch runtime.GOOS {
-	case "windows":
-		err = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
-	case "darwin":
-		err = exec.Command("open", url).Start()
-	default: // linux, etc.
-		err = exec.Command("xdg-open", url).Start()
-	}
-	if err != nil {
-		log.Printf("failed to open browser: %v", err)
-	}
+    var err error
+    switch runtime.GOOS {
+    case "windows":
+        err = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+    case "darwin":
+        err = exec.Command("open", url).Start()
+    default: // linux, etc.
+        err = exec.Command("xdg-open", url).Start()
+    }
+    if err != nil {
+        log.Printf("failed to open browser: %v", err)
+    }
 }
 
------ C:\Dev\WASABI\schema.sql -----
+
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\schema.sql -----
 -- C:\Dev\WASABI\schema.sql
 
 -- 得意先マスターテーブル

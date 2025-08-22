@@ -10,80 +10,90 @@ import (
 )
 
 func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadStockGroup, error) {
-	rows, err := tx.Query(`SELECT ` + TransactionColumns + ` FROM transaction_records ORDER BY transaction_date, id`)
+	txRows, err := tx.Query(`SELECT ` + TransactionColumns + ` FROM transaction_records ORDER BY id`)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get all transactions: %w", err)
+		return nil, fmt.Errorf("failed to get all transactions for dead stock: %w", err)
 	}
-	defer rows.Close()
+	defer txRows.Close()
 
 	txsByProductCode := make(map[string][]*model.TransactionRecord)
-	masters := make(map[string]*model.ProductMaster)
-	for rows.Next() {
-		r, err := ScanTransactionRecord(rows)
+	for txRows.Next() {
+		r, err := ScanTransactionRecord(txRows)
 		if err != nil {
 			return nil, err
 		}
 		txsByProductCode[r.JanCode] = append(txsByProductCode[r.JanCode], r)
-
-		// ▼▼▼ [修正点] ご指摘のエラー箇所を修正 ▼▼▼
-		_, ok := masters[r.JanCode]
-		if !ok {
-			masters[r.JanCode] = r.ToProductMaster()
-		}
-		// ▲▲▲ 修正ここまで ▲▲▲
 	}
 
+	usedInPeriod := make(map[string]bool)
+	for productCode, txs := range txsByProductCode {
+		for _, t := range txs {
+			if t.Flag == 3 && t.TransactionDate >= filters.StartDate && t.TransactionDate <= filters.EndDate {
+				usedInPeriod[productCode] = true
+				break
+			}
+		}
+	}
+
+	// ▼▼▼ [修正点] マスター取得時に絞り込みを行う ▼▼▼
+	masterQuery := `SELECT ` + SelectColumns + ` FROM product_master WHERE 1=1`
+	var masterArgs []interface{}
+	if filters.KanaName != "" {
+		masterQuery += " AND (kana_name LIKE ? OR product_name LIKE ?)"
+		masterArgs = append(masterArgs, "%"+filters.KanaName+"%", "%"+filters.KanaName+"%")
+	}
+	if filters.DosageForm != "" {
+		masterQuery += " AND usage_classification LIKE ?"
+		masterArgs = append(masterArgs, "%"+filters.DosageForm+"%")
+	}
+
+	masterRows, err := tx.Query(masterQuery, masterArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get filtered product masters for dead stock: %w", err)
+	}
+	defer masterRows.Close()
+
+	var allMasters []*model.ProductMaster
+	for masterRows.Next() {
+		m, err := ScanProductMaster(masterRows)
+		if err != nil {
+			return nil, err
+		}
+		allMasters = append(allMasters, m)
+	}
+	// ▲▲▲ 修正ここまで ▲▲▲
+
 	groups := make(map[string][]*model.ProductMaster)
-	for _, m := range masters {
+	for _, m := range allMasters {
 		if m.YjCode != "" {
 			groups[m.YjCode] = append(groups[m.YjCode], m)
 		}
 	}
 
-	deadStockMajorGroups := make(map[string]bool)
+	var result []model.DeadStockGroup
 	for yjCode, masterList := range groups {
-		packagesByMinorGroupKey := make(map[string][]*model.ProductMaster)
-		for _, m := range masterList {
-			key := fmt.Sprintf("%s|%g|%s", m.PackageForm, m.JanPackInnerQty, m.YjUnitName)
-			packagesByMinorGroupKey[key] = append(packagesByMinorGroupKey[key], m)
+		if len(masterList) == 0 {
+			continue
 		}
 
-		isDeadStockCandidate := false
-		for _, mastersInMinorGroup := range packagesByMinorGroupKey {
-			var maxUsage float64
-			for _, master := range mastersInMinorGroup {
-				for _, t := range txsByProductCode[master.ProductCode] {
-					if t.Flag == 3 && t.TransactionDate >= filters.StartDate && t.TransactionDate <= filters.EndDate {
-						if t.YjQuantity > maxUsage {
-							maxUsage = t.YjQuantity
-						}
-					}
-				}
+		isYjGroupUsed := false
+		var representativeMaster *model.ProductMaster
+		for _, master := range masterList {
+			if representativeMaster == nil {
+				representativeMaster = master // ソート用に代表マスターを保持
 			}
-
-			if maxUsage*filters.Coefficient == 0 {
-				isDeadStockCandidate = true
+			if usedInPeriod[master.ProductCode] {
+				isYjGroupUsed = true
 				break
 			}
 		}
-
-		if isDeadStockCandidate {
-			deadStockMajorGroups[yjCode] = true
-		}
-	}
-
-	var result []model.DeadStockGroup
-	for yjCode, masterList := range groups {
-		if !deadStockMajorGroups[yjCode] {
-			continue
-		}
-		if len(masterList) == 0 {
+		if isYjGroupUsed {
 			continue
 		}
 
 		dsg := model.DeadStockGroup{
 			YjCode:      yjCode,
-			ProductName: masterList[0].ProductName,
+			ProductName: representativeMaster.ProductName,
 		}
 
 		packagesByMinorGroupKey := make(map[string][]*model.ProductMaster)
@@ -106,7 +116,11 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 			for _, master := range mastersInMinorGroup {
 				stock, err := CalculateCurrentStockForProduct(tx, master.ProductCode)
 				if err != nil {
-					return nil, fmt.Errorf("failed to calculate stock for dead stock list: %w", err)
+					return nil, fmt.Errorf("failed to calculate stock for dead stock list (%s): %w", master.ProductCode, err)
+				}
+
+				if filters.ExcludeZeroStock && stock <= 0 {
+					continue
 				}
 
 				savedRecords, err := getSavedDeadStock(tx, master.ProductCode)
@@ -135,32 +149,23 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 		dsg.TotalStock = yjTotalStock
 		dsg.PackageGroups = finalPackageGroups
 
-		if filters.ExcludeZeroStock && dsg.TotalStock <= 0 {
-			continue
-		}
-
-		if len(dsg.PackageGroups) > 0 {
-			result = append(result, dsg)
+		if (filters.ExcludeZeroStock && dsg.TotalStock > 0) || !filters.ExcludeZeroStock {
+			if len(dsg.PackageGroups) > 0 {
+				result = append(result, dsg)
+			}
 		}
 	}
 
+	// ▼▼▼ [修正点] 正しい並び順でソートするロジックを実装 ▼▼▼
 	sort.Slice(result, func(i, j int) bool {
 		prio := map[string]int{
-			"1": 1, "内": 1,
-			"2": 2, "外": 2,
-			"3": 3, "歯": 3,
-			"4": 4, "注": 4,
-			"5": 5, "機": 5,
-			"6": 6, "他": 6,
+			"1": 1, "内": 1, "2": 2, "外": 2, "3": 3, "歯": 3,
+			"4": 4, "注": 4, "5": 5, "機": 5, "6": 6, "他": 6,
 		}
 
-		mastersI := groups[result[i].YjCode]
-		mastersJ := groups[result[j].YjCode]
-		if len(mastersI) == 0 || len(mastersJ) == 0 {
-			return false
-		}
-		masterI := mastersI[0]
-		masterJ := mastersJ[0]
+		// 各YJグループから代表マスターを取得して比較
+		masterI := groups[result[i].YjCode][0]
+		masterJ := groups[result[j].YjCode][0]
 
 		prioI, okI := prio[strings.TrimSpace(masterI.UsageClassification)]
 		if !okI {
@@ -177,6 +182,7 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 		}
 		return masterI.KanaName < masterJ.KanaName
 	})
+	// ▲▲▲ 修正ここまで ▲▲▲
 
 	return result, nil
 }

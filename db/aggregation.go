@@ -1,3 +1,5 @@
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\aggregation.go
+
 package db
 
 import (
@@ -109,11 +111,29 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 			continue
 		}
 
-		representativeProductName := mastersInYjGroup[0].ProductName
+		// ▼▼▼ [修正点] YJグループの代表製品名をJCSHMS由来のものから優先的に選択する ▼▼▼
+		var representativeProductName string
+		var representativeYjUnitName string
+		if len(mastersInYjGroup) > 0 {
+			// まず、リストの最初のマスターをフォールバック（初期値）として設定
+			representativeProductName = mastersInYjGroup[0].ProductName
+			representativeYjUnitName = mastersInYjGroup[0].YjUnitName
+
+			// JCSHMS由来のマスターを探す
+			for _, m := range mastersInYjGroup {
+				if m.Origin == "JCSHMS" {
+					representativeProductName = m.ProductName
+					representativeYjUnitName = m.YjUnitName
+					break // JCSHMS由来のマスターが見つかったらループを抜ける
+				}
+			}
+		}
+		// ▲▲▲ 修正ここまで ▲▲▲
+
 		yjGroup := model.StockLedgerYJGroup{
 			YjCode:      yjCode,
-			ProductName: representativeProductName,
-			YjUnitName:  units.ResolveName(mastersInYjGroup[0].YjUnitName),
+			ProductName: representativeProductName, // 優先的に選択された製品名を使用
+			YjUnitName:  units.ResolveName(representativeYjUnitName),
 		}
 
 		mastersByPackageKey := make(map[string][]*model.ProductMaster)

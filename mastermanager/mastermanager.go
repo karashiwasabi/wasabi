@@ -30,12 +30,9 @@ func FindOrCreate(
 		return master, nil
 	}
 
-	// ▼▼▼ [修正点] YJコードの有無で処理を分岐させるロジックを追加 ▼▼▼
 	if !isSyntheticKey {
 		if jcshms, ok := jcshmsMap[janCode]; ok && jcshms.JC018 != "" {
-			// JCSHMSに情報があった場合
 			if jcshms.JC009 != "" {
-				// ケース1: YJコードが "ある" -> 通常通り正式マスターを作成
 				input := createMasterInputFromJcshms(janCode, jcshms.JC009, jcshms)
 				if err := db.CreateProductMasterInTx(tx, input); err != nil {
 					return nil, fmt.Errorf("failed to create master from jcshms: %w", err)
@@ -44,12 +41,9 @@ func FindOrCreate(
 				mastersMap[key] = &newMaster
 				return &newMaster, nil
 			}
-			// ケース2: YJコードが "ない" -> このifブロックを抜け、下の仮登録ルートに進む
 		}
 	}
-	// ▲▲▲ 修正ここまで ▲▲▲
 
-	// 仮登録ルート (JCSHMSにない、またはJCSHMSにあってもYJがない製品がここに来る)
 	newYj, err := db.NextSequenceInTx(tx, "MA2Y", "MA2Y", 8)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get next sequence for provisional master: %w", err)
@@ -62,13 +56,11 @@ func FindOrCreate(
 		Origin:      "PROVISIONAL",
 	}
 
-	// ▼▼▼ [修正点] YJコードなしJCSHMS品の場合、剤型を「他」に上書きする ▼▼▼
 	if !isSyntheticKey {
 		if jcshms, ok := jcshmsMap[janCode]; ok && jcshms.JC009 == "" {
 			provisionalInput.UsageClassification = "他"
 		}
 	}
-	// ▲▲▲ 修正ここまで ▲▲▲
 
 	if err := db.CreateProductMasterInTx(tx, provisionalInput); err != nil {
 		return nil, fmt.Errorf("failed to create provisional master: %w", err)
@@ -110,7 +102,36 @@ func createMasterInputFromJcshms(jan, yj string, jcshms *model.JCShms) model.Pro
 	}
 }
 
+// ▼▼▼ [修正点] `createMasterModelFromInput` を `ProductMaster` に `JanUnitName` がない状態に修正 ▼▼▼
 // createMasterModelFromInput はDB登録用のInputからメモリマップ格納用のProductMasterを作成するヘルパー関数です。
 func createMasterModelFromInput(input model.ProductMasterInput) model.ProductMaster {
-	return model.ProductMaster(input)
+	// ProductMasterにJanUnitNameは存在しないため、コピーしない
+	master := model.ProductMaster{
+		ProductCode:         input.ProductCode,
+		YjCode:              input.YjCode,
+		ProductName:         input.ProductName,
+		Origin:              input.Origin,
+		KanaName:            input.KanaName,
+		MakerName:           input.MakerName,
+		UsageClassification: input.UsageClassification,
+		PackageForm:         input.PackageForm,
+		YjUnitName:          input.YjUnitName,
+		YjPackUnitQty:       input.YjPackUnitQty,
+		FlagPoison:          input.FlagPoison,
+		FlagDeleterious:     input.FlagDeleterious,
+		FlagNarcotic:        input.FlagNarcotic,
+		FlagPsychotropic:    input.FlagPsychotropic,
+		FlagStimulant:       input.FlagStimulant,
+		FlagStimulantRaw:    input.FlagStimulantRaw,
+		JanPackInnerQty:     input.JanPackInnerQty,
+		JanUnitCode:         input.JanUnitCode,
+		JanPackUnitQty:      input.JanPackUnitQty,
+		NhiPrice:            input.NhiPrice,
+		PurchasePrice:       input.PurchasePrice,
+		SupplierWholesale:   input.SupplierWholesale,
+	}
+
+	return master
 }
+
+// ▲▲▲ 修正ここまで ▲▲▲

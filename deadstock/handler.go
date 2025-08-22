@@ -1,3 +1,5 @@
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\deadstock\handler.go
+
 package deadstock
 
 import (
@@ -17,12 +19,16 @@ func GetDeadStockHandler(conn *sql.DB) http.HandlerFunc {
 			coefficient = 1.5
 		}
 
+		// ▼▼▼ [修正点] 新しいフィルター条件を構造体に含める ▼▼▼
 		filters := model.DeadStockFilters{
 			StartDate:        q.Get("startDate"),
 			EndDate:          q.Get("endDate"),
 			ExcludeZeroStock: q.Get("excludeZeroStock") == "true",
 			Coefficient:      coefficient,
+			KanaName:         q.Get("kanaName"),
+			DosageForm:       q.Get("dosageForm"),
 		}
+		// ▲▲▲ 修正ここまで ▲▲▲
 
 		tx, err := conn.Begin()
 		if err != nil {
@@ -31,9 +37,7 @@ func GetDeadStockHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer tx.Rollback()
 
-		// ▼▼▼ [修正点] conn を渡さないように、呼び出し方を元に戻す ▼▼▼
 		results, err := db.GetDeadStockList(tx, filters)
-		// ▲▲▲ 修正ここまで ▲▲▲
 		if err != nil {
 			http.Error(w, "Failed to get dead stock list: "+err.Error(), http.StatusInternalServerError)
 			return
