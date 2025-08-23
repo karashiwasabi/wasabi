@@ -1,17 +1,24 @@
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\reprocess.js
+
 export function initReprocessButton() {
     const reprocessBtn = document.getElementById('reprocessBtn');
     if (!reprocessBtn) return;
 
     reprocessBtn.addEventListener('click', async () => {
-        if (!confirm('仮登録状態の取引データを、最新のマスター情報で更新します。よろしいですか？')) {
+        // ▼▼▼ [修正点] 確認メッセージをより強力なものに変更 ▼▼▼
+        if (!confirm('全ての取引データを、最新のマスター情報で更新します。\nデータ量によっては数分かかる場合があります。\nこの操作は元に戻せません。よろしいですか？')) {
             return;
         }
+        // ▲▲▲ 修正ここまで ▲▲▲
 
         window.showLoading();
         try {
+            // ▼▼▼ [修正点] APIエンドポイントは /api/transactions/reprocess のまま（main.goで変更済み）▼▼▼
             const res = await fetch('/api/transactions/reprocess', {
                 method: 'POST',
             });
+            // ▲▲▲ 修正ここまで ▲▲▲
+   
             const data = await res.json();
             if (!res.ok) {
                 throw new Error(data.message || '処理に失敗しました。');
@@ -19,6 +26,7 @@ export function initReprocessButton() {
             window.showNotification(data.message, 'success');
         } catch (err) {
             console.error(err);
+     
             window.showNotification(`エラー: ${err.message}`, 'error');
         } finally {
             window.hideLoading();

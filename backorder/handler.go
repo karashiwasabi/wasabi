@@ -5,19 +5,18 @@ package backorder
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"wasabi/db"
 	"wasabi/model"
-	"wasabi/units" // unitsパッケージをインポート
+	"wasabi/units"
 )
 
-// ▼▼▼ フロントエンドに渡すための専用のデータ構造を定義 ▼▼▼
 type BackorderView struct {
 	model.Backorder
 	FormattedPackageSpec string `json:"formattedPackageSpec"`
 }
 
-// GetBackordersHandler は発注残リストを返します。
 func GetBackordersHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		backorders, err := db.GetAllBackordersList(conn)
@@ -26,33 +25,32 @@ func GetBackordersHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// ▼▼▼ 取得したデータをViewモデルに変換 ▼▼▼
 		backorderViews := make([]BackorderView, 0, len(backorders))
 		for _, bo := range backorders {
-			// units.FormatPackageSpec を使って正しい包装仕様を生成
-			// backordersテーブルにはJANコード単位の情報がないため、YJコード単位の情報で組み立てる
 			tempJcshms := model.JCShms{
 				JC037: bo.PackageForm,
 				JC039: bo.YjUnitName,
 				JC044: bo.YjPackUnitQty,
 				JA006: sql.NullFloat64{Float64: bo.JanPackInnerQty, Valid: true},
+				JA008: sql.NullFloat64{Float64: bo.JanPackUnitQty, Valid: true},
+				JA007: sql.NullString{String: fmt.Sprintf("%d", bo.JanUnitCode), Valid: true},
 			}
-			formattedSpec := units.FormatPackageSpec(&tempJcshms)
+
+			// ▼▼▼ [修正点] 呼び出す関数を新しい簡易版に変更 ▼▼▼
+			formattedSpec := units.FormatSimplePackageSpec(&tempJcshms)
+			// ▲▲▲ 修正ここまで ▲▲▲
 
 			backorderViews = append(backorderViews, BackorderView{
 				Backorder:            bo,
 				FormattedPackageSpec: formattedSpec,
 			})
 		}
-		// ▲▲▲ 変換ここまで ▲▲▲
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(backorderViews) // 変換後のデータを返す
+		json.NewEncoder(w).Encode(backorderViews)
 	}
 }
 
-// ▼▼▼ [修正点] 以下の関数をファイル末尾に追加 ▼▼▼
-// DeleteBackorderHandler は発注残を削除します。
 func DeleteBackorderHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var payload model.Backorder

@@ -4,6 +4,9 @@ import { initInOut, resetInOutView } from './inout.js';
 import { initDatUpload } from './dat.js';
 import { initUsageUpload } from './usage.js';
 import { initInventoryUpload } from './inventory.js';
+// ▼▼▼ 以下をインポートリストに追加 ▼▼▼
+import { initInventoryAdjustment } from './inventory_adjustment.js';
+// ▲▲▲ 追加ここまで ▲▲▲
 import { initAggregation } from './aggregation.js';
 import { initMasterEdit, resetMasterEditView } from './master_edit.js';
 import { initReprocessButton } from './reprocess.js';
@@ -40,6 +43,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     const datBtn = document.getElementById('datBtn');
     const usageBtn = document.getElementById('usageBtn');
     const inventoryBtn = document.getElementById('inventoryBtn');
+        // ▼▼▼ 以下を取得リストに追加 ▼▼▼
+    const inventoryAdjustmentBtn = document.getElementById('inventoryAdjustmentBtn');
+    // ▲▲▲ 追加ここまで ▲▲▲
     const manualInventoryBtn = document.getElementById('manualInventoryBtn');
     const aggregationBtn = document.getElementById('aggregationBtn');
     const masterEditBtn = document.getElementById('masterEditViewBtn');
@@ -64,6 +70,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     initDatUpload();
     initUsageUpload();
     initInventoryUpload();
+        // ▼▼▼ 以下を初期化リストに追加 ▼▼▼
+    initInventoryAdjustment();
+    // ▲▲▲ 追加ここまで ▲▲▲
     initAggregation();
     initMasterEdit();
     initReprocessButton();
@@ -81,8 +90,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     initPricingView();
     initReturnsView(); // ▼▼▼ この行を追加 ▼▼▼
 
+    
+
+    // ▼▼▼ [修正点] showView関数全体を修正 ▼▼▼
     function showView(viewIdToShow) {
         const notificationBox = document.getElementById('notification-box');
+        // 画面が切り替わる際に、通知メッセージの表示クラスを確実に除去する
         if (notificationBox) {
             notificationBox.classList.remove('show');
         }
@@ -91,6 +104,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             view.classList.toggle('hidden', view.id !== viewIdToShow);
         });
     }
+    // ▲▲▲ 修正ここまで ▲▲▲
 
     inOutBtn.addEventListener('click', () => { showView('in-out-view'); resetInOutView(); });
     datBtn.addEventListener('click', () => {
@@ -115,6 +129,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Dispatch a custom event to trigger loading
         document.getElementById('manual-inventory-view').dispatchEvent(new Event('show'));
     });
+    // ▼▼▼ 以下をイベントリスナーリストに追加 ▼▼▼
+    inventoryAdjustmentBtn.addEventListener('click', () => {
+        showView('inventory-adjustment-view');
+    });
+    // ▲▲▲ 追加ここまで ▲▲▲
     aggregationBtn.addEventListener('click', () => {
         if (aggregationOutputContainer) aggregationOutputContainer.innerHTML = '';
         showView('aggregation-view');

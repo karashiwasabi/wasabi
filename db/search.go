@@ -83,6 +83,14 @@ func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterVi
 			},
 			FormattedPackageSpec: units.FormatPackageSpec(&tempJcshms),
 		}
+
+		// ▼▼▼ [修正点] ProductMasterViewのJanUnitNameフィールドに値を設定するロジックを追加 ▼▼▼
+		if view.ProductMaster.JanUnitCode == 0 {
+			view.JanUnitName = view.ProductMaster.YjUnitName
+		} else {
+			view.JanUnitName = units.ResolveName(tempJcshms.JA007.String)
+		}
+		// ▲▲▲ 修正ここまで ▲▲▲
 		// ▲▲▲ 修正ここまで ▲▲▲
 		results = append(results, view)
 	}

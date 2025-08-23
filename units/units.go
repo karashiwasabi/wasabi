@@ -1,3 +1,5 @@
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\units\units.go
+
 package units
 
 import (
@@ -24,7 +26,6 @@ func FormatPackageSpec(jcshms *model.JCShms) string {
 	pkg := fmt.Sprintf("%s %g%s", jcshms.JC037, jcshms.JC044, yjUnitName)
 
 	if jcshms.JA006.Valid && jcshms.JA008.Valid && jcshms.JA008.Float64 != 0 {
-		// ▼▼▼ [修正点] 未使用のyjUnitパラメータを削除 ▼▼▼
 		resolveJanUnitName := func(code string) string {
 			if code != "0" && code != "" {
 				return ResolveName(code)
@@ -33,7 +34,6 @@ func FormatPackageSpec(jcshms *model.JCShms) string {
 		}
 
 		janUnitName := resolveJanUnitName(jcshms.JA007.String)
-		// ▲▲▲ 修正ここまで ▲▲▲
 
 		pkg += fmt.Sprintf(" (%g%s×%g%s)",
 			jcshms.JA006.Float64,
@@ -44,6 +44,26 @@ func FormatPackageSpec(jcshms *model.JCShms) string {
 	}
 	return pkg
 }
+
+// ▼▼▼ [修正点] 「簡易包装」を生成する新しい関数を末尾に追加 ▼▼▼
+// FormatSimplePackageSpec は、「包装形態 + 内包装数量 + YJ単位名」の簡易的な包装文字列を生成します。
+func FormatSimplePackageSpec(jcshms *model.JCShms) string {
+	if jcshms == nil {
+		return ""
+	}
+
+	// 内包装数量が存在し、0より大きい場合のみ文字列を組み立てる
+	if jcshms.JA006.Valid && jcshms.JA006.Float64 > 0 {
+		yjUnitName := ResolveName(jcshms.JC039)
+		return fmt.Sprintf("%s %g%s", jcshms.JC037, jcshms.JA006.Float64, yjUnitName)
+	}
+
+	// 条件に合わない場合は、包装形態のみを返すなどのフォールバック
+	// ここでは、より情報量が多い詳細包装を返す
+	return FormatPackageSpec(jcshms)
+}
+
+// ▲▲▲ 修正ここまで ▲▲▲
 
 // (LoadTANIFile, ResolveName, ResolveCode functions are unchanged)
 func LoadTANIFile(path string) (map[string]string, error) {

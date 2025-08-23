@@ -27,6 +27,13 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 	masterQuery := `SELECT ` + SelectColumns + ` FROM product_master p WHERE 1=1 `
 	var masterArgs []interface{}
 
+	// ▼▼▼ 以下を KanaName フィルターの上に追加 ▼▼▼
+	if filters.YjCode != "" {
+		masterQuery += " AND p.yj_code = ? "
+		masterArgs = append(masterArgs, filters.YjCode)
+	}
+	// ▲▲▲ 修正ここまで ▲▲▲
+
 	if filters.KanaName != "" {
 		masterQuery += " AND (p.kana_name LIKE ? OR p.product_name LIKE ?) "
 		masterArgs = append(masterArgs, "%"+filters.KanaName+"%", "%"+filters.KanaName+"%")

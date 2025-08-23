@@ -6,19 +6,27 @@ export function initManualInventory() {
     const dateInput = document.getElementById('manual-inv-date');
     const saveBtn = document.getElementById('save-manual-inv-btn');
     const container = document.getElementById('manual-inventory-container');
+    const kanaNameInput = document.getElementById('manual-inv-kanaName');
+    const dosageFormInput = document.getElementById('manual-inv-dosageForm');
     let allProducts = [];
-    dateInput.value = new Date().toISOString().slice(0, 10);
 
-    // ▼▼▼ [修正点] 製品リストと理論在庫を並行して取得するロジックに変更 ▼▼▼
+    // ▼▼▼ [修正点] 日付を自動設定する関数を追加 ▼▼▼
+    async function setDefaultDate() {
+        // サーバーに問い合わせるのではなく、今日の日付をデフォルトにする
+        dateInput.value = new Date().toISOString().slice(0, 10);
+    }
+    // ▲▲▲ 修正ここまで ▲▲▲
+
     async function loadProducts() {
         container.innerHTML = '<p>製品マスターと理論在庫を読み込んでいます...</p>';
         window.showLoading();
         try {
-            // 製品リストと全在庫マップを同時に取得
+            // ▼▼▼ [修正点] 製品リスト取得APIには最終棚卸日が含まれるようになった ▼▼▼
             const [mastersRes, stockRes] = await Promise.all([
                 fetch('/api/inventory/list'),
                 fetch('/api/stock/all_current')
             ]);
+            // ▲▲▲ 修正ここまで ▲▲▲
             if (!mastersRes.ok) throw new Error('製品リストの取得に失敗しました。');
             if (!stockRes.ok) throw new Error('理論在庫の取得に失敗しました。');
 
@@ -26,28 +34,45 @@ export function initManualInventory() {
             const stockMap = await stockRes.json();
             if(!allProducts) allProducts = [];
 
-            // 製品リストに理論在庫情報を追加
             allProducts.forEach(p => {
                 p.currentStock = stockMap[p.productCode] || 0;
             });
             
-            renderProducts();
+            applyFiltersAndRender();
         } catch (err) {
             container.innerHTML = `<p style="color:red;">${err.message}</p>`;
         } finally {
             window.hideLoading();
         }
     }
-    // ▲▲▲ 修正ここまで ▲▲▲
+    
+    function applyFiltersAndRender() {
+        const kanaFilter = kanaNameInput.value.toLowerCase();
+        const dosageFilter = dosageFormInput.value.toLowerCase();
+        
+        let filteredProducts = allProducts;
 
-    // ▼▼▼ [修正点] 理論在庫を表示するHTML生成ロジックに変更 ▼▼▼
-    function renderProducts() {
-        if (allProducts.length === 0) {
+        if (kanaFilter) {
+            filteredProducts = filteredProducts.filter(p => 
+                p.productName.toLowerCase().includes(kanaFilter) || p.kanaName.toLowerCase().includes(kanaFilter)
+            );
+        }
+        if (dosageFilter) {
+            filteredProducts = filteredProducts.filter(p => 
+                p.usageClassification && p.usageClassification.toLowerCase().includes(dosageFilter)
+            );
+        }
+        
+        renderProducts(filteredProducts);
+    }
+
+    function renderProducts(productsToRender) {
+        if (productsToRender.length === 0) {
             container.innerHTML = '<p>表示する製品マスターがありません。</p>';
             return;
         }
 
-        const groups = allProducts.reduce((acc, p) => {
+        const groups = productsToRender.reduce((acc, p) => {
             const key = p.yjCode || 'YJコードなし';
             if (!acc[key]) {
                 acc[key] = {
@@ -80,27 +105,41 @@ export function initManualInventory() {
             for (const pkg of Object.values(group.packages)) {
                 const firstMaster = pkg.masters[0];
                 const productCodes = pkg.masters.map(m => m.productCode).join(',');
-                // 包装単位での理論在庫を合算
                 const theoreticalStockForPackage = pkg.masters.reduce((sum, master) => sum + (master.currentStock || 0), 0);
-                
+
+                // ▼▼▼ [修正点] 最終棚卸日を表示するロジックを追加 ▼▼▼
+                let lastInvDateStr = '';
+                if (firstMaster.lastInventoryDate) {
+                    const d = firstMaster.lastInventoryDate; // YYYYMMDD
+                    lastInvDateStr = ` (最終棚卸: ${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)})`;
+                }
+
                 html += `
                     <div class="agg-pkg-header" style="display:flex; align-items:center; gap: 10px;">
                         <span>包装: ${pkg.packageKey}</span>
                         <div style="margin-left:auto; display:flex; align-items: center; gap: 10px;">
-                            <span style="font-size: 12px; color: #333;">理論在庫: ${theoreticalStockForPackage.toFixed(2)}</span>
+                            <span style="font-size: 12px; color: #333;">理論在庫: ${theoreticalStockForPackage.toFixed(2)}${lastInvDateStr}</span>
                             <label for="inv-qty-${firstMaster.productCode}" style="font-weight: bold;">実在庫数:</label>
                             <input type="number" step="any" class="manual-inv-qty" data-product-codes="${productCodes}" id="inv-qty-${firstMaster.productCode}" style="width: 100px;">
                             <span>${firstMaster.yjUnitName || ''}</span>
                         </div>
                     </div>
                 `;
+                // ▲▲▲ 修正ここまで ▲▲▲
             }
         }
         container.innerHTML = html;
     }
-    // ▲▲▲ 修正ここまで ▲▲▲
     
-    view.addEventListener('show', loadProducts);
+    view.addEventListener('show', () => {
+        setDefaultDate();
+        loadProducts();
+    });
+
+    // ▼▼▼ [修正点] フィルター入力時のイベントリスナーを追加 ▼▼▼
+    kanaNameInput.addEventListener('input', applyFiltersAndRender);
+    dosageFormInput.addEventListener('input', applyFiltersAndRender);
+    // ▲▲▲ 修正ここまで ▲▲▲
     
     saveBtn.addEventListener('click', async () => {
         const date = dateInput.value.replace(/-/g, '');

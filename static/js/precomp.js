@@ -162,18 +162,20 @@ export function initPrecomp() {
 
         if (e.target.classList.contains('product-name-cell')) {
             const activeRow = e.target.closest('tr');
-            showModal(activeRow, (selectedProduct, targetRow) => {
-                const productData = {
-                    productCode: selectedProduct.productCode,
-                    productName: selectedProduct.productName,
-                    yjUnitName: selectedProduct.yjUnitName,
-                };
-                targetRow.dataset.product = JSON.stringify(productData);
-                targetRow.querySelector('.product-name-cell').textContent = selectedProduct.productName;
-                targetRow.querySelector('.display-jan-code').textContent = selectedProduct.productCode;
-                targetRow.querySelector('.display-yj-unit-name').textContent = selectedProduct.yjUnitName;
-                targetRow.querySelector('input[name="janQuantity"]').focus();
-            }, '/api/masters/search_all');
+        // ▼▼▼ 修正点: showModalの第3引数を正しいオブジェクト形式に変更 ▼▼▼
+        showModal(activeRow, (selectedProduct, targetRow) => {
+            const productData = {
+                productCode: selectedProduct.productCode,
+                productName: selectedProduct.productName,
+                yjUnitName: selectedProduct.yjUnitName,
+            };
+            targetRow.dataset.product = JSON.stringify(productData);
+            targetRow.querySelector('.product-name-cell').textContent = selectedProduct.productName;
+            targetRow.querySelector('.display-jan-code').textContent = selectedProduct.productCode;
+            targetRow.querySelector('.display-yj-unit-name').textContent = selectedProduct.yjUnitName;
+            targetRow.querySelector('input[name="janQuantity"]').focus();
+        }, { searchApi: '/api/masters/search_all' }); // 修正箇所
+        // ▲▲▲ 修正ここまで ▲▲▲
         }
     });
 }

@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 	"wasabi/model"
 )
@@ -92,4 +93,57 @@ func GetPreCompoundingTotals(conn *sql.DB) (map[string]float64, error) {
 		totals[productCode] = totalQuantity
 	}
 	return totals, nil
+}
+
+// ▼▼▼ 以下をファイル末尾に追加 ▼▼▼
+
+// PreCompoundingDetailView は予製明細表示用の構造体です
+type PreCompoundingDetailView struct {
+	model.PreCompoundingRecord
+	ProductName     string  `json:"productName"`
+	YjUnitName      string  `json:"yjUnitName"`
+	JanPackInnerQty float64 `json:"janPackInnerQty"`
+}
+
+// GetPreCompoundingRecordsByProductCodes は複数の製品コードに紐づく有効な予製レコードを全て取得します。
+func GetPreCompoundingRecordsByProductCodes(conn *sql.DB, productCodes []string) ([]PreCompoundingDetailView, error) {
+	if len(productCodes) == 0 {
+		return []PreCompoundingDetailView{}, nil
+	}
+
+	// SQLインジェクションを防ぐため、プレースホルダを動的に生成
+	placeholders := strings.Repeat("?,", len(productCodes)-1) + "?"
+	query := fmt.Sprintf(`
+		SELECT
+			pcr.id, pcr.patient_number, pcr.product_code, pcr.quantity, pcr.created_at,
+			pm.product_name, pm.yj_unit_name, pm.jan_pack_inner_qty
+		FROM pre_compounding_records AS pcr
+		JOIN product_master AS pm ON pcr.product_code = pm.product_code
+		WHERE pcr.product_code IN (%s)
+		ORDER BY pcr.created_at, pcr.patient_number`, placeholders)
+
+	// interface{}のスライスに引数をまとめる
+	args := make([]interface{}, len(productCodes))
+	for i, code := range productCodes {
+		args[i] = code
+	}
+
+	rows, err := conn.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query pre-compounding records by product codes: %w", err)
+	}
+	defer rows.Close()
+
+	var records []PreCompoundingDetailView
+	for rows.Next() {
+		var r PreCompoundingDetailView
+		if err := rows.Scan(
+			&r.ID, &r.PatientNumber, &r.ProductCode, &r.Quantity, &r.CreatedAt,
+			&r.ProductName, &r.YjUnitName, &r.JanPackInnerQty,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan pre-compounding detail record: %w", err)
+		}
+		records = append(records, r)
+	}
+	return records, nil
 }

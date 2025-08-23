@@ -153,11 +153,25 @@ func (t *TransactionRecord) ToProductMaster() *ProductMaster {
 type ProductMasterView struct {
 	ProductMaster
 	FormattedPackageSpec string `json:"formattedPackageSpec"`
+	// ▼▼▼ [修正点] 以下のフィールドを追加 ▼▼▼
+	JanUnitName string `json:"janUnitName"`
+	// ▲▲▲ 修正ここまで ▲▲▲
 }
+
+// ▼▼▼ [修正点] 以下の構造体を末尾などに追加 ▼▼▼
+// InventoryProductView は棚卸入力画面で製品情報を表示するための構造体です
+type InventoryProductView struct {
+	ProductMaster
+	LastInventoryDate string `json:"lastInventoryDate"`
+}
+
+// ▲▲▲ 修正ここまで ▲▲▲
+
 type Client struct {
 	Code string `json:"code"`
 	Name string `json:"name"`
 }
+
 type AggregationFilters struct {
 	StartDate   string
 	EndDate     string
@@ -165,6 +179,7 @@ type AggregationFilters struct {
 	DrugTypes   []string
 	DosageForm  string
 	Coefficient float64
+	YjCode      string // <-- この行を追加
 }
 
 type ValuationFilters struct {

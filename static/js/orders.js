@@ -19,7 +19,7 @@ function renderOrderCandidates(data, container, wholesalers) {
             <div class="agg-yj-header" style="background-color: #ff0015ff;">
                 <span>YJ: ${yjGroup.yjCode}</span>
                 <span class="product-name">${yjGroup.productName}</span>
-                  <span class="balance-info">
+                <span class="balance-info">
                      在庫: ${formatBalance(yjGroup.endingBalance)} | 
                     発注点: ${formatBalance(yjGroup.totalReorderPoint)} | 
                     不足数: ${formatBalance(yjShortfall)}
@@ -29,12 +29,12 @@ function renderOrderCandidates(data, container, wholesalers) {
                 <thead>
                     <tr>
                         <th style="width: 25%;">製品名（包装）</th>
-                         <th style="width: 15%;">メーカー</th>
-                         <th style="width: 15%;">包装仕様</th>
+                        <th style="width: 15%;">メーカー</th>
+                        <th style="width: 15%;">包装仕様</th>
                         <th style="width: 20%;">卸業者</th>
                         <th style="width: 10%;">発注単位</th>
-                         <th style="width: 5%;">発注数</th>
-                         <th style="width: 10%;">操作</th>
+                        <th style="width: 5%;">発注数</th>
+                        <th style="width: 10%;">操作</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -52,6 +52,7 @@ function renderOrderCandidates(data, container, wholesalers) {
                             rowWholesalerOptions += `<option value="${w.code}" ${isSelected ? 'selected' : ''}>${w.name}</option>`;
                         });
 
+                        // ▼▼▼ [修正点] data属性に計算用の値を追加し、表示列のロジックを変更 ▼▼▼
                         html += `
                             <tr data-jan-code="${master.productCode}" 
                                  data-yj-code="${yjGroup.yjCode}"
@@ -59,16 +60,20 @@ function renderOrderCandidates(data, container, wholesalers) {
                                  data-package-form="${master.packageForm}"
                                  data-jan-pack-inner-qty="${master.janPackInnerQty}"
                                  data-yj-unit-name="${master.yjUnitName}"
-                                 data-yj-pack-unit-qty="${master.yjPackUnitQty}">
+                                 data-yj-pack-unit-qty="${master.yjPackUnitQty}"
+                                 data-order-multiplier="${master.yjPackUnitQty}"> 
                                  <td class="left">${master.productName}</td>
                                  <td class="left">${master.makerName || ''}</td>
                                 <td class="left">${master.formattedPackageSpec}</td>
                                 <td><select class="wholesaler-select" style="width: 100%;">${rowWholesalerOptions}</select></td>
-                                <td>${master.yjPackUnitQty} ${master.yjUnitName}</td>
+                                
+                                <td>1包装 (${master.yjPackUnitQty} ${master.yjUnitName})</td>
+                                
                                 <td><input type="number" value="${recommendedOrder}" class="order-quantity-input" style="width: 80px;"></td>
                                 <td><button class="remove-order-item-btn btn">除外</button></td>
                             </tr>
                         `;
+                        // ▲▲▲ 修正ここまで ▲▲▲
                     }
                 });
             }
@@ -94,6 +99,7 @@ export function initOrders() {
     const threeMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 3, today.getDate());
     endDateInput.value = today.toISOString().slice(0, 10);
     startDateInput.value = threeMonthsAgo.toISOString().slice(0, 10);
+    
     runBtn.addEventListener('click', async () => {
         window.showLoading();
         const params = new URLSearchParams({
@@ -104,13 +110,13 @@ export function initOrders() {
             coefficient: coefficientInput.value,
         });
 
-         try {
+        try {
             const res = await fetch(`/api/orders/candidates?${params.toString()}`);
             if (!res.ok) {
                 const errText = await res.text();
                  throw new Error(errText || 'List generation failed');
             }
-             const data = await res.json();
+            const data = await res.json();
             
             renderOrderCandidates(data.candidates, outputContainer, data.wholesalers || []);
 
@@ -120,6 +126,7 @@ export function initOrders() {
             window.hideLoading();
         }
     });
+    
     createCsvBtn.addEventListener('click', async () => {
         const rows = outputContainer.querySelectorAll('tbody tr');
         if (rows.length === 0) {
@@ -131,7 +138,7 @@ export function initOrders() {
         let csvContent = "";
         let hasItemsToOrder = false;
 
-         rows.forEach(row => {
+        rows.forEach(row => {
             const quantityInput = row.querySelector('.order-quantity-input');
             const quantity = parseInt(quantityInput.value, 10);
             
@@ -144,16 +151,19 @@ export function initOrders() {
                 const csvRow = [janCode, `"${productName}"`, quantity, wholesalerCode].join(',');
                 csvContent += csvRow + "\r\n";
 
-                const yjUnitQty = parseFloat(row.cells[4].textContent) || 1;
+                // ▼▼▼ [修正点] 計算用の値をdata属性から取得するように変更 ▼▼▼
+                const orderMultiplier = parseFloat(row.dataset.orderMultiplier) || 0;
+                
                 backorderPayload.push({
                     yjCode: row.dataset.yjCode,
                     packageForm: row.dataset.packageForm,
                     janPackInnerQty: parseFloat(row.dataset.janPackInnerQty),
                     yjUnitName: row.dataset.yjUnitName,
-                    yjQuantity: quantity * yjUnitQty,
+                    yjQuantity: quantity * orderMultiplier,
                     productName: row.dataset.productName,
                     yjPackUnitQty: parseFloat(row.dataset.yjPackUnitQty) || 0,
                 });
+                // ▲▲▲ 修正ここまで ▲▲▲
             }
         });
 
@@ -173,6 +183,7 @@ export function initOrders() {
             if (!res.ok) throw new Error(resData.message || '発注残の登録に失敗しました。');
             
             window.showNotification(resData.message, 'success');
+            
             const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csvContent], { type: 'text/csv;charset=utf-8;' });
             const link = document.createElement("a");
             const url = URL.createObjectURL(blob);
@@ -192,6 +203,7 @@ export function initOrders() {
             window.hideLoading();
         }
     });
+
     outputContainer.addEventListener('click', (e) => {
         if (e.target.classList.contains('remove-order-item-btn')) {
             const row = e.target.closest('tr');

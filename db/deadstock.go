@@ -236,9 +236,12 @@ func UpsertDeadStockRecordsInTx(tx *sql.Tx, records []model.DeadStockRecord) err
 	defer stmt.Close()
 
 	for _, r := range records {
+		// ▼▼▼ 修正点: 保存条件を緩和 ▼▼▼
+		// 数量が0でも、期限またはロットが入力されていれば保存対象とする
 		if r.StockQuantityJan <= 0 && r.ExpiryDate == "" && r.LotNumber == "" {
 			continue
 		}
+		// ▲▲▲ 修正ここまで ▲▲▲
 		_, err := stmt.Exec(
 			r.ProductCode, r.YjCode, r.PackageForm, r.JanPackInnerQty, r.YjUnitName,
 			r.StockQuantityJan, r.ExpiryDate, r.LotNumber, time.Now().Format("2006-01-02 15:04:05"),

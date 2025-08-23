@@ -12,18 +12,39 @@ import (
 	"wasabi/model"
 )
 
-// ListInventoryProductsHandler returns all product masters for the manual inventory screen.
+// ▼▼▼ [修正点] ListInventoryProductsHandler関数全体を書き換える ▼▼▼
+// ListInventoryProductsHandler returns all product masters with their last inventory date.
 func ListInventoryProductsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// 全ての製品マスターを取得
 		products, err := db.GetAllProductMasters(conn)
 		if err != nil {
 			http.Error(w, "Failed to get product list: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+
+		// 全ての製品の最終棚卸日マップを取得
+		dateMap, err := db.GetLastInventoryDateMap(conn)
+		if err != nil {
+			http.Error(w, "Failed to get last inventory dates: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// 製品マスターと最終棚卸日を結合して、画面用の新しいデータ構造を作成
+		var result []model.InventoryProductView
+		for _, p := range products {
+			result = append(result, model.InventoryProductView{
+				ProductMaster:     *p,
+				LastInventoryDate: dateMap[p.ProductCode], // マップから日付を取得
+			})
+		}
+
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(products)
+		json.NewEncoder(w).Encode(result)
 	}
 }
+
+// ▲▲▲ 修正ここまで ▲▲▲
 
 type ManualInventoryRecord struct {
 	ProductCode string  `json:"productCode"`

@@ -26,9 +26,25 @@ func FindOrCreate(
 		isSyntheticKey = true
 	}
 
+	// 1. まずメモリ上のキャッシュ（マップ）を確認
 	if master, ok := mastersMap[key]; ok {
 		return master, nil
 	}
+
+	// ▼▼▼ [修正点] 仮マスターの場合、DBに既存レコードがないか確認するロジックを追加 ▼▼▼
+	if isSyntheticKey {
+		// 2. 次にデータベースを検索
+		existingMaster, err := db.GetProductMasterByCode(tx, key)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check for existing provisional master %s: %w", key, err)
+		}
+		// もしDBに存在すれば、それを使用する
+		if existingMaster != nil {
+			mastersMap[key] = existingMaster // メモリマップにも追加して次回以降の検索を高速化
+			return existingMaster, nil
+		}
+	}
+	// ▲▲▲ 修正ここまで ▲▲▲
 
 	if !isSyntheticKey {
 		if jcshms, ok := jcshmsMap[janCode]; ok && jcshms.JC018 != "" {
@@ -44,6 +60,7 @@ func FindOrCreate(
 		}
 	}
 
+	// 3. メモリにもDBにも存在しない場合、新しい仮マスターを作成
 	newYj, err := db.NextSequenceInTx(tx, "MA2Y", "MA2Y", 8)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get next sequence for provisional master: %w", err)
@@ -102,10 +119,8 @@ func createMasterInputFromJcshms(jan, yj string, jcshms *model.JCShms) model.Pro
 	}
 }
 
-// ▼▼▼ [修正点] `createMasterModelFromInput` を `ProductMaster` に `JanUnitName` がない状態に修正 ▼▼▼
 // createMasterModelFromInput はDB登録用のInputからメモリマップ格納用のProductMasterを作成するヘルパー関数です。
 func createMasterModelFromInput(input model.ProductMasterInput) model.ProductMaster {
-	// ProductMasterにJanUnitNameは存在しないため、コピーしない
 	master := model.ProductMaster{
 		ProductCode:         input.ProductCode,
 		YjCode:              input.YjCode,
@@ -133,5 +148,3 @@ func createMasterModelFromInput(input model.ProductMasterInput) model.ProductMas
 
 	return master
 }
-
-// ▲▲▲ 修正ここまで ▲▲▲

@@ -109,13 +109,13 @@ export function initSettings() {
     wholesalerNameInput = document.getElementById('wholesalerName');
     addWholesalerBtn = document.getElementById('addWholesalerBtn');
     wholesalersTableBody = document.querySelector('#wholesalers-table tbody');
-
-    // ▼▼▼【ここから追加】▼▼▼
     const clearTransactionsBtn = document.getElementById('clearAllTransactionsBtn');
-    // ▲▲▲【追加ここまで】▲▲▲
+    
 
     saveBtn.addEventListener('click', saveSettings);
     addWholesalerBtn.addEventListener('click', addWholesaler);
+    
+
 
     // ▼▼▼【ここから追加】▼▼▼
     clearTransactionsBtn.addEventListener('click', async () => {
