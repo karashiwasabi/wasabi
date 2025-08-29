@@ -1,3 +1,5 @@
+import { hiraganaToKatakana } from './utils.js';
+
 function formatBalance(balance) {
     if (typeof balance === 'number') {
         return balance.toFixed(2);
@@ -105,7 +107,9 @@ export function initOrders() {
         const params = new URLSearchParams({
             startDate: startDateInput.value.replace(/-/g, ''),
             endDate: endDateInput.value.replace(/-/g, ''),
-            kanaName: kanaNameInput.value,
+        // ▼▼▼ [修正点] 検索実行時にカナ変換 ▼▼▼
+        kanaName: hiraganaToKatakana(kanaNameInput.value),
+        // ▲▲▲ 修正ここまで ▲▲▲
             dosageForm: dosageFormInput.value,
             coefficient: coefficientInput.value,
         });

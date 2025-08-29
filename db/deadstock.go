@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -10,32 +11,9 @@ import (
 )
 
 func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadStockGroup, error) {
-	txRows, err := tx.Query(`SELECT ` + TransactionColumns + ` FROM transaction_records ORDER BY id`)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get all transactions for dead stock: %w", err)
-	}
-	defer txRows.Close()
+	log.Println("--- Dead Stock List Generation Start ---")
 
-	txsByProductCode := make(map[string][]*model.TransactionRecord)
-	for txRows.Next() {
-		r, err := ScanTransactionRecord(txRows)
-		if err != nil {
-			return nil, err
-		}
-		txsByProductCode[r.JanCode] = append(txsByProductCode[r.JanCode], r)
-	}
-
-	usedInPeriod := make(map[string]bool)
-	for productCode, txs := range txsByProductCode {
-		for _, t := range txs {
-			if t.Flag == 3 && t.TransactionDate >= filters.StartDate && t.TransactionDate <= filters.EndDate {
-				usedInPeriod[productCode] = true
-				break
-			}
-		}
-	}
-
-	// ▼▼▼ [修正点] マスター取得時に絞り込みを行う ▼▼▼
+	// ステップ1: フィルターに合致する製品マスター候補を全て取得
 	masterQuery := `SELECT ` + SelectColumns + ` FROM product_master WHERE 1=1`
 	var masterArgs []interface{}
 	if filters.KanaName != "" {
@@ -43,8 +21,8 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 		masterArgs = append(masterArgs, "%"+filters.KanaName+"%", "%"+filters.KanaName+"%")
 	}
 	if filters.DosageForm != "" {
-		masterQuery += " AND usage_classification LIKE ?"
-		masterArgs = append(masterArgs, "%"+filters.DosageForm+"%")
+		masterQuery += " AND usage_classification = ?"
+		masterArgs = append(masterArgs, filters.DosageForm)
 	}
 
 	masterRows, err := tx.Query(masterQuery, masterArgs...)
@@ -53,18 +31,87 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 	}
 	defer masterRows.Close()
 
-	var allMasters []*model.ProductMaster
+	var candidateMasters []*model.ProductMaster
 	for masterRows.Next() {
 		m, err := ScanProductMaster(masterRows)
 		if err != nil {
 			return nil, err
 		}
-		allMasters = append(allMasters, m)
+		candidateMasters = append(candidateMasters, m)
 	}
-	// ▲▲▲ 修正ここまで ▲▲▲
 
+	if len(candidateMasters) == 0 {
+		return []model.DeadStockGroup{}, nil
+	}
+
+	// ステップ2: "期間に処方無し"の製品を特定
+	usedInPeriod := make(map[string]bool)
+	usageQuery := `SELECT DISTINCT jan_code FROM transaction_records WHERE flag = 3 AND transaction_date BETWEEN ? AND ?`
+	usageRows, err := tx.Query(usageQuery, filters.StartDate, filters.EndDate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get used products in period: %w", err)
+	}
+	defer usageRows.Close()
+	for usageRows.Next() {
+		var janCode string
+		if err := usageRows.Scan(&janCode); err == nil {
+			usedInPeriod[janCode] = true
+		}
+	}
+
+	var deadStockMasters []*model.ProductMaster
+	var deadStockProductCodes []string
+	for _, master := range candidateMasters {
+		if !usedInPeriod[master.ProductCode] {
+			deadStockMasters = append(deadStockMasters, master)
+			deadStockProductCodes = append(deadStockProductCodes, master.ProductCode)
+		}
+	}
+
+	if len(deadStockMasters) == 0 {
+		return []model.DeadStockGroup{}, nil
+	}
+
+	// ステップ3: 不動在庫品目の期間前取引履歴を取得
+	historyTxsByProductCode := make(map[string][]*model.TransactionRecord)
+	if len(deadStockProductCodes) > 0 && filters.StartDate != "" {
+		startDate, err := time.Parse("20060102", filters.StartDate)
+		if err != nil {
+			return nil, fmt.Errorf("invalid start date format: %w", err)
+		}
+
+		historyEndDate := startDate.AddDate(0, 0, -1)
+		tempDate := startDate.AddDate(0, -2, 0)
+		historyStartDate := time.Date(tempDate.Year(), tempDate.Month(), 1, 0, 0, 0, 0, time.UTC)
+
+		historyQuery := `SELECT ` + TransactionColumns + ` FROM transaction_records WHERE flag != 0 AND transaction_date BETWEEN ? AND ? AND jan_code IN (?` + strings.Repeat(",?", len(deadStockProductCodes)-1) + `)`
+		args := []interface{}{historyStartDate.Format("20060102"), historyEndDate.Format("20060102")}
+		for _, pc := range deadStockProductCodes {
+			args = append(args, pc)
+		}
+
+		historyRows, err := tx.Query(historyQuery, args...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get recent transaction history: %w", err)
+		}
+		defer historyRows.Close()
+
+		for historyRows.Next() {
+			rec, err := ScanTransactionRecord(historyRows)
+			if err != nil {
+				return nil, err
+			}
+			historyTxsByProductCode[rec.JanCode] = append(historyTxsByProductCode[rec.JanCode], rec)
+		}
+	}
+
+	// ステップ4: 最終整形
+	// ▼▼▼【修正点】▼▼▼
+	// グループ化の対象を、絞り込み前の候補(candidateMasters)ではなく、
+	// 正しく不動在庫と判定されたリスト(deadStockMasters)に変更する
 	groups := make(map[string][]*model.ProductMaster)
-	for _, m := range allMasters {
+	for _, m := range deadStockMasters {
+		// ▲▲▲【修正ここまで】▲▲▲
 		if m.YjCode != "" {
 			groups[m.YjCode] = append(groups[m.YjCode], m)
 		}
@@ -72,28 +119,9 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 
 	var result []model.DeadStockGroup
 	for yjCode, masterList := range groups {
-		if len(masterList) == 0 {
-			continue
-		}
-
-		isYjGroupUsed := false
-		var representativeMaster *model.ProductMaster
-		for _, master := range masterList {
-			if representativeMaster == nil {
-				representativeMaster = master // ソート用に代表マスターを保持
-			}
-			if usedInPeriod[master.ProductCode] {
-				isYjGroupUsed = true
-				break
-			}
-		}
-		if isYjGroupUsed {
-			continue
-		}
-
 		dsg := model.DeadStockGroup{
 			YjCode:      yjCode,
-			ProductName: representativeMaster.ProductName,
+			ProductName: masterList[0].ProductName,
 		}
 
 		packagesByMinorGroupKey := make(map[string][]*model.ProductMaster)
@@ -106,12 +134,9 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 		var finalPackageGroups []model.DeadStockPackageGroup
 
 		for key, mastersInMinorGroup := range packagesByMinorGroupKey {
-			if len(mastersInMinorGroup) == 0 {
-				continue
-			}
-
 			var packageGroupTotalStock float64
 			var productsInPackageGroup []model.DeadStockProduct
+			var recentTxsForPackage []model.TransactionRecord
 
 			for _, master := range mastersInMinorGroup {
 				stock, err := CalculateCurrentStockForProduct(tx, master.ProductCode)
@@ -134,13 +159,27 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 					SavedRecords:  savedRecords,
 				})
 				packageGroupTotalStock += stock
+
+				if txs, ok := historyTxsByProductCode[master.ProductCode]; ok {
+					for _, txPtr := range txs {
+						recentTxsForPackage = append(recentTxsForPackage, *txPtr)
+					}
+				}
 			}
 
 			if len(productsInPackageGroup) > 0 {
+				sort.Slice(recentTxsForPackage, func(i, j int) bool {
+					if recentTxsForPackage[i].TransactionDate != recentTxsForPackage[j].TransactionDate {
+						return recentTxsForPackage[i].TransactionDate < recentTxsForPackage[j].TransactionDate
+					}
+					return recentTxsForPackage[i].ID < recentTxsForPackage[j].ID
+				})
+
 				finalPackageGroups = append(finalPackageGroups, model.DeadStockPackageGroup{
-					PackageKey: key,
-					TotalStock: packageGroupTotalStock,
-					Products:   productsInPackageGroup,
+					PackageKey:         key,
+					TotalStock:         packageGroupTotalStock,
+					Products:           productsInPackageGroup,
+					RecentTransactions: recentTxsForPackage,
 				})
 				yjTotalStock += packageGroupTotalStock
 			}
@@ -156,14 +195,12 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 		}
 	}
 
-	// ▼▼▼ [修正点] 正しい並び順でソートするロジックを実装 ▼▼▼
 	sort.Slice(result, func(i, j int) bool {
 		prio := map[string]int{
 			"1": 1, "内": 1, "2": 2, "外": 2, "3": 3, "歯": 3,
 			"4": 4, "注": 4, "5": 5, "機": 5, "6": 6, "他": 6,
 		}
 
-		// 各YJグループから代表マスターを取得して比較
 		masterI := groups[result[i].YjCode][0]
 		masterJ := groups[result[j].YjCode][0]
 
@@ -171,7 +208,6 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 		if !okI {
 			prioI = 7
 		}
-
 		prioJ, okJ := prio[strings.TrimSpace(masterJ.UsageClassification)]
 		if !okJ {
 			prioJ = 7
@@ -182,7 +218,6 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 		}
 		return masterI.KanaName < masterJ.KanaName
 	})
-	// ▲▲▲ 修正ここまで ▲▲▲
 
 	return result, nil
 }
@@ -205,6 +240,7 @@ func getSavedDeadStock(tx *sql.Tx, productCode string) ([]model.DeadStockRecord,
 	}
 	return records, nil
 }
+
 func UpsertDeadStockRecordsInTx(tx *sql.Tx, records []model.DeadStockRecord) error {
 	productCodes := make(map[string]struct{})
 	for _, r := range records {
@@ -236,12 +272,9 @@ func UpsertDeadStockRecordsInTx(tx *sql.Tx, records []model.DeadStockRecord) err
 	defer stmt.Close()
 
 	for _, r := range records {
-		// ▼▼▼ 修正点: 保存条件を緩和 ▼▼▼
-		// 数量が0でも、期限またはロットが入力されていれば保存対象とする
 		if r.StockQuantityJan <= 0 && r.ExpiryDate == "" && r.LotNumber == "" {
 			continue
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
 		_, err := stmt.Exec(
 			r.ProductCode, r.YjCode, r.PackageForm, r.JanPackInnerQty, r.YjUnitName,
 			r.StockQuantityJan, r.ExpiryDate, r.LotNumber, time.Now().Format("2006-01-02 15:04:05"),

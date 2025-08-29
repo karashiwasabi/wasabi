@@ -3,28 +3,26 @@
 package medrec
 
 import (
+	"bufio"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"mime"
 	"net/http"
-	"net/http/cookiejar"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 	"wasabi/config"
+	"wasabi/dat"
 
-	"golang.org/x/net/publicsuffix" // Cookie Jarのために追加
+	"github.com/chromedp/cdproto/browser"
+	"github.com/chromedp/chromedp"
 )
 
-// DownloadHandler handles the entire process of logging into e-mednet and downloading the DAT file.
 func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// 1. WASABIの設定ファイルからID/パスワードを読み込む
 		cfg, err := config.LoadConfig()
 		if err != nil {
 			http.Error(w, "設定ファイルの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
@@ -35,109 +33,198 @@ func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// 2. Cookieを保持するHTTPクライアントを生成
-		jar, err := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
+		opts := append(chromedp.DefaultExecAllocatorOptions[:],
+			chromedp.Flag("headless", false),
+			chromedp.Flag("disable-gpu", true),
+			chromedp.Flag("no-sandbox", true),
+			chromedp.Flag("no-first-run", true),
+			chromedp.Flag("no-default-browser-check", true),
+			chromedp.UserAgent(`Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36`),
+		)
+
+		allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
+		defer cancel()
+
+		ctx, cancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(log.Printf))
+		defer cancel()
+
+		downloadDir, err := filepath.Abs("./download/DAT")
 		if err != nil {
-			http.Error(w, "Cookie Jarの作成に失敗しました: "+err.Error(), http.StatusInternalServerError)
+			http.Error(w, "ダウンロードディレクトリのパス取得に失敗しました: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		client := &http.Client{Jar: jar}
-
-		// 3. ログインリクエストを送信
-		loginURL := "https://www.e-mednet.jp/NASApp/ASP/MenuMain"
-		loginData := url.Values{}
-		loginData.Set("userid", cfg.EmednetUserID)    // 確実なキー名を使用 [cite: 193]
-		loginData.Set("userpsw", cfg.EmednetPassword) // 確実なキー名を使用 [cite: 193]
-		loginData.Set("loginkbn", "login")
-
-		loginResp, err := client.PostForm(loginURL, loginData)
-		if err != nil {
-			http.Error(w, "e-mednetへのログインリクエストに失敗しました: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer loginResp.Body.Close()
-
-		// レスポンスボディを読んでログイン成否を判定
-		bodyBytes, err := io.ReadAll(loginResp.Body)
-		if err != nil {
-			http.Error(w, "e-mednetからのレスポンス読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
+		if err := os.MkdirAll(downloadDir, 0755); err != nil {
+			http.Error(w, "ダウンロードディレクトリの作成に失敗しました: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		if loginResp.StatusCode != http.StatusOK || strings.Contains(string(bodyBytes), "ログインＩＤまたはパスワードに誤りがあります") {
-			log.Printf("e-mednet login failed. Server response:\n---\n%s\n---", string(bodyBytes))
-			http.Error(w, "e-mednetへのログインに失敗しました。ID/パスワードを確認してください。", http.StatusUnauthorized)
-			return
-		}
-		log.Println("e-mednet login successful.")
-
-		// 4. ダウンロードリクエストを送信
-		downloadURL := "https://www.e-mednet.jp/NASApp/ASP/SrDeliveryJanDownload/downloadAll"
-		downloadData := url.Values{}
-		downloadData.Set("busi_id", "11")
-		downloadData.Set("func_id", "02")
-		downloadData.Set("sys", "310")
-		downloadData.Set("ver", "1.00")
-		downloadData.Set("type", "1")
-
-		downloadResp, err := client.PostForm(downloadURL, downloadData)
-		if err != nil {
-			http.Error(w, "ダウンロードリクエストに失敗しました: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer downloadResp.Body.Close()
-		log.Println("e-mednet download request successful.")
-
-		if downloadResp.StatusCode != http.StatusOK {
-			http.Error(w, fmt.Sprintf("ダウンロードに失敗しました (HTTP Status: %d)", downloadResp.StatusCode), http.StatusInternalServerError)
-			return
-		}
-
-		// 5. WASABIのルールに従ってファイルを保存
-		baseDir := filepath.Join("download", "DAT")
-		if err := os.MkdirAll(baseDir, 0755); err != nil {
-			http.Error(w, "ベースディレクトリの作成に失敗しました: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		timestamp := time.Now().Format("20060102150405")
-		saveDir := filepath.Join(baseDir, timestamp)
-		if err := os.MkdirAll(saveDir, 0755); err != nil {
-			http.Error(w, "タイムスタンプディレクトリの作成に失敗しました: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// ヘッダーからファイル名を取得、なければデフォルト値を使用
-		filename := "納品データ.DAT"
-		contentDisposition := downloadResp.Header.Get("Content-Disposition")
-		if contentDisposition != "" {
-			_, params, err := mime.ParseMediaType(contentDisposition)
-			if err == nil {
-				if f, ok := params["filename"]; ok {
-					filename = f
+		var downloadedFilePath string
+		done := make(chan string, 1)
+		chromedp.ListenTarget(ctx, func(ev interface{}) {
+			if e, ok := ev.(*browser.EventDownloadProgress); ok {
+				if e.State == browser.DownloadProgressStateCompleted {
+					done <- e.GUID
 				}
+			}
+		})
+
+		var initialLatestTimestamp string
+		err = chromedp.Run(ctx,
+			browser.SetDownloadBehavior(browser.SetDownloadBehaviorBehaviorAllowAndName).
+				WithDownloadPath(downloadDir).
+				WithEventsEnabled(true),
+			chromedp.Navigate(`https://www.e-mednet.jp/`),
+			chromedp.WaitVisible(`input[name="userid"]`),
+			chromedp.SendKeys(`input[name="userid"]`, cfg.EmednetUserID),
+			chromedp.SendKeys(`input[name="userpsw"]`, cfg.EmednetPassword),
+			chromedp.Click(`input[type="submit"][value="ログイン"]`),
+			chromedp.WaitVisible(`//a[contains(@href, "busi_id=11")]`),
+			chromedp.Click(`//a[contains(@href, "busi_id=11")]`),
+			chromedp.WaitVisible(`//a[contains(text(), "納品受信(JAN)")]`),
+			chromedp.Click(`//a[contains(text(), "納品受信(JAN)")]`),
+			chromedp.WaitVisible(`input[value="未受信データ全件受信"]`),
+			// クリック前に、現在の最新履歴のタイムスタンプを取得しておく
+			chromedp.Text(`table.result-list-table tbody tr:first-child td.col-transceiving-date`, &initialLatestTimestamp),
+			// ボタンをクリックしてデータ受信を実行
+			chromedp.Click(`input[value="未受信データ全件受信"]`),
+		)
+
+		if err != nil {
+			log.Printf("ERROR: Chromedp task failed during navigation/clicks: %v", err)
+			http.Error(w, "e-mednetの自動操作（画面遷移）に失敗しました: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		var noDataFound bool
+		timeout := time.After(30 * time.Second)
+		ticker := time.NewTicker(500 * time.Millisecond) // 500ミリ秒ごとにチェック
+		defer ticker.Stop()
+
+	Loop:
+		for {
+			select {
+			case guid := <-done:
+				downloadedFilePath = filepath.Join(downloadDir, guid)
+				log.Printf("Download completed: %s", guid)
+				break Loop
+			case <-timeout:
+				err = fmt.Errorf("operation timed out after 30 seconds")
+				break Loop
+			case <-ticker.C:
+				checkCtx, cancelCheck := context.WithTimeout(ctx, 2*time.Second)
+				var newLatestTimestamp, resultText string
+
+				// 履歴テーブルの最新タイムスタンプを再取得
+				if errCheck := chromedp.Run(checkCtx,
+					chromedp.Text(`table.result-list-table tbody tr:first-child td.col-transceiving-date`, &newLatestTimestamp),
+				); errCheck == nil {
+					// タイムスタンプがクリック前と異なっていれば、ページが更新されたと判断
+					if strings.TrimSpace(newLatestTimestamp) != strings.TrimSpace(initialLatestTimestamp) {
+						// 更新された行の「受信結果」テキストを取得
+						if errResult := chromedp.Run(checkCtx,
+							chromedp.Text(`table.result-list-table tbody tr:first-child td.col-result`, &resultText),
+						); errResult == nil && strings.TrimSpace(resultText) == "受信データなし" {
+							noDataFound = true
+							log.Println("No new delivery data message found in history table.")
+							cancelCheck()
+							break Loop
+						}
+					}
+				}
+				cancelCheck()
 			}
 		}
 
-		fullPath := filepath.Join(saveDir, filename)
-		file, err := os.Create(fullPath)
 		if err != nil {
-			http.Error(w, "ファイル作成に失敗しました: "+err.Error(), http.StatusInternalServerError)
+			log.Printf("ERROR: Chromedp task failed during wait: %v", err)
+			errMsg := strings.ReplaceAll(err.Error(), "\n", " ")
+			http.Error(w, "e-mednetの自動操作（待機処理）に失敗しました: "+errMsg, http.StatusInternalServerError)
 			return
 		}
-		defer file.Close()
 
-		// レスポンスボディをファイルに書き込む
-		_, err = io.Copy(file, downloadResp.Body)
-		if err != nil {
-			http.Error(w, "ファイル保存に失敗しました: "+err.Error(), http.StatusInternalServerError)
+		if noDataFound {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{
+				"message": "未受信の納品データはありませんでした。",
+			})
 			return
 		}
-		log.Printf("File saved to %s", fullPath)
 
-		// 6. 成功メッセージを返す
+		// ファイルハンドルが解放されるのを少し待つ (ファイル名変更失敗対策)
+		time.Sleep(500 * time.Millisecond)
+
+		if downloadedFilePath == "" {
+			http.Error(w, "e-mednetからのダウンロードに失敗したか、予期せぬ状態になりました。", http.StatusInternalServerError)
+			return
+		}
+
+		log.Printf("File temporarily downloaded to %s", downloadedFilePath)
+
+		// ▼▼▼ [修正点] ここからファイル名変換ロジックを追加 ▼▼▼
+		tempFile, err := os.Open(downloadedFilePath)
+		if err != nil {
+			http.Error(w, "ダウンロードしたファイルを開けませんでした: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		scanner := bufio.NewScanner(tempFile)
+		var destDir string
+		var newBaseName string
+		if scanner.Scan() {
+			firstLine := scanner.Text()
+			if strings.HasPrefix(firstLine, "S") && len(firstLine) >= 39 {
+				timestampStr := firstLine[27:39]
+				yy, mm, dd, h, m, s := timestampStr[0:2], timestampStr[2:4], timestampStr[4:6], timestampStr[6:8], timestampStr[8:10], timestampStr[10:12]
+				newBaseName = fmt.Sprintf("20%s%s%s_%s%s%s", yy, mm, dd, h, m, s)
+			}
+		}
+		tempFile.Close() // スキャンが終わったらファイルを閉じる
+
+		if newBaseName != "" {
+			destDir = filepath.Join("download", "DAT")
+		} else {
+			destDir = filepath.Join("download", "DAT", "unorganized")
+			newBaseName = time.Now().Format("20060102150405")
+			log.Printf("Warning: Could not parse timestamp from downloaded file. Saving to %s", destDir)
+		}
+
+		if err := os.MkdirAll(destDir, 0755); err != nil {
+			log.Printf("Failed to create destination directory %s: %v", destDir, err)
+			http.Error(w, "ディレクトリの作成に失敗しました: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		finalPath := filepath.Join(destDir, newBaseName+".DAT")
+		// 名前が衝突した場合の連番処理
+		for i := 1; ; i++ {
+			if _, err := os.Stat(finalPath); os.IsNotExist(err) {
+				break
+			}
+			finalPath = filepath.Join(destDir, fmt.Sprintf("%s(%d)%s", newBaseName, i, ".DAT"))
+		}
+
+		// ファイルハンドルが解放されるのを少し待つ
+		time.Sleep(500 * time.Millisecond)
+
+		if err := os.Rename(downloadedFilePath, finalPath); err != nil {
+			log.Printf("WARN: Failed to rename downloaded file: %v. Processing with original name.", err)
+			// リネームに失敗しても、元のファイルパスで処理を試みる
+			finalPath = downloadedFilePath
+		} else {
+			log.Printf("File successfully renamed to %s", finalPath)
+		}
+		// ▲▲▲ [修正点] ここまで ▲▲▲
+
+		processedRecords, err := dat.ProcessDatFile(conn, finalPath)
+		if err != nil {
+			log.Printf("ERROR: Failed to process downloaded DAT file %s: %v", finalPath, err)
+			http.Error(w, "ダウンロードしたDATファイルの処理に失敗しました: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
-			"message": fmt.Sprintf("ファイルを %s に保存しました。", fullPath),
+			"message": fmt.Sprintf("e-mednetから%d件の納品データをダウンロードし、システムに登録しました。", len(processedRecords)),
 		})
 	}
 }

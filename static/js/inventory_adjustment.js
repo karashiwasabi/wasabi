@@ -7,10 +7,31 @@ let view, outputContainer;
 let dosageFormFilter, kanaInitialFilter, selectProductBtn, startDateFilter, endDateFilter;
 let currentYjCode = null;
 let lastLoadedDataCache = null;
+// ▼▼▼ [修正点] 単位名解決用のマップを追加 ▼▼▼
+let unitMap = {}; 
+// ▲▲▲ 修正ここまで ▲▲▲
 
-export function initInventoryAdjustment() {
+// ▼▼▼ [修正点] 単位マップを事前に読み込む関数を追加 ▼▼▼
+async function fetchUnitMap() {
+    if (Object.keys(unitMap).length > 0) return;
+    try {
+        const res = await fetch('/api/units/map');
+        if (!res.ok) throw new Error('単位マスタの取得に失敗');
+        unitMap = await res.json();
+    } catch (err) {
+        console.error(err);
+        window.showNotification(err.message, 'error');
+    }
+}
+
+export async function initInventoryAdjustment() {
+// ▲▲▲ 修正ここまで ▲▲▲
     view = document.getElementById('inventory-adjustment-view');
     if (!view) return;
+
+    // ▼▼▼ [修正点] 関数呼び出しを追加 ▼▼▼
+    await fetchUnitMap();
+    // ▲▲▲ 修正ここまで ▲▲▲
 
     dosageFormFilter = document.getElementById('ia-dosageForm');
     kanaInitialFilter = document.getElementById('ia-kanaInitial');
@@ -87,13 +108,11 @@ function generateFullHtml(data) {
     const yjGroup = data.stockLedger[0];
     const productName = yjGroup.productName;
     const theoreticalTotal = yjGroup.endingBalance || 0;
-    const allMasters = (yjGroup.packageLedgers || []).flatMap(pkg => pkg.masters || []);
 
     const summaryLedgerHtml = generateSummaryLedgerHtml(yjGroup, theoreticalTotal);
     const summaryPrecompHtml = generateSummaryPrecompHtml(data.precompDetails);
-    // ▼▼▼ [修正点] generateInputSectionsHtmlにallMastersを渡すように変更 ▼▼▼
-    const inputSectionsHtml = generateInputSectionsHtml(allMasters, yjGroup.yjUnitName);
-    // ▲▲▲ 修正ここまで ▲▲▲
+    
+    const inputSectionsHtml = generateInputSectionsHtml(yjGroup.packageLedgers, yjGroup.yjUnitName);
 
     return `<h2 style="text-align: center; margin-bottom: 20px;">【棚卸調整】 ${productName} (YJ: ${yjGroup.yjCode})</h2>
         ${summaryLedgerHtml}${summaryPrecompHtml}${inputSectionsHtml}`;
@@ -102,85 +121,105 @@ function generateFullHtml(data) {
 function generateSummaryLedgerHtml(yjGroup, total) {
     const startDate = startDateFilter.value;
     const endDate = endDateFilter.value;
-    let transactions = [];
-    (yjGroup.packageLedgers || []).forEach(pkg => {
-        (pkg.transactions || []).forEach(tx => {
-            const master = (pkg.masters || []).find(m => m.productCode === tx.janCode) || {};
-            tx.packageSpec = master.formattedPackageSpec || master.packageForm || '';
-            tx.makerName = master.makerName || '';
-            transactions.push(tx);
-        });
-    });
-    transactions.sort((a, b) => (a.transactionDate + a.id).toString().localeCompare(b.transactionDate + b.id));
 
-    return `<div class="summary-section"><h3 class="view-subtitle">1. 全体サマリー</h3>
-        <div class="report-section-header"><h4>在庫元帳 (期間: ${startDate} ～ ${endDate})</h4>
-        <span class="header-total">理論在庫合計: ${total.toFixed(2)} ${yjGroup.yjUnitName}</span></div>
-        ${renderStandardTable('ledger-table', transactions)}</div>`;
+    let packageLedgerHtml = (yjGroup.packageLedgers || []).map(pkg => {
+        const sortedTxs = (pkg.transactions || []).sort((a, b) => 
+            (a.transactionDate + a.id).toString().localeCompare(b.transactionDate + b.id)
+        );
+        
+        const pkgHeader = `
+            <div class="agg-pkg-header" style="margin-top: 10px;">
+                <span>包装: ${pkg.packageKey}</span>
+                <span class="balance-info">
+                    理論在庫(包装計): ${(pkg.endingBalance || 0).toFixed(2)} ${yjGroup.yjUnitName}
+                </span>
+            </div>
+        `;
+
+        const txTable = renderStandardTable(`ledger-table-${pkg.packageKey.replace(/[^a-zA-Z0-9]/g, '')}`, sortedTxs);
+
+        return pkgHeader + txTable;
+    }).join('');
+
+    return `<div class="summary-section">
+        <h3 class="view-subtitle">1. 全体サマリー</h3>
+        <div class="report-section-header">
+            <h4>在庫元帳 (期間: ${startDate} ～ ${endDate})</h4>
+            <span class="header-total">理論在庫合計: ${total.toFixed(2)} ${yjGroup.yjUnitName}</span>
+        </div>
+        ${packageLedgerHtml}
+    </div>`;
 }
 
 function generateSummaryPrecompHtml(precompDetails) {
     const precompTransactions = (precompDetails || []).map(p => ({
-        transactionDate: p.createdAt.slice(0, 10), flag: '予製', clientCode: `患者: ${p.patientNumber}`,
-        receiptNumber: `PRECOMP-${p.id}`, yjQuantity: p.quantity, yjUnitName: p.yjUnitName,
-        janCode: p.productCode, productName: p.productName,
+        transactionDate: (p.transactionDate || '').slice(0, 8),
+        flag: '予製',
+        clientCode: p.clientCode ? `患者: ${p.clientCode}` : '',
+        receiptNumber: p.receiptNumber,
+        yjQuantity: p.yjQuantity,
+        yjUnitName: p.yjUnitName,
+        janCode: p.janCode,
+        productName: p.productName,
+        yjCode: p.yjCode,
+        packageSpec: p.packageSpec,
+        makerName: p.makerName,
+        usageClassification: p.usageClassification,
+        janQuantity: p.janQuantity,
+        janPackUnitQty: p.janPackUnitQty,
+        janUnitName: p.janUnitName
     }));
+
     return `<div class="summary-section" style="margin-top: 15px;">
         <div class="report-section-header"><h4>予製払出明細 (全体)</h4>
         <span class="header-total" id="precomp-active-total">有効合計: 0.00</span></div>
         ${renderStandardTable('precomp-table', precompTransactions, true)}</div>`;
 }
 
-// ▼▼▼ [修正点] 関数全体を、包装単位でグループ化するロジックに全面的に書き換え ▼▼▼
-function generateInputSectionsHtml(allMasters, yjUnitName = '単位') {
-    // 1. マスターを包装(packageKey)ごとにグループ化する
-    const packagesMap = new Map();
-    allMasters.forEach(master => {
-        if (!master) return;
-        const key = `${master.packageForm}|${master.janPackInnerQty}|${master.yjUnitName}`; // 包装を特定するキー
-        if (!packagesMap.has(key)) {
-            packagesMap.set(key, { masters: [], theoreticalStock: 0 });
-        }
-        const pkg = packagesMap.get(key);
-        pkg.masters.push(master);
-        pkg.theoreticalStock += (lastLoadedDataCache.stockLedger[0]?.packageLedgers
-            .flatMap(p => p.masters)
-            .find(m => m.productCode === master.productCode)?.currentStock || 0);
-    });
+function generateInputSectionsHtml(packageLedgers, yjUnitName = '単位') {
+    const packageGroupsHtml = (packageLedgers || []).map(pkgLedger => {
+        const theoreticalStockText = `理論在庫(包装計): ${(pkgLedger.endingBalance || 0).toFixed(2)} ${yjUnitName}`;
 
-    // 2. グループ化したデータからHTMLを生成する
-    let packageGroupsHtml = '';
-    for (const [key, pkgGroup] of packagesMap.entries()) {
-        const theoreticalStockText = `理論在庫(包装計): ${pkgGroup.theoreticalStock.toFixed(2)} ${yjUnitName}`;
-        
-        // 包装グループのヘッダー
-        packageGroupsHtml += `
+        let html = `
             <div class="package-input-group" style="margin-bottom: 20px;">
                 <div class="agg-pkg-header">
-                    <span>包装: ${key}</span>
+                    <span>包装: ${pkgLedger.packageKey}</span>
                     <span class="balance-info">${theoreticalStockText}</span>
                 </div>`;
 
-        // 包装に属する各製品(JAN)の入力欄
-        pkgGroup.masters.forEach(master => {
-            const unitName = master.janPackInnerQty > 0 ? '(JAN単位)' : `(${master.yjUnitName})`;
-            const shelfStockInput = `<div class="shelf-stock-input-area">
-                <label>棚在庫(目で見た数量) - ${master.productName}:</label>
-                <input type="number" class="shelf-stock-input" data-product-code="${master.productCode}">
-                <span>${unitName}</span>
-                <span class="calculated-total-display" data-product-code="${master.productCode}">=> 最終在庫(目安): 0.00</span>
-            </div>`;
+        html += (pkgLedger.masters || []).map(master => {
+            if (!master) return '';
+            
+            // ▼▼▼ [修正点] ご提案のレイアウトに変更し、単位名を動的に取得する ▼▼▼
+            const janUnitName = (master.janUnitCode === 0 || !unitMap[master.janUnitCode]) ? master.yjUnitName : unitMap[master.janUnitCode];
+            const unitName = master.janPackInnerQty > 0 ? janUnitName : master.yjUnitName;
+
+            const shelfStockInput = `
+                <div class="shelf-stock-input-area" style="font-size: 14px; padding: 5px 0;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <label style="font-weight: bold;">予製を除いた在庫数量 (${master.productName}):</label>
+                        <input type="number" class="shelf-stock-input" data-product-code="${master.productCode}">
+                        <span>(${unitName})</span>
+                    </div>
+                    <div style="margin-top: 5px; font-weight: bold; color: #0d6efd;">
+                        <span>予製を含んだ全在庫数量: </span>
+                        <span class="calculated-total-display" data-product-code="${master.productCode}">0.00</span>
+                        <span> (${unitName})</span>
+                    </div>
+                </div>`;
+            // ▲▲▲ 修正ここまで ▲▲▲
 
             const finalInputTable = renderStandardTable(`final-table-${master.productCode}`, [], false, 
                 `<tbody class="final-input-tbody" data-product-code="${master.productCode}">
                     ${createFinalInputRow(master, true)}
                 </tbody>`);
             
-            packageGroupsHtml += `<div class="product-input-group" style="padding-left: 20px;">${shelfStockInput}${finalInputTable}</div>`;
-        });
+            return `<div class="product-input-group" style="padding-left: 20px; margin-top: 10px;">${shelfStockInput}${finalInputTable}</div>`;
+        }).join('');
 
-        packageGroupsHtml += `</div>`; // .package-input-group
-    }
+        html += `</div>`;
+        return html;
+    }).join('');
 
     return `<div class="input-section" style="margin-top: 30px;"><h3 class="view-subtitle">2. 棚卸入力</h3>
         <div class="inventory-input-area" style="padding: 10px; border: 1px solid #ccc; background-color: #f8f9fa; margin-bottom: 15px;">
@@ -188,7 +227,7 @@ function generateInputSectionsHtml(allMasters, yjUnitName = '単位') {
              <input type="date" id="inventory-date"></div>
         ${packageGroupsHtml}</div>`;
 }
-// ▲▲▲ 修正ここまで ▲▲▲
+
 
 function createFinalInputRow(master, isPrimary = false) {
     const actionButtons = isPrimary ? `
@@ -197,6 +236,12 @@ function createFinalInputRow(master, isPrimary = false) {
     ` : `<button class="btn delete-deadstock-row-btn">－</button>`;
     const quantityInputClass = isPrimary ? 'final-inventory-input' : 'lot-quantity-input';
     const quantityPlaceholder = isPrimary ? '目安をここに転記' : 'ロット数量';
+
+    // ▼▼▼ [修正点] フロントエンドでの単位名解決ロジックを削除 ▼▼▼
+    // 以下の処理は不要になりました。サーバーから渡される master.janUnitName を直接使用します。
+    // const janUnitName = (master.janUnitCode === 0 || !unitMap[master.janUnitCode]) ? master.yjUnitName : unitMap[master.janUnitCode];
+    // ▲▲▲ 修正ここまで ▲▲▲
+
     const topRow = `<tr class="inventory-row"><td rowspan="2"><div style="display: flex; flex-direction: column; gap: 4px;">${actionButtons}</div></td>
         <td>(棚卸日)</td><td class="yj-jan-code">${master.yjCode}</td><td class="left" colspan="2">${master.productName}</td>
         <td></td><td></td><td class="right">${master.yjPackUnitQty || ''}</td><td>${master.yjUnitName || ''}</td>
@@ -284,7 +329,8 @@ function recalculateTotals() {
         const finalStockYj = shelfStockYj + precompStockYj;
         const finalStockForDisplay = isJanInput ? (finalStockYj / master.janPackInnerQty) : finalStockYj;
         const displaySpan = document.querySelector(`.calculated-total-display[data-product-code="${productCode}"]`);
-        if(displaySpan) displaySpan.textContent = `=> 最終在庫(目安): ${finalStockForDisplay.toFixed(2)}`;
+        if(displaySpan) displaySpan.textContent = finalStockForDisplay.toFixed(2);
+        
         const finalInput = document.querySelector(`.final-inventory-input[data-product-code="${productCode}"]`);
         if(finalInput) {
             finalInput.value = finalStockForDisplay.toFixed(2);
@@ -300,16 +346,19 @@ function updateFinalInventoryTotal(productCode) {
     tbody.querySelectorAll('.final-inventory-input, .lot-quantity-input').forEach(input => {
         totalQuantity += parseFloat(input.value) || 0;
     });
-    const finalInput = tbody.querySelector('.final-inventory-input');
-    if (finalInput && document.activeElement !== finalInput) {
-        // This logic could be enhanced, but for now we just sum.
-    }
 }
 
 function findMaster(productCode) {
-    if (!lastLoadedDataCache) return null;
-    const allMasters = (lastLoadedDataCache.stockLedger[0].packageLedgers || []).flatMap(pkg => pkg.masters || []);
-    return allMasters.find(m => m.productCode === productCode);
+    if (!lastLoadedDataCache || !lastLoadedDataCache.stockLedger || lastLoadedDataCache.stockLedger.length === 0) {
+        return null;
+    }
+    for (const pkgLedger of lastLoadedDataCache.stockLedger[0].packageLedgers) {
+        const master = (pkgLedger.masters || []).find(m => m.productCode === productCode);
+        if (master) {
+            return master;
+        }
+    }
+    return null;
 }
 
 async function saveInventoryData() {
@@ -324,6 +373,7 @@ async function saveInventoryData() {
     const inventoryData = {};
     const deadStockData = [];
     const allMasters = (lastLoadedDataCache.stockLedger[0].packageLedgers || []).flatMap(pkg => pkg.masters || []);
+
     allMasters.forEach(master => {
         const productCode = master.productCode;
         const tbody = document.querySelector(`.final-input-tbody[data-product-code="${productCode}"]`);
@@ -332,7 +382,7 @@ async function saveInventoryData() {
             return;
         };
 
-        let totalInputQuantity = 0; // JAN単位またはYJ単位での合計
+        let totalInputQuantity = 0;
         const isJanInput = master.janPackInnerQty > 0;
       
         const inventoryRows = tbody.querySelectorAll('.inventory-row');

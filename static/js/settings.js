@@ -111,6 +111,31 @@ export function initSettings() {
     wholesalersTableBody = document.querySelector('#wholesalers-table tbody');
     const clearTransactionsBtn = document.getElementById('clearAllTransactionsBtn');
     
+    // ▼▼▼【ここからが、本来の追加箇所です】▼▼▼
+    const clearMastersBtn = document.getElementById('clearAllMastersBtn');
+    
+    clearMastersBtn.addEventListener('click', async () => {
+        if (!confirm('本当に全ての製品マスターを削除しますか？\n\nJCSHMSマスターも削除されるため、再読み込みするまで品目情報が失われます。この操作は元に戻せません。')) {
+            return;
+        }
+
+        window.showLoading();
+        try {
+            const res = await fetch('/api/masters/clear_all', {
+                method: 'POST',
+            });
+            const resData = await res.json();
+            if (!res.ok) throw new Error(resData.message || '製品マスターの削除に失敗しました。');
+            
+            window.showNotification(resData.message, 'success');
+        } catch (err) {
+            console.error(err);
+            window.showNotification(err.message, 'error');
+        } finally {
+            window.hideLoading();
+        }
+    });
+    // ▲▲▲【ここまでが、本来の追加箇所です】▲▲▲
 
     saveBtn.addEventListener('click', saveSettings);
     addWholesalerBtn.addEventListener('click', addWholesaler);

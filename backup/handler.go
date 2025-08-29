@@ -1,4 +1,4 @@
-// C:\Dev\WASABI\backup\handler.go
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\backup\handler.go
 
 package backup
 
@@ -10,11 +10,14 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"wasabi/db"
 	"wasabi/model"
+
+	"github.com/xuri/excelize/v2" // Corrected import path
 )
 
-// (ExportClientsHandler と ImportClientsHandler は変更なし)
+// ExportClientsHandler handles exporting the client master to an Excel file.
 func ExportClientsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		clients, err := db.GetAllClients(conn)
@@ -23,25 +26,39 @@ func ExportClientsHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-		w.Header().Set("Content-Disposition", `attachment; filename="client_master.csv"`)
-		w.Write([]byte{0xEF, 0xBB, 0xBF})
+		f := excelize.NewFile()
+		sheetName := "得意先マスター"
+		index, _ := f.NewSheet(sheetName)
+		f.SetActiveSheet(index)
+		f.DeleteSheet("Sheet1")
 
-		csvWriter := csv.NewWriter(w)
+		headers := []string{"client_code", "client_name"}
+		for i, h := range headers {
+			cell, _ := excelize.CoordinatesToCellName(i+1, 1)
+			f.SetCellValue(sheetName, cell, h)
+		}
 
-		if err := csvWriter.Write([]string{"client_code", "client_name"}); err != nil {
-			http.Error(w, "Failed to write CSV header", http.StatusInternalServerError)
-			return
+		style, _ := f.NewStyle(&excelize.Style{
+			NumFmt: 49, // Text format
+		})
+		f.SetColStyle(sheetName, "A", style)
+
+		for i, client := range clients {
+			rowNum := i + 2
+			f.SetCellValue(sheetName, fmt.Sprintf("A%d", rowNum), client.Code)
+			f.SetCellValue(sheetName, fmt.Sprintf("B%d", rowNum), client.Name)
 		}
-		for _, client := range clients {
-			if err := csvWriter.Write([]string{client.Code, client.Name}); err != nil {
-				http.Error(w, "Failed to write CSV row", http.StatusInternalServerError)
-				return
-			}
+
+		w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+		w.Header().Set("Content-Disposition", `attachment; filename="client_master.xlsx"`)
+
+		if err := f.Write(w); err != nil {
+			http.Error(w, "Failed to write excel file", http.StatusInternalServerError)
 		}
-		csvWriter.Flush()
 	}
 }
+
+// ImportClientsHandler handles importing clients from an Excel file.
 func ImportClientsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		file, _, err := r.FormFile("file")
@@ -51,10 +68,20 @@ func ImportClientsHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer file.Close()
 
-		csvReader := csv.NewReader(file)
-		records, err := csvReader.ReadAll()
+		f, err := excelize.OpenReader(file)
 		if err != nil {
-			http.Error(w, "Failed to parse CSV file", http.StatusBadRequest)
+			http.Error(w, "Failed to read excel file: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		sheetList := f.GetSheetList()
+		if len(sheetList) == 0 {
+			http.Error(w, "No sheets found in the excel file", http.StatusBadRequest)
+			return
+		}
+		rows, err := f.GetRows(sheetList[0])
+		if err != nil {
+			http.Error(w, "Failed to get rows from sheet: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 
@@ -73,7 +100,7 @@ func ImportClientsHandler(conn *sql.DB) http.HandlerFunc {
 		defer stmt.Close()
 
 		var importedCount int
-		for i, row := range records {
+		for i, row := range rows {
 			if i == 0 {
 				continue
 			}
@@ -103,7 +130,7 @@ func ImportClientsHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// ExportProductsHandler handles exporting the product master to a CSV file.
+// ExportProductsHandler handles exporting editable products to an Excel file.
 func ExportProductsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		products, err := db.GetEditableProductMasters(conn)
@@ -112,49 +139,57 @@ func ExportProductsHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-		w.Header().Set("Content-Disposition", `attachment; filename="product_master_editable.csv"`)
-		w.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM
+		f := excelize.NewFile()
+		sheetName := "製品マスター"
+		index, _ := f.NewSheet(sheetName)
+		f.SetActiveSheet(index)
+		f.DeleteSheet("Sheet1")
 
-		csvWriter := csv.NewWriter(w)
-
-		// ▼▼▼ [修正点] headerから "package_spec" を削除 ▼▼▼
 		header := []string{
 			"product_code", "yj_code", "product_name", "origin", "kana_name", "maker_name",
-			"usage_classification", "package_form", // "package_spec" を削除
+			"usage_classification", "package_form",
 			"yj_unit_name", "yj_pack_unit_qty", "flag_poison", "flag_deleterious", "flag_narcotic",
 			"flag_psychotropic", "flag_stimulant", "flag_stimulant_raw", "jan_pack_inner_qty",
 			"jan_unit_code", "jan_pack_unit_qty", "nhi_price", "purchase_price", "supplier_wholesale",
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
-		if err := csvWriter.Write(header); err != nil {
-			http.Error(w, "Failed to write CSV header", http.StatusInternalServerError)
-			return
+		for i, h := range header {
+			cell, _ := excelize.CoordinatesToCellName(i+1, 1)
+			f.SetCellValue(sheetName, cell, h)
 		}
 
-		for _, p := range products {
-			// ▼▼▼ [修正点] rowから重複していた p.PackageForm を削除 ▼▼▼
-			row := []string{
+		style, _ := f.NewStyle(&excelize.Style{
+			NumFmt: 49, // Text format
+		})
+		f.SetColStyle(sheetName, "A", style)
+
+		for i, p := range products {
+			rowNum := i + 2
+			row := []interface{}{
 				p.ProductCode, p.YjCode, p.ProductName, p.Origin, p.KanaName, p.MakerName,
-				p.UsageClassification, p.PackageForm, // p.PackageForm は1つだけ
-				p.YjUnitName, fmt.Sprintf("%f", p.YjPackUnitQty), fmt.Sprintf("%d", p.FlagPoison),
-				fmt.Sprintf("%d", p.FlagDeleterious), fmt.Sprintf("%d", p.FlagNarcotic),
-				fmt.Sprintf("%d", p.FlagPsychotropic), fmt.Sprintf("%d", p.FlagStimulant),
-				fmt.Sprintf("%d", p.FlagStimulantRaw), fmt.Sprintf("%f", p.JanPackInnerQty),
-				fmt.Sprintf("%d", p.JanUnitCode), fmt.Sprintf("%f", p.JanPackUnitQty),
-				fmt.Sprintf("%f", p.NhiPrice), fmt.Sprintf("%f", p.PurchasePrice), p.SupplierWholesale,
+				p.UsageClassification, p.PackageForm,
+				p.YjUnitName, p.YjPackUnitQty, p.FlagPoison,
+				p.FlagDeleterious, p.FlagNarcotic,
+				p.FlagPsychotropic, p.FlagStimulant,
+				p.FlagStimulantRaw, p.JanPackInnerQty,
+				p.JanUnitCode, p.JanPackUnitQty,
+				p.NhiPrice, p.PurchasePrice, p.SupplierWholesale,
 			}
-			// ▲▲▲ 修正ここまで ▲▲▲
-			if err := csvWriter.Write(row); err != nil {
-				http.Error(w, "Failed to write CSV row", http.StatusInternalServerError)
-				return
+			for j, val := range row {
+				cell, _ := excelize.CoordinatesToCellName(j+1, rowNum)
+				f.SetCellValue(sheetName, cell, val)
 			}
 		}
-		csvWriter.Flush()
+
+		w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+		w.Header().Set("Content-Disposition", `attachment; filename="product_master_editable.xlsx"`)
+
+		if err := f.Write(w); err != nil {
+			http.Error(w, "Failed to write excel file", http.StatusInternalServerError)
+		}
 	}
 }
 
-// ImportProductsHandler handles importing products from a CSV file.
+// ImportProductsHandler handles importing the product master from a CSV file.
 func ImportProductsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		file, _, err := r.FormFile("file")
@@ -165,9 +200,11 @@ func ImportProductsHandler(conn *sql.DB) http.HandlerFunc {
 		defer file.Close()
 
 		csvReader := csv.NewReader(file)
-		records, err := csvReader.ReadAll()
+		csvReader.LazyQuotes = true
+
+		rows, err := csvReader.ReadAll()
 		if err != nil {
-			http.Error(w, "Failed to parse CSV file", http.StatusBadRequest)
+			http.Error(w, "Failed to parse CSV file: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 
@@ -179,40 +216,51 @@ func ImportProductsHandler(conn *sql.DB) http.HandlerFunc {
 		defer tx.Rollback()
 
 		var importedCount int
-		for i, row := range records {
+		for i, row := range rows {
 			if i == 0 {
 				continue
 			}
-			// ▼▼▼ [修正点] 列数を23から22に変更 ▼▼▼
 			if len(row) < 22 {
 				continue
 			}
-			// ▲▲▲ 修正ここまで ▲▲▲
 
-			// ▼▼▼ [修正点] 全ての列インデックスを8列目以降について1つずつずらす ▼▼▼
-			yjPackUnitQty, _ := strconv.ParseFloat(row[9], 64)    // 10 -> 9
-			flagPoison, _ := strconv.Atoi(row[10])                // 11 -> 10
-			flagDeleterious, _ := strconv.Atoi(row[11])           // 12 -> 11
-			flagNarcotic, _ := strconv.Atoi(row[12])              // 13 -> 12
-			flagPsychotropic, _ := strconv.Atoi(row[13])          // 14 -> 13
-			flagStimulant, _ := strconv.Atoi(row[14])             // 15 -> 14
-			flagStimulantRaw, _ := strconv.Atoi(row[15])          // 16 -> 15
-			janPackInnerQty, _ := strconv.ParseFloat(row[16], 64) // 17 -> 16
-			janUnitCode, _ := strconv.Atoi(row[17])               // 18 -> 17
-			janPackUnitQty, _ := strconv.ParseFloat(row[18], 64)  // 19 -> 18
-			nhiPrice, _ := strconv.ParseFloat(row[19], 64)        // 20 -> 19
-			purchasePrice, _ := strconv.ParseFloat(row[20], 64)   // 21 -> 20
+			yjPackUnitQty, _ := strconv.ParseFloat(row[9], 64)
+			flagPoison, _ := strconv.Atoi(row[10])
+			flagDeleterious, _ := strconv.Atoi(row[11])
+			flagNarcotic, _ := strconv.Atoi(row[12])
+			flagPsychotropic, _ := strconv.Atoi(row[13])
+			flagStimulant, _ := strconv.Atoi(row[14])
+			flagStimulantRaw, _ := strconv.Atoi(row[15])
+			janPackInnerQty, _ := strconv.ParseFloat(row[16], 64)
+			janUnitCode, _ := strconv.Atoi(row[17])
+			janPackUnitQty, _ := strconv.ParseFloat(row[18], 64)
+			nhiPrice, _ := strconv.ParseFloat(row[19], 64)
+			purchasePrice, _ := strconv.ParseFloat(row[20], 64)
 
 			input := model.ProductMasterInput{
-				ProductCode: row[0], YjCode: row[1], ProductName: row[2], Origin: row[3], KanaName: row[4],
-				MakerName: row[5], UsageClassification: row[6], PackageForm: row[7],
-				YjUnitName: row[8], YjPackUnitQty: yjPackUnitQty, FlagPoison: flagPoison, // 9 -> 8
-				FlagDeleterious: flagDeleterious, FlagNarcotic: flagNarcotic, FlagPsychotropic: flagPsychotropic,
-				FlagStimulant: flagStimulant, FlagStimulantRaw: flagStimulantRaw,
-				JanPackInnerQty: janPackInnerQty, JanUnitCode: janUnitCode, JanPackUnitQty: janPackUnitQty,
-				NhiPrice: nhiPrice, PurchasePrice: purchasePrice, SupplierWholesale: row[21], // 22 -> 21
+				ProductCode:         strings.TrimSpace(row[0]),
+				YjCode:              strings.TrimSpace(row[1]),
+				ProductName:         strings.TrimSpace(row[2]),
+				Origin:              strings.TrimSpace(row[3]),
+				KanaName:            strings.TrimSpace(row[4]),
+				MakerName:           strings.TrimSpace(row[5]),
+				UsageClassification: strings.TrimSpace(row[6]),
+				PackageForm:         strings.TrimSpace(row[7]),
+				YjUnitName:          strings.TrimSpace(row[8]),
+				YjPackUnitQty:       yjPackUnitQty,
+				FlagPoison:          flagPoison,
+				FlagDeleterious:     flagDeleterious,
+				FlagNarcotic:        flagNarcotic,
+				FlagPsychotropic:    flagPsychotropic,
+				FlagStimulant:       flagStimulant,
+				FlagStimulantRaw:    flagStimulantRaw,
+				JanPackInnerQty:     janPackInnerQty,
+				JanUnitCode:         janUnitCode,
+				JanPackUnitQty:      janPackUnitQty,
+				NhiPrice:            nhiPrice,
+				PurchasePrice:       purchasePrice,
+				SupplierWholesale:   strings.TrimSpace(row[21]),
 			}
-			// ▲▲▲ 修正ここまで ▲▲▲
 
 			if err := db.UpsertProductMasterInTx(tx, input); err != nil {
 				log.Printf("Failed to import product row %d: %v", i+1, err)

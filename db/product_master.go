@@ -5,6 +5,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"strings"
 	"wasabi/model"
 	"wasabi/units"
@@ -270,4 +271,25 @@ func UpdatePricesAndSuppliersInTx(tx *sql.Tx, updates []model.PriceUpdate) error
 		}
 	}
 	return nil
+}
+
+// ClearAllProductMasters はproduct_masterテーブルの全レコードを削除します。
+func ClearAllProductMasters(conn *sql.DB) error {
+	tx, err := conn.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to start transaction for clearing masters: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DELETE FROM product_master`); err != nil {
+		return fmt.Errorf("failed to execute delete from product_master: %w", err)
+	}
+
+	// MA2Yのシーケンスもリセットする
+	if _, err := tx.Exec(`UPDATE code_sequences SET last_no = 0 WHERE name = 'MA2Y'`); err != nil {
+		// テーブルが空だった場合などはエラーになるが、処理は続行してよい
+		log.Printf("Could not reset sequence for MA2Y (this is normal if table was empty): %v", err)
+	}
+
+	return tx.Commit()
 }

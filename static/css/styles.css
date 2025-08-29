@@ -84,7 +84,18 @@ th { text-align: center; background-color: #f0f0f0; }
 .agg-yj-header { background-color: #343a40; color: white; padding: 4px; margin-top: 10px; font-weight: bold; font-size: 1em; display: flex; align-items: center; }
 .agg-pkg-header { background-color: #e9ecef; padding: 4px; border: 1px solid #ccc; border-bottom: none; font-weight: bold; font-size: 1em; }
 .agg-yj-header .product-name { margin-left: 20px; flex-grow: 1; }
-.agg-yj-header .balance-info { font-size: 12px; font-weight: normal; }
+
+/* ▼▼▼ [修正点] 取引種別の色分け用スタイルをここに追加 ▼▼▼ */
+.tx-return, .tx-return td {
+    color: #dc3545; /* 赤色 */
+    font-weight: bold;
+}
+
+.tx-inventory, .tx-inventory td {
+    color: #0d6efd; /* 青色 */
+    font-weight: bold;
+}
+/* ▲▲▲ 修正ここまで ▲▲▲ */
 
 /* ▼▼▼ [修正点] 印刷用CSSを汎用的な仕組みに全面的に書き換え ▼▼▼ */
 @media print {

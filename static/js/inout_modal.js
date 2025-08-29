@@ -1,5 +1,7 @@
 // C:\Dev\WASABI\static\js\inout_modal.js
 
+import { hiraganaToKatakana } from './utils.js';
+
 let activeCallback = null;
 let activeRowElement = null;
 
@@ -10,14 +12,12 @@ const searchInput = document.getElementById('product-search-input');
 const searchBtn = document.getElementById('product-search-btn');
 const searchResultsBody = document.querySelector('#search-results-table tbody');
 
-// ▼▼▼ [修正点] モーダルを閉じる処理を共通関数化 ▼▼▼
 function hideModal() {
     if (modal) {
         modal.classList.add('hidden');
-        document.body.classList.remove('modal-open'); // bodyからクラスを削除
+        document.body.classList.remove('modal-open');
     }
 }
-// ▲▲▲ 修正ここまで ▲▲▲
 
 function handleResultClick(event) {
   if (event.target && event.target.classList.contains('select-product-btn')) {
@@ -25,22 +25,28 @@ function handleResultClick(event) {
     if (typeof activeCallback === 'function') {
       activeCallback(product, activeRowElement);
     }
-    // ▼▼▼ [修正点] 共通のhideModal関数を呼び出す ▼▼▼
     hideModal();
-    // ▲▲▲ 修正ここまで ▲▲▲
   }
 }
 
 async function performSearch() {
-  const query = searchInput.value.trim();
-  if (query.length < 2) {
+  // ▼▼▼ [修正点] 検索実行時にカナ変換 ▼▼▼
+  const query = hiraganaToKatakana(searchInput.value.trim());
+  // ▲▲▲ 修正ここまで ▲▲▲
+  if (query.length < 2 && query.length > 0) { // 1文字での検索は許可しないが、空欄での検索は（全件表示として）許可する場合
     alert('2文字以上入力してください。');
     return;
   }
-  const searchApi = modal.dataset.searchApi || DEFAULT_SEARCH_API; // 保存したAPIエンドポイントを取得
+  const searchApi = modal.dataset.searchApi || DEFAULT_SEARCH_API;
   searchResultsBody.innerHTML = '<tr><td colspan="6" class="center">検索中...</td></tr>';
+  
+  // ▼▼▼ [修正点] URLの組み立てロジックを修正 ▼▼▼
   try {
-    const res = await fetch(`${searchApi}?q=${encodeURIComponent(query)}`);
+    const separator = searchApi.includes('?') ? '&' : '?';
+    const fullUrl = query ? `${searchApi}${separator}q=${encodeURIComponent(query)}` : searchApi;
+    const res = await fetch(fullUrl);
+  // ▲▲▲ 修正ここまで ▲▲▲
+
     if (!res.ok) {
         throw new Error(`サーバーエラー: ${res.status}`);
     }
@@ -74,15 +80,12 @@ function renderSearchResults(products) {
   searchResultsBody.innerHTML = html;
 }
 
-// ▼▼▼ [修正点] 起動時に一度だけイベントリスナーを設定するinit関数に変更 ▼▼▼
 export function initModal() {
   if (!modal || !closeModalBtn || !searchInput || !searchBtn || !searchResultsBody) {
     console.error("薬品検索モーダルの必須要素が見つかりません。");
     return;
   }
-  // ▼▼▼ [修正点] 共通のhideModal関数を呼び出すように変更 ▼▼▼
   closeModalBtn.addEventListener('click', hideModal);
-  // ▲▲▲ 修正ここまで ▲▲▲
   searchBtn.addEventListener('click', performSearch);
   searchInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') {
@@ -92,24 +95,24 @@ export function initModal() {
   });
   searchResultsBody.addEventListener('click', handleResultClick);
 }
-// ▲▲▲ 修正ここまで ▲▲▲
 
-// ▼▼▼ [修正点] 第3引数を options オブジェクトに変更 ▼▼▼
 export function showModal(rowElement, callback, options = {}) {
   if (modal) {
     document.body.classList.add('modal-open');
     activeRowElement = rowElement;
     activeCallback = callback; 
     
-    // APIエンドポイントを options から取得、なければデフォルト値
     const searchApi = options.searchApi || DEFAULT_SEARCH_API;
     modal.dataset.searchApi = searchApi;
     
     modal.classList.remove('hidden');
     searchInput.value = '';
-    searchInput.focus();
+    // ▼▼▼ [修正点] focus()をsetTimeoutで囲む ▼▼▼
+    setTimeout(() => {
+        searchInput.focus();
+    }, 0);
+    // ▲▲▲ 修正ここまで ▲▲▲
 
-    // 事前に取得した結果リストがあれば、それを表示
     if (options.initialResults) {
         renderSearchResults(options.initialResults);
     } else {
@@ -117,4 +120,3 @@ export function showModal(rowElement, callback, options = {}) {
     }
   }
 }
-// ▲▲▲ 修正ここまで ▲▲▲

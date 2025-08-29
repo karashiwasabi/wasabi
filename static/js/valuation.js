@@ -1,9 +1,10 @@
 // C:\Dev\WASABI\static\js\valuation.js
+import { hiraganaToKatakana } from './utils.js';
 import { showModal } from './inout_modal.js';
-
-let view, dateInput, runBtn, outputContainer, kanaNameInput, dosageFormInput;
+let view, dateInput, runBtn, outputContainer, kanaNameInput, dosageFormInput, exportBtn;
 let reportDataCache = null;
 const formatCurrency = (value) => new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' }).format(value || 0);
+
 function renderInteractiveView() {
     if (!reportDataCache || reportDataCache.length === 0) {
         outputContainer.innerHTML = '<p>表示するデータがありません。</p>';
@@ -24,7 +25,6 @@ function renderInteractiveView() {
         group.detailRows.forEach(row => {
             let warningHtml = '';
             if (row.showAlert) { 
-                // ▼▼▼ [修正点] 警告リンクにdata-provisional-codeを追加 ▼▼▼
                 warningHtml = `<span class="warning-link" data-yj-code="${row.yjCode}" data-product-name="${row.productName}" data-provisional-code="${row.productCode}" style="color: red; font-weight: bold; cursor: pointer; text-decoration: underline; margin-left: 15px;">[JCSHMS掲載品を登録してください]</span>`;
             }
 
@@ -135,7 +135,7 @@ async function runCalculation() {
     }
     window.showLoading();
     try {
-        const kanaName = kanaNameInput.value;
+        const kanaName = hiraganaToKatakana(kanaNameInput.value);
         const dosageForm = dosageFormInput.value;
         const params = new URLSearchParams({
             date: date,
@@ -156,6 +156,22 @@ async function runCalculation() {
     }
 }
 
+function handleExport() {
+    const date = dateInput.value.replace(/-/g, '');
+    if (!date) {
+        window.showNotification('評価基準日を指定してください。', 'error');
+        return;
+    }
+    const kanaName = hiraganaToKatakana(kanaNameInput.value);
+    const dosageForm = dosageFormInput.value;
+    const params = new URLSearchParams({
+        date: date,
+        kanaName: kanaName,
+        dosageForm: dosageForm,
+    });
+    window.location.href = `/api/valuation/export?${params.toString()}`;
+}
+
 export function initValuationView() {
     view = document.getElementById('valuation-view');
     if (!view) return;
@@ -165,16 +181,17 @@ export function initValuationView() {
     outputContainer = document.getElementById('valuation-output-container');
     kanaNameInput = document.getElementById('val-kanaName');
     dosageFormInput = document.getElementById('val-dosageForm');
+    exportBtn = document.getElementById('export-valuation-btn');
 
     dateInput.value = new Date().toISOString().slice(0, 10);
     runBtn.addEventListener('click', runCalculation);
+    exportBtn.addEventListener('click', handleExport);
+
     outputContainer.addEventListener('click', async (e) => {
         if (e.target.classList.contains('warning-link')) {
             showModal(e.target, async (selectedProduct) => {
                 window.showLoading();
                 try {
-                    // ▼▼▼ [修正点] 登録後の処理を簡潔化 ▼▼▼
-                    // ステップ1: ユーザーが選択したJCSHMS品をマスターに登録（UPSERT）する
                     const payload = { ...selectedProduct, origin: 'JCSHMS' };
                     const resMaster = await fetch('/api/master/update', {
                         method: 'POST',
@@ -186,9 +203,7 @@ export function initValuationView() {
                     
                     window.showNotification(`「${selectedProduct.productName}」を登録しました。在庫評価を更新します。`, 'success');
 
-                    // ステップ2: 在庫評価全体を再計算・再描画する
                     await runCalculation();
-                    // ▲▲▲ 修正ここまで ▲▲▲
                 } catch (err) {
                     window.showNotification(err.message, 'error');
                 } finally {

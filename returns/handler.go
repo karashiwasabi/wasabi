@@ -5,8 +5,10 @@ package returns
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt" // fmtパッケージをインポート
 	"net/http"
 	"strconv"
+	"strings" // stringsパッケージをインポート
 	"wasabi/db"
 	"wasabi/model"
 )
@@ -16,13 +18,10 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 
-		// ▼▼▼ [修正点] 係数をフロントエンドから受け取るようにする ▼▼▼
 		coefficient, err := strconv.ParseFloat(q.Get("coefficient"), 64)
 		if err != nil {
-			// 係数が指定されなかった、または無効な場合はデフォルト値を使用
 			coefficient = 1.5
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
 
 		filters := model.AggregationFilters{
 			StartDate:   q.Get("startDate"),
@@ -32,30 +31,68 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 			Coefficient: coefficient,
 		}
 
+		// ▼▼▼ [修正点] ロジックを全面的に書き換え ▼▼▼
+
+		// ステップ1: 過去のデータから使用量を分析し、発注点を計算する
 		yjGroups, err := db.GetStockLedger(conn, filters)
 		if err != nil {
 			http.Error(w, "Failed to get stock ledger: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		var returnCandidates []model.StockLedgerYJGroup
+		// ステップ2: 「今現在」のリアルタイム在庫と発注残を別途取得する
+		currentStockMap, err := db.GetAllCurrentStockMap(conn)
+		if err != nil {
+			http.Error(w, "Failed to get current stock map: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		backordersMap, err := db.GetAllBackordersMap(conn)
+		if err != nil {
+			http.Error(w, "Failed to get backorders map: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 
+		var returnCandidates []model.StockLedgerYJGroup
 		for _, group := range yjGroups {
 			var returnablePackages []model.StockLedgerPackageGroup
 			isGroupAdded := false
 
 			for _, pkg := range group.PackageLedgers {
-				// ▼▼▼ [修正点] 係数を考慮した発注点(ReorderPoint)を使用するロジックに修正 ▼▼▼
-				// 条件: 在庫 > 発注点 + 1包装あたりの数量
+				// ステップ3: 包装ごとに「今現在」の在庫を計算する
+				var currentStockForPackage float64
+				var productCodesInPackage []string
+				for _, master := range pkg.Masters {
+					currentStockForPackage += currentStockMap[master.ProductCode]
+					productCodesInPackage = append(productCodesInPackage, master.ProductCode)
+				}
+
+				// 「今現在」の発注残を含めた有効在庫を計算
+				backorderQty := backordersMap[pkg.PackageKey]
+				trueEffectiveBalance := currentStockForPackage + backorderQty
+
+				// ステップ4: 「発注点」と「今現在の有効在庫」を比較する
 				if len(pkg.Masters) > 0 {
 					yjPackUnitQty := pkg.Masters[0].YjPackUnitQty
-					// 発注点が0より大きく、かつ在庫が「発注点＋1包装」を上回る場合
-					if pkg.ReorderPoint > 0 && pkg.EffectiveEndingBalance > (pkg.ReorderPoint+yjPackUnitQty) {
+					if pkg.ReorderPoint > 0 && trueEffectiveBalance > (pkg.ReorderPoint+yjPackUnitQty) {
+
+						// 画面表示用に、計算した「今現在の有効在庫」をセットし直す
+						pkg.EffectiveEndingBalance = trueEffectiveBalance
+
+						// ▼▼▼ [追加ロジック] 納品履歴を取得する ▼▼▼
+						if len(productCodesInPackage) > 0 {
+							deliveryHistory, err := getDeliveryHistory(conn, productCodesInPackage, filters.StartDate, filters.EndDate)
+							if err != nil {
+								// エラーが発生しても処理は続行するが、ログには残す
+								fmt.Printf("WARN: Failed to get delivery history for package %s: %v\n", pkg.PackageKey, err)
+							}
+							pkg.DeliveryHistory = deliveryHistory
+						}
+						// ▲▲▲ 追加ロジックここまで ▲▲▲
+
 						returnablePackages = append(returnablePackages, pkg)
 						isGroupAdded = true
 					}
 				}
-				// ▲▲▲ 修正ここまで ▲▲▲
 			}
 
 			if isGroupAdded {
@@ -64,8 +101,41 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 				returnCandidates = append(returnCandidates, newGroup)
 			}
 		}
+		// ▲▲▲ 修正ここまで ▲▲▲
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(returnCandidates)
 	}
 }
+
+// ▼▼▼ [追加関数] 指定された製品コードの納品履歴を取得するヘルパー関数 ▼▼▼
+func getDeliveryHistory(conn *sql.DB, productCodes []string, startDate, endDate string) ([]model.TransactionRecord, error) {
+	placeholders := strings.Repeat("?,", len(productCodes)-1) + "?"
+	query := fmt.Sprintf(`SELECT `+db.TransactionColumns+` FROM transaction_records 
+		WHERE flag = 1 AND jan_code IN (%s) AND transaction_date BETWEEN ? AND ? 
+		ORDER BY transaction_date DESC, id DESC`, placeholders)
+
+	args := make([]interface{}, 0, len(productCodes)+2)
+	for _, code := range productCodes {
+		args = append(args, code)
+	}
+	args = append(args, startDate, endDate)
+
+	rows, err := conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []model.TransactionRecord
+	for rows.Next() {
+		r, err := db.ScanTransactionRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, *r)
+	}
+	return records, nil
+}
+
+// ▲▲▲ 追加関数ここまで ▲▲▲

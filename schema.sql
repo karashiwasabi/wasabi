@@ -15,9 +15,6 @@ CREATE TABLE IF NOT EXISTS product_master (
     maker_name TEXT,
     usage_classification TEXT, -- JC013 (内外区分)
     package_form TEXT,         -- JC037 (包装)
-    -- ▼▼▼ [修正点] package_specカラムを削除 ▼▼▼
-    -- package_spec TEXT,
-    -- ▲▲▲ 修正ここまで ▲▲▲
     yj_unit_name TEXT,
     yj_pack_unit_qty REAL,
     flag_poison INTEGER,
@@ -73,12 +70,9 @@ CREATE TABLE IF NOT EXISTS transaction_records (
   flag_stimulant_raw INTEGER,
   process_flag_ma TEXT
 );
-
--- ▼▼▼ [修正点] ファイルの末尾などに以下のUNIQUE INDEX定義を追加 ▼▼▼
 CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_unique_slip
   ON transaction_records(transaction_date, client_code, receipt_number, line_number)
   WHERE receipt_number != '';
--- ▲▲▲ 修正ここまで ▲▲▲
 
 -- JCSHMSマスタ
 CREATE TABLE IF NOT EXISTS jcshms (
@@ -116,7 +110,6 @@ CREATE INDEX IF NOT EXISTS idx_transactions_jan_code ON transaction_records (jan
 CREATE INDEX IF NOT EXISTS idx_transactions_date ON transaction_records (transaction_date);
 CREATE INDEX IF NOT EXISTS idx_transactions_flag ON transaction_records (flag);
 CREATE INDEX IF NOT EXISTS idx_product_master_kana_name ON product_master (kana_name);
-
 -- デッドストックリストテーブル
 CREATE TABLE IF NOT EXISTS dead_stock_list (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,16 +126,35 @@ CREATE TABLE IF NOT EXISTS dead_stock_list (
 );
 CREATE INDEX IF NOT EXISTS idx_tx_jan_date
   ON transaction_records(jan_code, transaction_date);
--- 予製レコードテーブル
-CREATE TABLE IF NOT EXISTS pre_compounding_records (
+
+-- 新しい予製レコードテーブル (transaction_recordsを模倣)
+CREATE TABLE IF NOT EXISTS precomp_records (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  patient_number TEXT NOT NULL,
-  product_code TEXT NOT NULL,
-  quantity REAL NOT NULL,
+  transaction_date TEXT,
+  client_code TEXT, -- 患者番号を格納
+  receipt_number TEXT,
+  line_number TEXT,
+  jan_code TEXT,
+  yj_code TEXT,
+  product_name TEXT,
+  kana_name TEXT,
+  usage_classification TEXT,
+  package_form TEXT,
+  package_spec TEXT,
+  maker_name TEXT,
+  jan_pack_inner_qty REAL,
+  jan_quantity REAL,
+  jan_pack_unit_qty REAL,
+  jan_unit_name TEXT,
+  jan_unit_code TEXT,
+  yj_quantity REAL,
+  yj_pack_unit_qty REAL,
+  yj_unit_name TEXT,
+  purchase_price REAL,
+  supplier_wholesale TEXT,
   created_at TEXT NOT NULL,
-  FOREIGN KEY (product_code) REFERENCES product_master(product_code)
+  UNIQUE(client_code, jan_code) -- この行を必ず追加してください
 );
-CREATE INDEX IF NOT EXISTS idx_pre_compounding_product_code ON pre_compounding_records (product_code);
 
 -- 卸業者マスターテーブル
 CREATE TABLE IF NOT EXISTS wholesalers (

@@ -109,3 +109,21 @@ func ClearTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 		json.NewEncoder(w).Encode(map[string]string{"message": "全ての取引データを削除しました。"})
 	}
 }
+
+// ClearMastersHandler は全ての製品マスターデータを削除するリクエストを処理します。
+func ClearMastersHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		if err := db.ClearAllProductMasters(conn); err != nil {
+			http.Error(w, "Failed to clear all product masters: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"message": "全ての製品マスターを削除しました。"})
+	}
+}

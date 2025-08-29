@@ -5,18 +5,32 @@ package guidedinventory
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
 	"wasabi/db"
 	"wasabi/model"
+	"wasabi/units"
 )
 
-// ResponseData は棚卸調整画面に必要な全てのデータをまとめた構造体です。
-type ResponseData struct {
-	StockLedger    []model.StockLedgerYJGroup    `json:"stockLedger"`
-	PrecompDetails []db.PreCompoundingDetailView `json:"precompDetails"`
+// ▼▼▼ [修正点] 画面表示専用のデータ構造を定義 ▼▼▼
+type StockLedgerPackageGroupView struct {
+	model.StockLedgerPackageGroup
+	Masters []model.ProductMasterView `json:"masters"`
 }
 
-// GetInventoryDataHandler は、指定されたYJコードの在庫元帳と予製明細を取得します。
+type StockLedgerYJGroupView struct {
+	model.StockLedgerYJGroup
+	PackageLedgers []StockLedgerPackageGroupView `json:"packageLedgers"`
+}
+
+type ResponseDataView struct {
+	StockLedger    []StockLedgerYJGroupView  `json:"stockLedger"`
+	PrecompDetails []model.TransactionRecord `json:"precompDetails"`
+}
+
+// ▲▲▲ 修正ここまで ▲▲▲
+
 func GetInventoryDataHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -31,33 +45,68 @@ func GetInventoryDataHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// 1. 在庫元帳データを取得
 		stockLedger, err := db.GetStockLedger(conn, filters)
 		if err != nil {
 			http.Error(w, "Failed to get stock ledger: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		// 2. 関連する製品コードを収集
+		// ▼▼▼ [修正点] 取得したデータを画面表示用の構造に変換する処理を追加 ▼▼▼
+		stockLedgerView := make([]StockLedgerYJGroupView, 0, len(stockLedger))
 		var productCodes []string
-		if len(stockLedger) > 0 {
-			for _, pkgLedger := range stockLedger[0].PackageLedgers {
+
+		for _, yjGroup := range stockLedger {
+			newYjGroupView := StockLedgerYJGroupView{
+				StockLedgerYJGroup: yjGroup,
+				PackageLedgers:     make([]StockLedgerPackageGroupView, 0, len(yjGroup.PackageLedgers)),
+			}
+
+			for _, pkgLedger := range yjGroup.PackageLedgers {
+				newPkgLedgerView := StockLedgerPackageGroupView{
+					StockLedgerPackageGroup: pkgLedger,
+					Masters:                 make([]model.ProductMasterView, 0, len(pkgLedger.Masters)),
+				}
+
 				for _, master := range pkgLedger.Masters {
 					productCodes = append(productCodes, master.ProductCode)
-				}
-			}
-		}
 
-		// 3. 予製明細データを取得
-		precompDetails, err := db.GetPreCompoundingRecordsByProductCodes(conn, productCodes)
+					tempJcshms := model.JCShms{
+						JC037: master.PackageForm,
+						JC039: master.YjUnitName,
+						JC044: master.YjPackUnitQty,
+						JA006: sql.NullFloat64{Float64: master.JanPackInnerQty, Valid: true},
+						JA008: sql.NullFloat64{Float64: master.JanPackUnitQty, Valid: true},
+						JA007: sql.NullString{String: fmt.Sprintf("%d", master.JanUnitCode), Valid: true},
+					}
+
+					var janUnitName string
+					if master.JanUnitCode == 0 {
+						janUnitName = units.ResolveName(master.YjUnitName)
+					} else {
+						janUnitName = units.ResolveName(fmt.Sprintf("%d", master.JanUnitCode))
+					}
+
+					masterView := model.ProductMasterView{
+						ProductMaster:        *master, // <- master.ProductMaster から *master に修正
+						FormattedPackageSpec: units.FormatPackageSpec(&tempJcshms),
+						JanUnitName:          janUnitName,
+					}
+					newPkgLedgerView.Masters = append(newPkgLedgerView.Masters, masterView)
+				}
+				newYjGroupView.PackageLedgers = append(newYjGroupView.PackageLedgers, newPkgLedgerView)
+			}
+			stockLedgerView = append(stockLedgerView, newYjGroupView)
+		}
+		// ▲▲▲ 修正ここまで ▲▲▲
+
+		precompDetails, err := db.GetPreCompoundingDetailsByProductCodes(conn, productCodes)
 		if err != nil {
 			http.Error(w, "Failed to get pre-compounding details: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		// 4. 結果をまとめてレスポンスとして返す
-		response := ResponseData{
-			StockLedger:    stockLedger,
+		response := ResponseDataView{
+			StockLedger:    stockLedgerView,
 			PrecompDetails: precompDetails,
 		}
 
@@ -66,7 +115,7 @@ func GetInventoryDataHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// SavePayload は棚卸データの保存時にフロントエンドから受け取るデータの形式です。
+// ▼▼▼ [修正点] 削除されていた以下のコードを復元 ▼▼▼
 type SavePayload struct {
 	Date          string                  `json:"date"`
 	YjCode        string                  `json:"yjCode"`
@@ -74,11 +123,11 @@ type SavePayload struct {
 	DeadStockData []model.DeadStockRecord `json:"deadStockData"`
 }
 
-// SaveInventoryDataHandler は棚卸調整画面で入力されたデータを保存します。
 func SaveInventoryDataHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var payload SavePayload
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			log.Printf("ERROR: Failed to decode request body in SaveInventoryDataHandler: %v", err)
 			http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -90,14 +139,15 @@ func SaveInventoryDataHandler(conn *sql.DB) http.HandlerFunc {
 
 		tx, err := conn.Begin()
 		if err != nil {
+			log.Printf("ERROR: Failed to start transaction: %v", err)
 			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
 			return
 		}
 		defer tx.Rollback()
 
-		// YJコードに紐づく全ての包装マスターを取得 (ゼロ埋め処理のため)
 		allPackagings, err := db.GetProductMastersByYjCode(tx, payload.YjCode)
 		if err != nil {
+			log.Printf("ERROR: Failed to get product masters for yj_code %s: %v", payload.YjCode, err)
 			http.Error(w, "Failed to get product masters for yj_code: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -107,13 +157,14 @@ func SaveInventoryDataHandler(conn *sql.DB) http.HandlerFunc {
 			masterPackagings = append(masterPackagings, p.ProductMaster)
 		}
 
-		// DB保存用の関数を呼び出し
-		if err := db.SaveGuidedInventoryData(tx, payload.Date, masterPackagings, payload.InventoryData, payload.DeadStockData); err != nil {
+		if err := db.SaveGuidedInventoryData(tx, payload.Date, payload.YjCode, masterPackagings, payload.InventoryData, payload.DeadStockData); err != nil {
+			log.Printf("ERROR: Failed to save guided inventory data: %v", err)
 			http.Error(w, "Failed to save guided inventory data: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		if err := tx.Commit(); err != nil {
+			log.Printf("ERROR: Failed to commit transaction: %v", err)
 			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
 			return
 		}
@@ -122,3 +173,5 @@ func SaveInventoryDataHandler(conn *sql.DB) http.HandlerFunc {
 		json.NewEncoder(w).Encode(map[string]string{"message": "棚卸データを保存しました。"})
 	}
 }
+
+// ▲▲▲ 復元ここまで ▲▲▲

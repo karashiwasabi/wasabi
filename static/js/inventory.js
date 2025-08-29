@@ -1,6 +1,5 @@
 import { createUploadTableHTML, renderUploadTableRows } from './common_table.js';
 
-// DOM要素をキャッシュ
 const fileInput = document.getElementById('inventoryFileInput');
 const outputContainer = document.getElementById('inventory-output-container');
 
@@ -8,12 +7,12 @@ async function handleInventoryUpload(event) {
     const files = event.target.files;
     if (!files.length) return;
 
-    // テーブルの準備と処理中メッセージの表示
-    outputContainer.innerHTML = createUploadTableHTML('inventory-output-table');
-    const tbody = outputContainer.querySelector('tbody');
-    tbody.innerHTML = `<tr><td colspan="14" class="center">Processing...</td></tr>`;
-    
+    // ▼▼▼【ここからが修正箇所です】▼▼▼
+
+    // 先に処理中メッセージだけ表示する
+    outputContainer.innerHTML = `<p>Processing...</p>`;
     window.showLoading();
+
     try {
         const formData = new FormData();
         for (const file of files) {
@@ -24,22 +23,38 @@ async function handleInventoryUpload(event) {
             method: 'POST',
             body: formData,
         });
-
+        
         const data = await response.json();
         if (!response.ok) {
             throw new Error(data.message || 'Inventory file processing failed.');
         }
 
-        // 共通のテーブル描画関数を使って結果を表示
-        renderUploadTableRows('inventory-output-table', data.details);
+        // --- 修正後の描画ロジック ---
+        // 1. データを取得した後に、テーブルの枠と中身をそれぞれ文字列として生成
+        const tableShell = createUploadTableHTML('inventory-output-table');
+        // 棚卸画面のAPIレスポンスでは、データは 'details' キーに含まれるため data.details を使用 
+        const tableBodyContent = renderUploadTableRows(data.details); 
+        
+        // 2. 文字列を結合して完全なHTMLを作成
+        const fullTableHtml = tableShell.replace('<tbody></tbody>', `<tbody>${tableBodyContent}</tbody>`);
+
+        // 3. 完成したHTMLを一度だけDOMに書き込む
+        outputContainer.innerHTML = fullTableHtml;
+        
         window.showNotification(data.message || 'Inventory file processed successfully.', 'success');
+
     } catch (err) {
-        tbody.innerHTML = `<tr><td colspan="14" class="center" style="color:red;">Error: ${err.message}</td></tr>`;
+        // エラー時も同様に、テーブルの枠を作ってからエラーメッセージを表示すると確実
+        const tableShell = createUploadTableHTML('inventory-output-table');
+        const errorRow = `<tr><td colspan="14" class="center" style="color:red;">Error: ${err.message}</td></tr>`;
+        outputContainer.innerHTML = tableShell.replace('<tbody></tbody>', `<tbody>${errorRow}</tbody>`);
+        
         window.showNotification(err.message, 'error');
     } finally {
         window.hideLoading();
         event.target.value = ''; // ファイル入力をリセット
     }
+    // ▲▲▲【修正ここまで】▲▲▲
 }
 
 export function initInventoryUpload() {

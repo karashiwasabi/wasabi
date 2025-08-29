@@ -80,3 +80,46 @@ func DeleteBackorderHandler(conn *sql.DB) http.HandlerFunc {
 		json.NewEncoder(w).Encode(map[string]string{"message": "発注残を削除しました。"})
 	}
 }
+
+// ▼▼▼ [修正点] 以下の関数をファイル末尾に追加 ▼▼▼
+// BulkDeleteBackordersHandler は、複数の発注残レコードの一括削除を処理します。
+func BulkDeleteBackordersHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var payload []model.Backorder
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if len(payload) == 0 {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"message": "削除する項目がありません。"})
+			return
+		}
+
+		tx, err := conn.Begin()
+		if err != nil {
+			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback()
+
+		for _, bo := range payload {
+			if err := db.DeleteBackorderInTx(tx, bo); err != nil {
+				// 1件でも失敗したらエラーを返し、全件ロールバックする
+				http.Error(w, "Failed to delete backorder: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+
+		if err := tx.Commit(); err != nil {
+			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"message": "選択された発注残を削除しました。"})
+	}
+}
+
+// ▲▲▲ 修正ここまで ▲▲▲

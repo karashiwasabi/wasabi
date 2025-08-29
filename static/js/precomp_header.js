@@ -1,0 +1,198 @@
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\precomp_header.js
+
+import { getDetailsData, clearDetailsTable, populateDetailsTable } from './precomp_details_table.js';
+
+// ▼▼▼【修正点】importAllBtn と importAllInput をこの行に追加 ▼▼▼
+let patientNumberInput, saveBtn, loadBtn, clearBtn, exportBtn, importBtn, importInput, exportAllBtn, importAllBtn, importAllInput;
+// ▲▲▲ 修正ここまで ▲▲▲
+
+export function resetHeader() {
+    if (patientNumberInput) {
+        patientNumberInput.value = '';
+    }
+}
+
+export function initHeader() {
+    patientNumberInput = document.getElementById('precomp-patient-number');
+    saveBtn = document.getElementById('precomp-save-btn');
+    loadBtn = document.getElementById('precomp-load-btn');
+    clearBtn = document.getElementById('precomp-clear-btn');
+    exportBtn = document.getElementById('precomp-export-btn');
+    importBtn = document.getElementById('precomp-import-btn');
+    importInput = document.getElementById('precomp-import-input');
+    exportAllBtn = document.getElementById('precomp-export-all-btn');
+    importAllBtn = document.getElementById('precomp-import-all-btn');
+    importAllInput = document.getElementById('precomp-import-all-input');
+
+    if (!patientNumberInput || !saveBtn || !loadBtn || !clearBtn) return;
+    
+    loadBtn.addEventListener('click', async () => {
+        const patientNumber = patientNumberInput.value.trim();
+        if (!patientNumber) {
+            window.showNotification('患者番号を入力してください。', 'error');
+            return;
+        }
+        window.showLoading();
+        try {
+            const res = await fetch(`/api/precomp/load?patientNumber=${encodeURIComponent(patientNumber)}`);
+             if (!res.ok) throw new Error('データの呼び出しに失敗しました。');
+            const records = await res.json();
+            populateDetailsTable(records);
+        } catch (err) {
+            window.showNotification(err.message, 'error');
+            clearDetailsTable();
+        } finally {
+            window.hideLoading();
+         }
+    });
+
+    clearBtn.addEventListener('click', async () => {
+        const patientNumber = patientNumberInput.value.trim();
+        if (!patientNumber) {
+            window.showNotification('中断する患者番号を入力してください。', 'error');
+            return;
+        }
+        if (!confirm(`患者番号: ${patientNumber} の予製データをすべて削除（中断）します。よろしいですか？`)) {
+            return;
+        }
+    
+         window.showLoading();
+        try {
+            const res = await fetch(`/api/precomp/clear?patientNumber=${encodeURIComponent(patientNumber)}`, { method: 'DELETE' });
+            const resData = await res.json();
+            if (!res.ok) throw new Error(resData.message || '中断に失敗しました。');
+            window.showNotification(resData.message, 'success');
+            resetHeader();
+            
+            clearDetailsTable();
+        } catch (err) {
+            window.showNotification(err.message, 'error');
+        } finally {
+            window.hideLoading();
+        }
+    });
+    
+    saveBtn.addEventListener('click', async () => {
+        const patientNumber = patientNumberInput.value.trim();
+        if (!patientNumber) {
+            window.showNotification('患者番号を入力してください。', 'error');
+            return;
+        }
+        const records = getDetailsData();
+        if (records.length === 0 && !confirm(`保存対象の品目がありません。患者番号: ${patientNumber} の予製データをすべて削除しますがよろしいですか？`)) {
+            return;
+       }
+        if (records.length > 0 && !confirm(`患者番号: ${patientNumber} の予製データを保存します。よろしいですか？`)) {
+            return;
+        }
+        const payload = { patientNumber, records };
+        window.showLoading();
+        try {
+            const res = await fetch('/api/precomp/save', {
+           
+             method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const resData = await res.json();
+            if (!res.ok) throw new Error(resData.message || '保存に失敗しました。');
+            window.showNotification(resData.message, 'success');
+            resetHeader();
+            clearDetailsTable();
+        } catch (err) {
+            window.showNotification(`エラー: ${err.message}`, 'error');
+        } finally {
+            window.hideLoading();
+        }
+    });
+    
+    exportBtn.addEventListener('click', () => {
+        const patientNumber = patientNumberInput.value.trim();
+        if (!patientNumber) {
+            window.showNotification('エクスポートする患者番号を入力してください。', 'error');
+            return;
+        }
+        window.location.href = `/api/precomp/export?patientNumber=${encodeURIComponent(patientNumber)}`;
+    });
+    
+    exportAllBtn.addEventListener('click', () => {
+        if (confirm('全患者の予製データをCSVファイルとしてエクスポートします。よろしいですか？')) {
+            window.location.href = '/api/precomp/export_all';
+        }
+    });
+
+    importBtn.addEventListener('click', () => {
+        const patientNumber = patientNumberInput.value.trim();
+        if (!patientNumber) {
+            window.showNotification('インポート先の患者番号を入力してください。', 'error');
+            return;
+        }
+        importInput.click();
+    });
+    
+    importInput.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        const patientNumber = patientNumberInput.value.trim();
+        if (!file || !patientNumber) return;
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('patientNumber', patientNumber);
+
+        window.showLoading();
+        try {
+            const res = 
+             await fetch('/api/precomp/import', {
+                method: 'POST',
+                body: formData,
+            });
+            const resData = await res.json();
+            if (!res.ok) throw new Error(resData.message || 'インポートに失敗しました。');
+            
+            
+            window.showNotification(resData.message, 'success');
+            // インポート後にリストを自動で再読み込み
+            loadBtn.click(); 
+        } catch (err) {
+            window.showNotification(`エラー: ${err.message}`, 'error');
+        } finally {
+            window.hideLoading();
+            e.target.value = ''; // ファイル入力をリセット
+        }
+    });
+
+    importAllBtn.addEventListener('click', () => {
+        if (!confirm('複数患者の予製データを一括でインポートします。\nCSVの1列目には患者番号が必要です。\n既存のデータは上書きされます。よろしいですか？')) {
+            return;
+        }
+        importAllInput.click();
+    });
+
+    importAllInput.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        window.showLoading();
+        try {
+            const res = await fetch('/api/precomp/import_all', {
+                method: 'POST',
+                body: formData,
+            });
+            const resData = await res.json();
+            if (!res.ok) throw new Error(resData.message || '全件インポートに失敗しました。');
+            
+            window.showNotification(resData.message, 'success');
+            // 全件インポート後は画面をクリア
+            resetHeader();
+            clearDetailsTable();
+        } catch (err) {
+            window.showNotification(`エラー: ${err.message}`, 'error');
+        } finally {
+            window.hideLoading();
+            e.target.value = ''; // ファイル入力をリセット
+        }
+    });
+}

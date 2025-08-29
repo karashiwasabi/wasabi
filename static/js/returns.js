@@ -1,5 +1,8 @@
 // C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\returns.js
 
+import { createUploadTableHTML, renderUploadTableRows } from './common_table.js';
+import { hiraganaToKatakana } from './utils.js';
+
 function formatBalance(balance) {
     if (typeof balance === 'number') {
         return balance.toFixed(2);
@@ -7,24 +10,30 @@ function formatBalance(balance) {
     return balance;
 }
 
+/**
+ * [修正点]
+ * 描画ロジックを方針書に沿って1段階プロセスに変更。
+ * HTML文字列を一度で完全に組み立ててからDOMにセットします。
+ */
 function renderReturnCandidates(data, container) {
     if (!data || data.length === 0) {
         container.innerHTML = "<p>返品可能な品目はありませんでした。</p>";
         return;
     }
 
-    let html = '';
-    data.forEach(yjGroup => {
-        html += `
+    // ▼▼▼【ここからが修正箇所です】▼▼▼
+    // 1回のループで、納品履歴テーブルまで含んだ完全なHTML文字列を生成する
+    let html = data.map((yjGroup, yjIndex) => {
+        const yjHeader = `
             <div class="agg-yj-header" style="background-color: #0d6efd; color: white;">
                 <span>YJ: ${yjGroup.yjCode}</span>
                 <span class="product-name">${yjGroup.productName}</span>
             </div>
         `;
-        yjGroup.packageLedgers.forEach(pkg => {
-            // Surplus = 在庫 - 発注点 (返品可能な余裕分)
+        
+        const packagesHtml = yjGroup.packageLedgers.map((pkg, pkgIndex) => {
             const surplus = pkg.effectiveEndingBalance - pkg.reorderPoint;
-            html += `
+            let pkgHeader = `
                 <div class="agg-pkg-header" style="border-left: 5px solid #0d6efd;">
                     <span>包装: ${pkg.packageKey}</span>
                     <span class="balance-info">
@@ -34,9 +43,31 @@ function renderReturnCandidates(data, container) {
                     </span>
                 </div>
             `;
-        });
-    });
+
+            // 納品履歴が存在する場合、その場でテーブルのHTMLを生成する
+            if (pkg.deliveryHistory && pkg.deliveryHistory.length > 0) {
+                const tableId = `delivery-history-${yjIndex}-${pkgIndex}`;
+                
+                // テーブルの枠と中身のHTML文字列をそれぞれ取得
+                const tableShell = createUploadTableHTML(tableId);
+                const tableBodyContent = renderUploadTableRows(pkg.deliveryHistory);
+                
+                // 文字列を結合して完全なテーブルHTMLを生成
+                const fullTableHtml = tableShell.replace('<tbody></tbody>', `<tbody>${tableBodyContent}</tbody>`);
+                
+                pkgHeader += `<div id="${tableId}-container" style="padding: 0 10px 10px 10px;">${fullTableHtml}</div>`;
+            }
+            return pkgHeader;
+        }).join('');
+
+        return yjHeader + packagesHtml;
+    }).join('');
+
+    // 完成したHTMLを一度だけDOMに書き込む
     container.innerHTML = html;
+
+    // 以前ここにあった、DOM描画後に納品履歴を埋め込むための2番目のループは不要になったため削除
+    // ▲▲▲【修正ここまで】▲▲▲
 }
 
 export function initReturnsView() {
@@ -49,14 +80,12 @@ export function initReturnsView() {
     const endDateInput = document.getElementById('ret-endDate');
     const kanaNameInput = document.getElementById('ret-kanaName');
     const dosageFormInput = document.getElementById('ret-dosageForm');
-    // ▼▼▼ [修正点] 係数入力欄と印刷ボタンの要素を取得 ▼▼▼
     const coefficientInput = document.getElementById('ret-coefficient');
     const printBtn = document.getElementById('print-returns-list-btn');
-    // ▲▲▲ 修正ここまで ▲▲▲
 
     const today = new Date();
     const threeMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 3, today.getDate());
-    endDateInput.value = today.toISOString().slice(0, 10);
+    endDateInput.value = new Date().toISOString().slice(0, 10);
     startDateInput.value = threeMonthsAgo.toISOString().slice(0, 10);
 
     runBtn.addEventListener('click', async () => {
@@ -64,11 +93,9 @@ export function initReturnsView() {
         const params = new URLSearchParams({
             startDate: startDateInput.value.replace(/-/g, ''),
             endDate: endDateInput.value.replace(/-/g, ''),
-            kanaName: kanaNameInput.value,
+            kanaName: hiraganaToKatakana(kanaNameInput.value),
             dosageForm: dosageFormInput.value,
-            // ▼▼▼ [修正点] 係数の値を入力欄から取得する ▼▼▼
             coefficient: coefficientInput.value,
-            // ▲▲▲ 修正ここまで ▲▲▲
         });
 
         try {
@@ -86,16 +113,12 @@ export function initReturnsView() {
         }
     });
 
-    // ▼▼▼ [修正点] 印刷ボタンのイベントリスナーを追加 ▼▼▼
     printBtn.addEventListener('click', () => {
-        // 印刷対象のビューに専用クラスを付与
         view.classList.add('print-this-view');
         window.print();
     });
 
-    // 印刷ダイアログが閉じた後にクラスを削除する
     window.addEventListener('afterprint', () => {
         view.classList.remove('print-this-view');
     });
-    // ▲▲▲ 修正ここまで ▲▲▲
 }

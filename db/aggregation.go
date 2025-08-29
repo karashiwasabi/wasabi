@@ -312,5 +312,29 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		return masterI.KanaName < masterJ.KanaName
 	})
 
+	// ▼▼▼ [修正点] 以下のブロックを関数の最後に追加 ▼▼▼
+	if filters.MovementOnly {
+		var filteredResult []model.StockLedgerYJGroup
+		for _, yjGroup := range result {
+			hasMovement := false
+			for _, pkg := range yjGroup.PackageLedgers {
+				for _, tx := range pkg.Transactions {
+					// flagが0（棚卸）以外のトランザクションがあれば「動きあり」とみなす
+					if tx.Flag != 0 {
+						hasMovement = true
+						break
+					}
+				}
+				if hasMovement {
+					break
+				}
+			}
+			if hasMovement {
+				filteredResult = append(filteredResult, yjGroup)
+			}
+		}
+		return filteredResult, nil
+	}
+	// ▲▲▲ 修正ここまで ▲▲▲
 	return result, nil
 }

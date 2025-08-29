@@ -1,5 +1,7 @@
 // C:\Dev\WASABI\static\js\manual_inventory.js
 
+import { hiraganaToKatakana } from './utils.js';
+
 export function initManualInventory() {
     const view = document.getElementById('manual-inventory-view');
     if (!view) return;
@@ -47,7 +49,9 @@ export function initManualInventory() {
     }
     
     function applyFiltersAndRender() {
-        const kanaFilter = kanaNameInput.value.toLowerCase();
+    // ▼▼▼ [修正点] フィルター実行時にカナ変換 ▼▼▼
+    const kanaFilter = hiraganaToKatakana(kanaNameInput.value).toLowerCase();
+    // ▲▲▲ 修正ここまで ▲▲▲
         const dosageFilter = dosageFormInput.value.toLowerCase();
         
         let filteredProducts = allProducts;

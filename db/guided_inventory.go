@@ -10,29 +10,21 @@ import (
 	"wasabi/model"
 )
 
-// SaveGuidedInventoryDataは、棚卸調整画面からのデータをトランザクション内で保存します。
-// 1. 関連する包装の既存棚卸データを削除
-// 2. 画面で入力された棚卸データを登録（入力がなかった包装は在庫0で登録）
-// 3. 数量が1以上の品目の既存デッドストック情報を削除
-// 4. 新しいデッドストック情報を登録
-// SaveGuidedInventoryDataは、棚卸調整画面からのデータをトランザクション内で保存します。
-func SaveGuidedInventoryData(tx *sql.Tx, date string, allPackagings []model.ProductMaster, inventoryData map[string]float64, deadstockData []model.DeadStockRecord) error {
+// ▼▼▼ [修正点] 引数に yjCode を追加し、receiptNumberの生成ロジックを変更 ▼▼▼
+func SaveGuidedInventoryData(tx *sql.Tx, date string, yjCode string, allPackagings []model.ProductMaster, inventoryData map[string]float64, deadstockData []model.DeadStockRecord) error {
 
 	var allProductCodes []string
 	mastersMap := make(map[string]*model.ProductMaster)
 	for _, pkg := range allPackagings {
 		allProductCodes = append(allProductCodes, pkg.ProductCode)
-		// ポインタを渡すために一時変数を利用
 		p := pkg
 		mastersMap[pkg.ProductCode] = &p
 	}
 
-	// 関連する包装の既存棚卸データをまとめて削除
 	if err := DeleteTransactionsByFlagAndDateAndCodes(tx, 0, date, allProductCodes); err != nil {
 		return fmt.Errorf("failed to delete old inventory records: %w", err)
 	}
 
-	// ▼▼▼ 修正点: 棚卸レコードの保存ロジックをより厳密化 ▼▼▼
 	const q = `
 INSERT INTO transaction_records (
     transaction_date, client_code, receipt_number, line_number, flag,
@@ -50,42 +42,40 @@ INSERT INTO transaction_records (
 	}
 	defer stmt.Close()
 
-	receiptNumber := fmt.Sprintf("INV%s", date)
+	// 伝票番号にYJコードを含めることで、一意性を保証する
+	receiptNumber := fmt.Sprintf("ADJ-%s-%s", date, yjCode)
 	var productCodesWithInventory []string
 
 	for i, productCode := range allProductCodes {
 		master, ok := mastersMap[productCode]
 		if !ok {
-			continue // マスターが見つからない場合はスキップ
+			continue
 		}
 
-		yjQty := inventoryData[productCode] // 入力がなければゼロ値
+		yjQty := inventoryData[productCode]
 
 		if yjQty > 0 {
 			productCodesWithInventory = append(productCodesWithInventory, productCode)
 		}
 
-		// 棚卸レコード用のクリーンな構造体を作成
 		tr := model.TransactionRecord{
 			TransactionDate: date,
 			Flag:            0,
 			ReceiptNumber:   receiptNumber,
-			LineNumber:      fmt.Sprintf("ADJ%d", i+1),
+			LineNumber:      fmt.Sprintf("%d", i+1), // 行番号はYJグループ内での連番とする
 			YjQuantity:      yjQty,
 			ProcessFlagMA:   "COMPLETE",
 		}
 
-		// mappers.MapProductMasterToTransaction を使いつつ、不要な情報をクリア
 		mappers.MapProductMasterToTransaction(&tr, master)
-		tr.ClientCode = ""        // 不要な情報をクリア
-		tr.SupplierWholesale = "" // 不要な情報をクリア
-		tr.Subtotal = 0           // 棚卸に金額はない
+		tr.ClientCode = ""
+		tr.SupplierWholesale = ""
+		tr.Subtotal = 0
 
 		if master.JanPackInnerQty > 0 {
 			tr.JanQuantity = yjQty / master.JanPackInnerQty
 		}
 
-		// ステートメントを実行
 		_, err := stmt.Exec(
 			tr.TransactionDate, tr.ClientCode, tr.ReceiptNumber, tr.LineNumber, tr.Flag,
 			tr.JanCode, tr.YjCode, tr.ProductName, tr.KanaName, tr.UsageClassification, tr.PackageForm, tr.PackageSpec, tr.MakerName,
@@ -99,11 +89,8 @@ INSERT INTO transaction_records (
 			return fmt.Errorf("failed to insert inventory record for %s: %w", productCode, err)
 		}
 	}
-	// ▲▲▲ 修正ここまで ▲▲▲
 
-	// デッドストックデータの保存
 	if len(productCodesWithInventory) > 0 {
-		// 数量が入力された品目のデッドストック情報のみをフィルタリング
 		var relevantDeadstockData []model.DeadStockRecord
 		for _, ds := range deadstockData {
 			for _, pid := range productCodesWithInventory {
@@ -125,7 +112,9 @@ INSERT INTO transaction_records (
 	return nil
 }
 
-// DeleteDeadStockRecordsByProductCodes は指定された製品コード群のデッドストックレコードを削除します。
+// ▲▲▲ 修正ここまで ▲▲▲
+
+// (DeleteDeadStockRecordsByProductCodes に変更はありません)
 func DeleteDeadStockRecordsByProductCodes(tx *sql.Tx, productCodes []string) error {
 	if len(productCodes) == 0 {
 		return nil

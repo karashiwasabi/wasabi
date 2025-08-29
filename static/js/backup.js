@@ -42,6 +42,9 @@ export function initBackupButtons() {
     const exportProductsBtn = document.getElementById('exportProductsBtn');
     const importProductsBtn = document.getElementById('importProductsBtn');
     const importProductsInput = document.getElementById('importProductsInput');
+        // ▼▼▼【ここに追加】▼▼▼
+    const exportPricingBtn = document.getElementById('exportPricingBtn');
+    // ▲▲▲【追加ここまで】▲▲▲
 
     // 得意先エクスポート
     if (exportClientsBtn) {
@@ -76,4 +79,13 @@ export function initBackupButtons() {
             handleFileUpload(event, '/api/products/import');
         });
     }
+
+        // ▼▼▼【ここに追加】▼▼▼
+    // 価格情報バックアップ
+    if (exportPricingBtn) {
+        exportPricingBtn.addEventListener('click', () => {
+            window.location.href = '/api/pricing/backup_export';
+        });
+    }
+    // ▲▲▲【追加ここまで】▲▲▲
 }

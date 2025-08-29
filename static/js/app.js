@@ -1,12 +1,10 @@
 // C:\Dev\WASABI\static\js/app.js
-import { loadMasterData } from './master_data.js'; // ★ 新しく作成したモジュールをインポート
+import { loadMasterData } from './master_data.js';
 import { initInOut, resetInOutView } from './inout.js';
 import { initDatUpload } from './dat.js';
 import { initUsageUpload } from './usage.js';
 import { initInventoryUpload } from './inventory.js';
-// ▼▼▼ 以下をインポートリストに追加 ▼▼▼
 import { initInventoryAdjustment } from './inventory_adjustment.js';
-// ▲▲▲ 追加ここまで ▲▲▲
 import { initAggregation } from './aggregation.js';
 import { initMasterEdit, resetMasterEditView } from './master_edit.js';
 import { initReprocessButton } from './reprocess.js';
@@ -14,17 +12,16 @@ import { initBackupButtons } from './backup.js';
 import { initModal } from './inout_modal.js'; 
 import { initDeadStock } from './deadstock.js';
 import { initSettings, onViewShow as onSettingsViewShow } from './settings.js';
-import { initMedrec } from './medrec.js'; // ▼▼▼ この行のコメントを解除 ▼▼▼
+import { initMedrec } from './medrec.js';
 import { initManualInventory } from './manual_inventory.js';
-import { initPrecomp } from './precomp.js';
+import { initPrecomp, resetPrecompView } from './precomp.js';
 import { initOrders } from './orders.js';
 import { initJcshmsUpdate } from './jcshms_update.js';
 import { initBackorderView } from './backorder.js';
 import { initValuationView } from './valuation.js';
 import { initPricingView } from './pricing.js';
-import { initReturnsView } from './returns.js'; // ▼▼▼ import を追加 ▼▼▼
+import { initReturnsView } from './returns.js';
 
-// (Global UI Elements and helper functions are unchanged)
 window.showLoading = () => document.getElementById('loading-overlay').classList.remove('hidden');
 window.hideLoading = () => document.getElementById('loading-overlay').classList.add('hidden');
 window.showNotification = (message, type = 'success') => {
@@ -37,15 +34,12 @@ window.showNotification = (message, type = 'success') => {
 document.addEventListener('DOMContentLoaded', async () => {
     
     await loadMasterData();
-    // (DOM Elements are unchanged)
     const allViews = document.querySelectorAll('main > div[id$="-view"]');
     const inOutBtn = document.getElementById('inOutViewBtn');
     const datBtn = document.getElementById('datBtn');
     const usageBtn = document.getElementById('usageBtn');
     const inventoryBtn = document.getElementById('inventoryBtn');
-        // ▼▼▼ 以下を取得リストに追加 ▼▼▼
     const inventoryAdjustmentBtn = document.getElementById('inventoryAdjustmentBtn');
-    // ▲▲▲ 追加ここまで ▲▲▲
     const manualInventoryBtn = document.getElementById('manualInventoryBtn');
     const aggregationBtn = document.getElementById('aggregationBtn');
     const masterEditBtn = document.getElementById('masterEditViewBtn');
@@ -63,16 +57,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     const backorderBtn = document.getElementById('backorderBtn');
     const valuationBtn = document.getElementById('valuationBtn');
     const pricingBtn = document.getElementById('pricingBtn');
-    const returnsBtn = document.getElementById('returnsBtn'); // ▼▼▼ この行を追加 ▼▼▼
+    const returnsBtn = document.getElementById('returnsBtn');
 
-    // --- Initialize all modules ---
+    // ▼▼▼ [修正点] 以下のコードをこのあたりに追記 ▼▼▼
+    // アプリケーション内の全入力欄でブラウザのオートコンプリートを無効にする
+    document.querySelectorAll('input[type="text"], input[type="password"], input[type="number"], input[type="date"]').forEach(input => {
+        input.setAttribute('autocomplete', 'off');
+    });
+    // ▲▲▲ 修正ここまで ▲▲▲
+
     initInOut();
     initDatUpload();
     initUsageUpload();
     initInventoryUpload();
-        // ▼▼▼ 以下を初期化リストに追加 ▼▼▼
     initInventoryAdjustment();
-    // ▲▲▲ 追加ここまで ▲▲▲
     initAggregation();
     initMasterEdit();
     initReprocessButton();
@@ -80,7 +78,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initModal();
     initDeadStock();
     initSettings();
-    initMedrec(); // ▼▼▼ この行のコメントを解除 ▼▼▼
+    initMedrec();
     initManualInventory();
     initPrecomp();
     initOrders();
@@ -88,14 +86,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     initBackorderView();
     initValuationView();
     initPricingView();
-    initReturnsView(); // ▼▼▼ この行を追加 ▼▼▼
+    initReturnsView();
 
-    
-
-    // ▼▼▼ [修正点] showView関数全体を修正 ▼▼▼
     function showView(viewIdToShow) {
         const notificationBox = document.getElementById('notification-box');
-        // 画面が切り替わる際に、通知メッセージの表示クラスを確実に除去する
         if (notificationBox) {
             notificationBox.classList.remove('show');
         }
@@ -104,7 +98,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             view.classList.toggle('hidden', view.id !== viewIdToShow);
         });
     }
-    // ▲▲▲ 修正ここまで ▲▲▲
 
     inOutBtn.addEventListener('click', () => { showView('in-out-view'); resetInOutView(); });
     datBtn.addEventListener('click', () => {
@@ -126,14 +119,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
     manualInventoryBtn.addEventListener('click', () => {
         showView('manual-inventory-view');
-        // Dispatch a custom event to trigger loading
         document.getElementById('manual-inventory-view').dispatchEvent(new Event('show'));
     });
-    // ▼▼▼ 以下をイベントリスナーリストに追加 ▼▼▼
     inventoryAdjustmentBtn.addEventListener('click', () => {
         showView('inventory-adjustment-view');
     });
-    // ▲▲▲ 追加ここまで ▲▲▲
     aggregationBtn.addEventListener('click', () => {
         if (aggregationOutputContainer) aggregationOutputContainer.innerHTML = '';
         showView('aggregation-view');
@@ -145,14 +135,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     masterEditBtn.addEventListener('click', () => { showView('master-edit-view'); resetMasterEditView(); });
     settingsBtn.addEventListener('click', () => {
         showView('settings-view');
-        onSettingsViewShow(); // 画面表示時に設定を読み込む
+        onSettingsViewShow();
     });
-    precompBtn.addEventListener('click', () => showView('precomp-view'));
+    precompBtn.addEventListener('click', () => {
+    showView('precomp-view');
+    resetPrecompView();
+    });
     orderBtn.addEventListener('click', () => showView('order-view'));
-
     backorderBtn.addEventListener('click', () => {
         showView('backorder-view');
-        // viewが表示されるイベントを発火させてデータを読み込ませる
         document.getElementById('backorder-view').dispatchEvent(new Event('show'));
     });
     valuationBtn.addEventListener('click', () => {
@@ -162,10 +153,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         showView('pricing-view');
         document.getElementById('pricing-view').dispatchEvent(new Event('show'));
     });
-    // ▼▼▼ このイベントリスナーを追加 ▼▼▼
     returnsBtn.addEventListener('click', () => showView('returns-view'));
-    // ▲▲▲ 追加ここまで ▲▲▲
-    // --- Initial State ---
+    
     showView('in-out-view');
     resetInOutView();
 });

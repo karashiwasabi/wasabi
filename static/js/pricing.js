@@ -1,27 +1,20 @@
-// C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\pricing.js
-
 import { wholesalerMap } from './master_data.js';
-
 let view, wholesalerSelect, exportBtn, uploadInput, bulkUpdateBtn, outputContainer, makerFilterInput;
 let fullPricingData = []; 
 let orderedWholesalers = []; 
 let setLowestPriceBtn;
-let unregisteredFilterCheckbox; 
+let unregisteredFilterCheckbox;
 let exportUnregisteredBtn; 
-let lastSelectedWholesaler = ''; 
+let lastSelectedWholesaler = '';
 
-/**
- * テーブルを描画する関数
- */
 function renderComparisonTable(data) {
     if (!data || data.length === 0) {
-        outputContainer.innerHTML = '<p>表示対象のデータが見つかりませんでした。</p>';
+        outputContainer.innerHTML = '<p>表示対象のデータがありませんでした。</p>';
         return;
     }
 
     const wholesalerHeaders = orderedWholesalers.length > 0 ?
         orderedWholesalers.map(w => `<th>${w}</th>`).join('') : '';
-    
     const wholesalerReverseMap = new Map();
     for (const [code, name] of wholesalerMap.entries()) {
         wholesalerReverseMap.set(name, code);
@@ -47,24 +40,20 @@ function renderComparisonTable(data) {
     `;
     data.forEach(p => {
         const productCode = p.productCode;
-
         let wholesalerOptions = '<option value="">--- 選択 ---</option>';
-        
         for (const [wCode, wName] of wholesalerMap.entries()) {
             const isSelected = (wCode === p.supplierWholesale);
             wholesalerOptions += `<option value="${wCode}" ${isSelected ? 'selected' : ''}>${wName}</option>`;
         }
-
-        const quoteCells = orderedWholesalers.length > 0 ? orderedWholesalers.map(w => {
+        const quoteCells = orderedWholesalers.length > 0 
+            ? orderedWholesalers.map(w => {
             const price = (p.quotes || {})[w];
             if (price === undefined) return '<td>-</td>';
             const lowestPrice = Math.min(...Object.values(p.quotes || {}).filter(v => typeof v === 'number'));
             const style = (price === lowestPrice) ? 'style="background-color: #d1e7dd; font-weight: bold;"' : '';
             return `<td class="right" ${style}>${price.toFixed(2)}</td>`;
         }).join('') : '<td>-</td>';
-        
         const initialPrice = p.purchasePrice > 0 ? p.purchasePrice.toFixed(2) : '';
-        
         tableHTML += `
             <tr data-product-code="${productCode}">
                 <td class="left">${p.productName}</td>
@@ -77,14 +66,10 @@ function renderComparisonTable(data) {
             </tr>
         `;
     });
-
     tableHTML += `</tbody></table>`;
     outputContainer.innerHTML = tableHTML;
 }
 
-/**
- * サーバーに更新データを送信し、成功なら画面を再描画する共通関数
- */
 async function sendUpdatePayload(payload) {
     if (payload.length === 0) {
         window.showNotification('更新するデータがありません。', 'error');
@@ -110,7 +95,6 @@ async function sendUpdatePayload(payload) {
             }
         });
         applyFiltersAndRender();
-
     } catch (err) {
         window.showNotification(err.message, 'error');
     } finally {
@@ -118,10 +102,6 @@ async function sendUpdatePayload(payload) {
     }
 }
 
-
-/**
- * 「一括更新」ボタンが押されたときの処理
- */
 async function handleBulkUpdate() {
     if (!confirm('表示されている全ての行の内容でマスターデータを一括更新します。よろしいですか？')) {
         return;
@@ -134,7 +114,6 @@ async function handleBulkUpdate() {
         const manualPriceInput = row.querySelector('.manual-price-input');
         const selectedWholesalerCode = supplierSelect.value;
         const price = parseFloat(manualPriceInput.value);
-        
         if (productCode && selectedWholesalerCode && !isNaN(price)) {
             payload.push({ productCode, newPrice: price, newWholesaler: selectedWholesalerCode });
         } else if (productCode && !selectedWholesalerCode) {
@@ -144,55 +123,56 @@ async function handleBulkUpdate() {
     await sendUpdatePayload(payload);
 }
 
-/**
- * フィルターを適用してテーブルを再描画する
- */
 function applyFiltersAndRender() {
     let dataToRender = fullPricingData;
     if (unregisteredFilterCheckbox.checked) {
         dataToRender = dataToRender.filter(p => !p.supplierWholesale);
     }
-
     const filterText = makerFilterInput.value.trim().toLowerCase();
     if (filterText) {
         dataToRender = dataToRender.filter(p => 
             p.makerName && p.makerName.toLowerCase().includes(filterText)
         );
     }
-    
     renderComparisonTable(dataToRender); 
 }
 
-/**
- * ファイルアップロード時の処理
- */
 async function handleUpload() {
-    const files = uploadInput.files;
+    const files = Array.from(uploadInput.files);
     if (files.length === 0) return;
     window.showLoading();
     try {
         const formData = new FormData();
-        const fileList = Array.from(files);
-        fileList.sort((a, b) => {
-            const aNum = parseInt(a.name.split('_')[0], 10);
-            const bNum = parseInt(b.name.split('_')[0], 10);
-            if (!isNaN(aNum) && !isNaN(bNum)) return aNum - bNum;
-            return a.name.localeCompare(b.name);
-        });
         const wholesalerNames = [];
-        for (const file of fileList) {
-            const parts = file.name.split('_');
-            if (parts.length >= 3 && parts[1] === '価格見積依頼') {
-                formData.append('files', file);
-                wholesalerNames.push(parts[2]);
+        const processedFiles = [];
+
+        files.forEach(file => {
+            const match = file.name.match(/^(\d+)_/);
+            const priority = match ? parseInt(match[1], 10) : Infinity;
+            
+            // ファイル名から卸名部分を抽出（例: 1_価格見積依頼_卸名_... -> 卸名）
+            const nameParts = file.name.replace(/^\d+_/, '').split('_');
+            if (nameParts.length > 1) {
+                 processedFiles.push({ file: file, priority: priority, wholesalerName: nameParts[1] });
             } else {
-                 window.showNotification(`ファイル名が不正です: ${file.name} (形式: 1_価格見積依頼_卸名_日付.csv)`, 'error');
+                 window.showNotification(`ファイル名から卸名を抽出できませんでした: ${file.name}`, 'error');
             }
+        });
+
+        // 優先順位でファイルをソート
+        processedFiles.sort((a, b) => a.priority - b.priority);
+
+        // ソートされた順にFormDataに追加
+        processedFiles.forEach(item => {
+            formData.append('files', item.file);
+            wholesalerNames.push(item.wholesalerName);
+        });
+
+        if (formData.getAll('files').length === 0) {
+            throw new Error('処理できる有効なファイルがありませんでした。');
         }
         
-        if(formData.getAll('files').length === 0) throw new Error('処理できる有効なファイルがありませんでした。');
-        formData.delete('wholesalerNames');
-        wholesalerNames.forEach(name => formData.append('wholesalerNames', name)); 
+        wholesalerNames.forEach(name => formData.append('wholesalerNames', name));
 
         const res = await fetch('/api/pricing/upload', {
             method: 'POST',
@@ -215,76 +195,26 @@ async function handleUpload() {
     }
 }
 
-/**
- * 見積もり依頼CSVをエクスポートする
- */
 async function handleExport(unregisteredOnly = false) {
-    let dataToExport = fullPricingData;
-    let fileNameSuffix = "全品";
-
-    if (unregisteredOnly) {
-        // ▼▼▼ [修正点] ご指定のフィルターロジックをここに追加 ▼▼▼
-        // 1. まず「採用卸が未登録」で絞り込む
-        const unregisteredItems = fullPricingData.filter(p => !p.supplierWholesale);
-
-        // 2. 次にご指定の追加条件で絞り込む
-        dataToExport = unregisteredItems.filter(p => {
-            const uc = p.usageClassification;
-            // 剤型が「機」または「他」の場合は含める
-            if (uc === '機' || uc === '他') {
-                return true;
-            }
-            // 剤型が「内」「外」「歯」「注」で、かつJCSHMS由来の場合は含める
-            if (['内', '外', '歯', '注'].includes(uc) && p.origin === 'JCSHMS') {
-                return true;
-            }
-            // 上記以外は除外
-            return false;
-        });
-        // ▲▲▲ 修正ここまで ▲▲▲
-
-        fileNameSuffix = "未登録品";
-        if (dataToExport.length === 0) {
-            window.showNotification('エクスポート対象の未登録品がありません。', 'error');
-            return;
-        }
-    }
-    
-    const selectedWholesalerName = wholesalerSelect.options[wholesalerSelect.selectedIndex].text;
-    if (!wholesalerSelect.value) {
+    const wholesalerSelectEl = document.getElementById('pricing-wholesaler-select');
+    const selectedWholesalerName = wholesalerSelectEl.options[wholesalerSelectEl.selectedIndex].text;
+    if (!wholesalerSelectEl.value) {
         window.showNotification('テンプレートを出力する卸業者を選択してください。', 'error'); 
         return;
     }
 
-    window.showLoading();
-    try {
-        const header = ["product_code", "product_name", "maker_name", "package_spec", "purchase_price"];
-        const csvRows = dataToExport.map(d => 
-            [ `"${d.productCode}"`, `"${d.productName}"`, `"${d.makerName}"`, `"${d.formattedPackageSpec}"`, `""` ].join(',')
-        );
-        const csvContent = [header.join(','), ...csvRows].join('\r\n'); 
-        const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csvContent], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement("a"); 
-        const date = new Date();
-        const dateStr = `${date.getFullYear()}${(date.getMonth()+1).toString().padStart(2, '0')}${date.getDate().toString().padStart(2, '0')}`;
-        const fileName = `価格見積依頼_${selectedWholesalerName}_${fileNameSuffix}_${dateStr}.csv`;
-        link.setAttribute("href", URL.createObjectURL(blob)); 
-        link.setAttribute("download", fileName); 
-        link.style.visibility = 'hidden'; 
-        document.body.appendChild(link); 
-        link.click(); 
-        document.body.removeChild(link); 
-        window.showNotification('CSVファイルをエクスポートしました。', 'success');
-    } catch (err) {
-        window.showNotification(err.message, 'error');
-    } finally {
-        window.hideLoading();
-    }
+    const date = new Date();
+    const dateStr = `${date.getFullYear()}${(date.getMonth()+1).toString().padStart(2, '0')}${date.getDate().toString().padStart(2, '0')}`;
+    
+    const params = new URLSearchParams({
+        wholesalerName: selectedWholesalerName,
+        unregisteredOnly: unregisteredOnly,
+        date: dateStr,
+    });
+
+    window.location.href = `/api/pricing/export?${params.toString()}`;
 }
 
-/**
- * 画面表示時に最初にマスターデータを読み込む関数
- */
 async function loadInitialMasters() {
     outputContainer.innerHTML = '<p>製品マスターを読み込んでいます...</p>';
     window.showLoading();
@@ -318,7 +248,6 @@ function loadWholesalerDropdown() {
 function handleSetLowestPrice() {
     const rows = outputContainer.querySelectorAll('tbody tr');
     if (rows.length === 0) return;
-
     const wholesalerReverseMap = new Map();
     for (const [code, name] of wholesalerMap.entries()) {
         wholesalerReverseMap.set(name, code);
@@ -334,6 +263,7 @@ function handleSetLowestPrice() {
         
         orderedWholesalers.forEach(wholesalerName => {
             const price = productData.quotes[wholesalerName];
+ 
             if (price !== undefined && price < lowestPrice) {
                 lowestPrice = price;
                 bestWholesalerName = wholesalerName;
@@ -369,13 +299,9 @@ function handleSupplierChange(event) {
     }
 }
 
-/**
- * 価格更新ビューの初期化
- */
 export function initPricingView() {
     view = document.getElementById('pricing-view');
     if (!view) return;
-    
     wholesalerSelect = document.getElementById('pricing-wholesaler-select');
     exportBtn = document.getElementById('pricing-export-btn');
     uploadInput = document.getElementById('pricing-upload-input'); 
@@ -385,12 +311,56 @@ export function initPricingView() {
     setLowestPriceBtn = document.getElementById('set-lowest-price-btn');
     unregisteredFilterCheckbox = document.getElementById('pricing-unregistered-filter');
     exportUnregisteredBtn = document.getElementById('pricing-export-unregistered-btn');
-    
+
+    // ▼▼▼ Add these two lines ▼▼▼
+    const directImportBtn = document.getElementById('pricing-direct-import-btn');
+    const directImportInput = document.getElementById('pricing-direct-import-input');
+    // ▲▲▲ Addition complete ▲▲▲    
+
     view.addEventListener('show', () => {
         loadWholesalerDropdown();
         loadInitialMasters();
     });
-    
+
+    // ▼▼▼ Add these event listeners ▼▼▼
+    directImportBtn.addEventListener('click', () => {
+        directImportInput.click();
+    });
+
+    directImportInput.addEventListener('change', async (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        if (!confirm('選択したファイルの内容で納入価と卸情報を一括更新します。この操作は元に戻せません。よろしいですか？')) {
+            event.target.value = ''; // Reset the file input
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        window.showLoading();
+        try {
+            const res = await fetch('/api/pricing/direct_import', {
+                method: 'POST',
+                body: formData,
+            });
+            const resData = await res.json();
+            if (!res.ok) {
+                throw new Error(resData.message || 'インポートに失敗しました。');
+            }
+            window.showNotification(resData.message, 'success');
+            loadInitialMasters(); // Refresh the main table with updated data
+        } catch (err) {
+            console.error(err);
+            window.showNotification(`エラー: ${err.message}`, 'error');
+        } finally {
+            window.hideLoading();
+            event.target.value = ''; // Reset the file input
+        }
+    });
+    // ▲▲▲ Addition complete ▲▲▲
+
     uploadInput.addEventListener('change', handleUpload); 
     bulkUpdateBtn.addEventListener('click', handleBulkUpdate); 
     setLowestPriceBtn.addEventListener('click', handleSetLowestPrice);
@@ -402,7 +372,6 @@ export function initPricingView() {
     unregisteredFilterCheckbox.addEventListener('change', applyFiltersAndRender);
 
     outputContainer.addEventListener('change', handleSupplierChange);
-    
     wholesalerSelect.addEventListener('change', () => {
         lastSelectedWholesaler = wholesalerSelect.value;
     });

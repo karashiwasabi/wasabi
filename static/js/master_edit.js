@@ -1,6 +1,10 @@
 // C:\Dev\WASABI\static\js\master_edit.js
 
 import { showModal } from './inout_modal.js';
+// ▼▼▼ [修正点] utilsから変換関数をインポート ▼▼▼
+import { hiraganaToKatakana } from './utils.js';
+// ▲▲▲ 修正ここまで ▲▲▲
+
 let view, tableContainer, refreshBtn, addRowBtn;
 let unitMap = {};
 
@@ -28,7 +32,8 @@ function formatPackageSpecForRow(tbody) {
     
     let formattedSpec = `${packageForm} ${yjPackUnitQty}${yjUnitName}`;
     if (parseFloat(janPackInnerQty) > 0 && parseFloat(janPackUnitQty) > 0) {
-        let janUnitName = (janUnitCode === '0' || janUnitCode === '') ? '' : (unitMap[janUnitCode] || '');
+        let janUnitName = (janUnitCode === '0' || janUnitCode === '') ?
+            '' : (unitMap[janUnitCode] || '');
         formattedSpec += ` (${janPackInnerQty}${yjUnitName}×${janPackUnitQty}${janUnitName})`;
     }
     const targetCell = tbody.querySelector('.formatted-spec-cell');
@@ -73,7 +78,7 @@ function createMasterRowHTML(master = {}) {
             for (const [code, name] of Object.entries(unitMap)) {
                 if (code !== '0') options += `<option value="${code}" ${code == f.value ? 'selected' : ''}>${name}</option>`;
             }
-             return `<td><select name="${f.key}">${options}</select></td>`;
+            return `<td><select name="${f.key}">${options}</select></td>`;
         }
         return `<td><input type="${f.type || 'text'}" name="${f.key}" value="${f.value ?? master[f.key] ?? ''}" placeholder="${f.ph}"></td>`;
     }).join('');
@@ -143,17 +148,25 @@ export async function initMasterEdit() {
         const newTableHTML = `<table class="data-table" style="margin-bottom: 15px;">${tableHeader}${newRowContent}</table>`;
         tableContainer.insertAdjacentHTML('beforeend', newTableHTML);
         const newTable = tableContainer.lastElementChild;
-       
-         if (newTable) {
+        if (newTable) {
             newTable.scrollIntoView({ behavior: 'smooth', block: 'end' });
             const firstInput = newTable.querySelector('input');
             if (firstInput) firstInput.focus();
         }
     });
+
+    // ▼▼▼ [修正点] inputイベントリスナーを修正し、カナ変換を追加 ▼▼▼
     tableContainer.addEventListener('input', (e) => {
-        const tbody = e.target.closest('tbody[data-record-id]');
-        if (tbody) formatPackageSpecForRow(tbody);
+        const target = e.target;
+        const tbody = target.closest('tbody[data-record-id]');
+        
+        // 包装仕様のフォーマット（既存の処理）
+        if (tbody) {
+            formatPackageSpecForRow(tbody);
+        }
     });
+    // ▲▲▲ 修正ここまで ▲▲▲
+
     tableContainer.addEventListener('click', async (e) => {
         const target = e.target;
         const tbody = target.closest('tbody[data-record-id]');
@@ -163,11 +176,9 @@ export async function initMasterEdit() {
             const data = {};
             tbody.querySelectorAll('input, select').forEach(el => {
                 const name = el.name;
-     
                 const value = el.value;
                 if (el.tagName === 'SELECT' || el.type === 'number') {
                     const numValue = parseFloat(value);
-                   
                     data[name] = !isNaN(numValue) ? numValue : 0;
                 } else {
                     data[name] = value;
@@ -175,9 +186,7 @@ export async function initMasterEdit() {
             });
       
             data.packageSpec = data.packageForm;
-            // ▼▼▼ [修正点] "MANUAL" を "PROVISIONAL" に変更 ▼▼▼
             data.origin = "PROVISIONAL";
-            // ▲▲▲ 修正ここまで ▲▲▲
             data.purchasePrice = 0;
             data.supplierWholesale = '';
 
@@ -191,7 +200,6 @@ export async function initMasterEdit() {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(data),
-            
                 });
                 const resData = await res.json();
                 if (!res.ok) throw new Error(resData.message || '保存に失敗しました。');

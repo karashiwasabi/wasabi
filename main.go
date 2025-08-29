@@ -18,7 +18,7 @@ import (
 	"wasabi/dat"
 	"wasabi/db"
 	"wasabi/deadstock"
-	"wasabi/guidedinventory" // ▼▼▼ import を追加 ▼▼▼
+	"wasabi/guidedinventory"
 	"wasabi/inout"
 	"wasabi/inventory"
 	"wasabi/loader"
@@ -27,7 +27,7 @@ import (
 	"wasabi/orders"
 	"wasabi/precomp"
 	"wasabi/pricing"
-	"wasabi/product" // ▼▼▼ import を追加 ▼▼▼
+	"wasabi/product"
 	"wasabi/reprocess"
 	"wasabi/returns"
 	"wasabi/settings"
@@ -65,6 +65,7 @@ func main() {
 
 	// API Endpoints
 	mux.HandleFunc("/api/valuation", valuation.GetValuationHandler(conn))
+	mux.HandleFunc("/api/valuation/export", valuation.ExportValuationHandler(conn))
 	mux.HandleFunc("/api/dat/upload", dat.UploadDatHandler(conn))
 	mux.HandleFunc("/api/usage/upload", usage.UploadUsageHandler(conn))
 	mux.HandleFunc("/api/inout/save", inout.SaveInOutHandler(conn))
@@ -84,38 +85,52 @@ func main() {
 	mux.HandleFunc("/api/clients/import", backup.ImportClientsHandler(conn))
 	mux.HandleFunc("/api/products/export", backup.ExportProductsHandler(conn))
 	mux.HandleFunc("/api/products/import", backup.ImportProductsHandler(conn))
+	// ▼▼▼【ここに追加】▼▼▼
+	mux.HandleFunc("/api/pricing/backup_export", pricing.BackupExportHandler(conn))
+	// ▲▲▲【追加ここまで】▲▲▲
 	mux.HandleFunc("/api/transactions/reprocess", reprocess.ProcessTransactionsHandler(conn))
 	mux.HandleFunc("/api/deadstock/list", deadstock.GetDeadStockHandler(conn))
 	mux.HandleFunc("/api/deadstock/save", deadstock.SaveDeadStockHandler(conn))
+	mux.HandleFunc("/api/deadstock/import", deadstock.ImportDeadStockHandler(conn))
 	mux.HandleFunc("/api/settings/get", settings.GetSettingsHandler(conn))
 	mux.HandleFunc("/api/settings/save", settings.SaveSettingsHandler(conn))
 	mux.HandleFunc("/api/settings/wholesalers", settings.WholesalersHandler(conn))
 	mux.HandleFunc("/api/settings/wholesalers/", settings.WholesalersHandler(conn))
 	mux.HandleFunc("/api/transactions/clear_all", settings.ClearTransactionsHandler(conn))
+	// ▼▼▼【ここに追加】▼▼▼
+	mux.HandleFunc("/api/masters/clear_all", settings.ClearMastersHandler(conn))
+	// ▲▲▲【追加ここまで】▲▲▲
 	mux.HandleFunc("/api/masters/search_all", db.SearchAllMastersHandler(conn))
 	mux.HandleFunc("/api/precomp/save", precomp.SavePrecompHandler(conn))
 	mux.HandleFunc("/api/precomp/load", precomp.LoadPrecompHandler(conn))
 	mux.HandleFunc("/api/precomp/clear", precomp.ClearPrecompHandler(conn))
+	mux.HandleFunc("/api/precomp/export", precomp.ExportPrecompHandler(conn))
+	mux.HandleFunc("/api/precomp/import", precomp.ImportPrecompHandler(conn))
+	// ▼▼▼【ここに追加】▼▼▼
+	mux.HandleFunc("/api/precomp/import_all", precomp.BulkImportPrecompHandler(conn))
+	// ▲▲▲【追加ここまで】▲▲▲
+	mux.HandleFunc("/api/precomp/export_all", precomp.ExportAllPrecompHandler(conn))
 	mux.HandleFunc("/api/orders/candidates", orders.GenerateOrderCandidatesHandler(conn))
 	mux.HandleFunc("/api/orders/place", orders.PlaceOrderHandler(conn))
 	mux.HandleFunc("/api/returns/candidates", returns.GenerateReturnCandidatesHandler(conn))
 	mux.HandleFunc("/api/backorders", backorder.GetBackordersHandler(conn))
 	mux.HandleFunc("/api/backorders/delete", backorder.DeleteBackorderHandler(conn))
-	mux.HandleFunc("/api/masters/reload_jcshms", loader.ReloadJcshmsHandler(conn))
-	mux.HandleFunc("/api/pricing/export_data", pricing.GetExportDataHandler(conn))
+	mux.HandleFunc("/api/backorders/bulk_delete", backorder.BulkDeleteBackordersHandler(conn))
+	mux.HandleFunc("/api/masters/reload_jcshms", loader.CreateMasterUpdateHandler(conn))
+	mux.HandleFunc("/api/pricing/export", pricing.GetExportDataHandler(conn))
 	mux.HandleFunc("/api/pricing/upload", pricing.UploadQuotesHandler(conn))
 	mux.HandleFunc("/api/pricing/update", pricing.BulkUpdateHandler(conn))
 	mux.HandleFunc("/api/pricing/all_masters", pricing.GetAllMastersForPricingHandler(conn))
+	// ▼▼▼ Add this line ▼▼▼
+	mux.HandleFunc("/api/pricing/direct_import", pricing.DirectImportHandler(conn))
+	// ▲▲▲ Addition complete ▲▲▲
 	mux.HandleFunc("/api/masters/by_yj_code", db.GetMastersByYjCodeHandler(conn))
 	mux.HandleFunc("/api/stock/current", stock.GetCurrentStockHandler(conn))
 	mux.HandleFunc("/api/stock/all_current", stock.GetAllCurrentStockHandler(conn))
 	mux.HandleFunc("/api/medrec/download", medrec.DownloadHandler(conn))
-
-	// ▼▼▼ 以下をAPIエンドポイントの末尾に追加 ▼▼▼
 	mux.HandleFunc("/api/products/search_filtered", product.SearchProductsHandler(conn))
 	mux.HandleFunc("/api/inventory/adjust/data", guidedinventory.GetInventoryDataHandler(conn))
 	mux.HandleFunc("/api/inventory/adjust/save", guidedinventory.SaveInventoryDataHandler(conn))
-	// ▲▲▲ 追加ここまで ▲▲▲
 
 	// Serve Frontend
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))

@@ -28,6 +28,9 @@ func GetAggregationHandler(conn *sql.DB) http.HandlerFunc {
 			DrugTypes:   strings.Split(q.Get("drugTypes"), ","),
 			DosageForm:  q.Get("dosageForm"), // 剤型を取得
 			Coefficient: coefficient,
+			// ▼▼▼ [修正点] 以下の行を追加 ▼▼▼
+			MovementOnly: q.Get("movementOnly") == "true",
+			// ▲▲▲ 修正ここまで ▲▲▲
 		}
 
 		results, err := db.GetStockLedger(conn, filters)

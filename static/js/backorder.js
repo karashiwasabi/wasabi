@@ -8,17 +8,22 @@ function renderBackorders(data) {
         return;
     }
 
-    // ▼▼▼ [修正点] テーブルヘッダーに「操作」列を追加 ▼▼▼
+    // ▼▼▼ [修正点] UIに一括操作ボタンとテーブルヘッダーのチェックボックスを追加 ▼▼▼
     let html = `
+        <div class="controls-grid" style="margin-bottom: 10px; display: flex; gap: 10px;">
+            <button class="btn" id="bulk-delete-backorder-btn" style="background-color: #dc3545; color: white;">選択した項目を一括削除</button>
+            <button class="btn" id="delete-all-backorder-btn">表示されている項目を全て削除</button>
+        </div>
         <table class="data-table">
             <thead>
                 <tr>
+                    <th style="width: 5%;"><input type="checkbox" id="select-all-backorders-checkbox"></th>
                     <th style="width: 10%;">発注日</th>
                     <th style="width: 10%;">YJコード</th>
                     <th style="width: 30%;">製品名</th>
-                    <th style="width: 30%;">包装仕様</th>
+                    <th style="width: 25%;">包装仕様</th>
                     <th style="width: 10%;">発注残数量</th>
-                    <th style="width: 10%;">操作</th>
+                    <th style="width: 10%;">個別操作</th>
                 </tr>
             </thead>
             <tbody>
@@ -26,18 +31,15 @@ function renderBackorders(data) {
     // ▲▲▲ 修正ここまで ▲▲▲
 
     data.forEach(bo => {
-        // ▼▼▼【ここから修正】▼▼▼
-        // 以前の不正確な文字列組み立てロジックを削除し、
-        // バックエンドから渡されたフォーマット済み文字列をそのまま使用する
         const pkgSpec = bo.formattedPackageSpec;
-        // ▲▲▲【修正ここまで】▲▲▲
 
-        // ▼▼▼ [修正点] 削除ボタンと、削除に必要な情報をdata属性として追加 ▼▼▼
+        // ▼▼▼ [修正点] 行の先頭にチェックボックスを追加し、個別削除ボタンの文言を修正 ▼▼▼
         html += `
             <tr data-yj-code="${bo.yjCode}"
                 data-package-form="${bo.packageForm}"
                 data-jan-pack-inner-qty="${bo.janPackInnerQty}"
                 data-yj-unit-name="${bo.yjUnitName}">
+                <td class="center"><input type="checkbox" class="backorder-select-checkbox"></td>
                 <td>${bo.orderDate}</td>
                 <td>${bo.yjCode}</td>
                 <td class="left">${bo.productName}</td>
@@ -48,7 +50,6 @@ function renderBackorders(data) {
         `;
         // ▲▲▲ 修正ここまで ▲▲▲
     });
-
     html += `</tbody></table>`;
     outputContainer.innerHTML = html;
 }
@@ -65,55 +66,99 @@ async function loadAndRenderBackorders() {
     }
 }
 
-// ▼▼▼ [修正点] 削除ボタンのクリックイベント処理を追加 ▼▼▼
-async function handleDeleteClick(e) {
-    if (!e.target.classList.contains('delete-backorder-btn')) {
-        return;
-    }
+// ▼▼▼ [修正点] イベント処理をイベント委譲方式にまとめ、一括削除ロジックを追加 ▼▼▼
+async function handleBackorderEvents(e) {
+    const target = e.target;
 
-    const row = e.target.closest('tr');
-    const productName = row.cells[2].textContent;
-    if (!confirm(`「${productName}」の発注残を削除しますか？`)) {
-        return;
-    }
-
-    const payload = {
-        yjCode: row.dataset.yjCode,
-        packageForm: row.dataset.packageForm,
-        janPackInnerQty: parseFloat(row.dataset.janPackInnerQty),
-        yjUnitName: row.dataset.yjUnitName,
-    };
-
-    window.showLoading();
-    try {
-        const res = await fetch('/api/backorders/delete', {
-            method: 'POST', // DELETEメソッドも使えますが、POSTの方が安定することがあります
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-        });
-        const resData = await res.json();
-        if (!res.ok) {
-            throw new Error(resData.message || '削除に失敗しました。');
+    // 個別削除ボタン
+    if (target.classList.contains('delete-backorder-btn')) {
+        const row = target.closest('tr');
+        if (!confirm(`「${row.cells[3].textContent}」の発注残を削除しますか？`)) {
+            return;
         }
-        window.showNotification(resData.message, 'success');
-        loadAndRenderBackorders(); // 成功したらリストを再読み込み
-    } catch (err) {
-        window.showNotification(err.message, 'error');
-    } finally {
-        window.hideLoading();
+        const payload = {
+            yjCode: row.dataset.yjCode,
+            packageForm: row.dataset.packageForm,
+            janPackInnerQty: parseFloat(row.dataset.janPackInnerQty),
+            yjUnitName: row.dataset.yjUnitName,
+        };
+        window.showLoading();
+        try {
+            const res = await fetch('/api/backorders/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const resData = await res.json();
+            if (!res.ok) throw new Error(resData.message || '削除に失敗しました。');
+            window.showNotification(resData.message, 'success');
+            loadAndRenderBackorders();
+        } catch (err) {
+            window.showNotification(err.message, 'error');
+        } finally {
+            window.hideLoading();
+        }
+    }
+
+    // 全選択チェックボックス
+    if (target.id === 'select-all-backorders-checkbox') {
+        const isChecked = target.checked;
+        document.querySelectorAll('.backorder-select-checkbox').forEach(cb => cb.checked = isChecked);
+    }
+
+    // 全件削除ボタン
+    if (target.id === 'delete-all-backorder-btn') {
+        document.getElementById('select-all-backorders-checkbox').checked = true;
+        document.querySelectorAll('.backorder-select-checkbox').forEach(cb => cb.checked = true);
+        document.getElementById('bulk-delete-backorder-btn').click(); // 一括削除ボタンのクリックを擬似的に発火
+    }
+
+    // 選択項目の一括削除ボタン
+    if (target.id === 'bulk-delete-backorder-btn') {
+        const checkedRows = document.querySelectorAll('.backorder-select-checkbox:checked');
+        if (checkedRows.length === 0) {
+            window.showNotification('削除する項目が選択されていません。', 'error');
+            return;
+        }
+        if (!confirm(`${checkedRows.length}件の発注残を削除します。よろしいですか？`)) {
+            return;
+        }
+
+        const payload = Array.from(checkedRows).map(cb => {
+            const row = cb.closest('tr');
+            return {
+                yjCode: row.dataset.yjCode,
+                packageForm: row.dataset.packageForm,
+                janPackInnerQty: parseFloat(row.dataset.janPackInnerQty),
+                yjUnitName: row.dataset.yjUnitName,
+            };
+        });
+
+        window.showLoading();
+        try {
+            const res = await fetch('/api/backorders/bulk_delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const resData = await res.json();
+            if (!res.ok) throw new Error(resData.message || '一括削除に失敗しました。');
+            window.showNotification(resData.message, 'success');
+            loadAndRenderBackorders();
+        } catch (err) {
+            window.showNotification(err.message, 'error');
+        } finally {
+            window.hideLoading();
+        }
     }
 }
-// ▲▲▲ 修正ここまで ▲▲▲
 
 export function initBackorderView() {
     view = document.getElementById('backorder-view');
     if (!view) return;
     outputContainer = document.getElementById('backorder-output-container');
-
-    // viewが表示されるたびに最新のデータを読み込む
-    view.addEventListener('show', loadAndRenderBackorders);
     
-    // ▼▼▼ [修正点] クリックイベントリスナーを登録 ▼▼▼
-    outputContainer.addEventListener('click', handleDeleteClick);
-    // ▲▲▲ 修正ここまで ▲▲▲
+    view.addEventListener('show', loadAndRenderBackorders);
+    outputContainer.addEventListener('click', handleBackorderEvents);
 }
+// ▲▲▲ 修正ここまで ▲▲▲

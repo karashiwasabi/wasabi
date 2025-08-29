@@ -13,7 +13,13 @@ import (
 	"wasabi/units"
 )
 
-// kanaRowMap defines the characters for each row of the Japanese syllabary.
+var kanaVariants = map[rune][]rune{
+	'カ': {'ガ'}, 'キ': {'ギ'}, 'ク': {'グ'}, 'ケ': {'ゲ'}, 'コ': {'ゴ'},
+	'サ': {'ザ'}, 'シ': {'ジ'}, 'ス': {'ズ'}, 'セ': {'ゼ'}, 'ソ': {'ゾ'},
+	'タ': {'ダ'}, 'チ': {'ヂ'}, 'ツ': {'ヅ'}, 'テ': {'デ'}, 'ト': {'ド'},
+	'ハ': {'バ', 'パ'}, 'ヒ': {'ビ', 'ピ'}, 'フ': {'ブ', 'プ'}, 'ヘ': {'ベ', 'ペ'}, 'ホ': {'ボ', 'ポ'},
+}
+
 var kanaRowMap = map[string][]string{
 	"ア": {"ア", "イ", "ウ", "エ", "オ"},
 	"カ": {"カ", "キ", "ク", "ケ", "コ"},
@@ -27,33 +33,57 @@ var kanaRowMap = map[string][]string{
 	"ワ": {"ワ", "ヰ", "ヱ", "ヲ", "ン"},
 }
 
-// SearchProductsHandler searches for products by dosage form and the first character of their Kana name.
 func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		dosageForm := q.Get("dosageForm")
 		kanaInitial := q.Get("kanaInitial")
+		// ▼▼▼ [修正点] モーダル内からの検索キーワード(q)を取得する ▼▼▼
+		searchQuery := q.Get("q")
+		// ▲▲▲ 修正ここまで ▲▲▲
 
 		query := `SELECT ` + db.SelectColumns + ` FROM product_master WHERE yj_code != ''`
 		var args []interface{}
 
 		if dosageForm != "" {
-			query += " AND usage_classification = ?"
-			args = append(args, dosageForm)
+			query += " AND usage_classification LIKE ?"
+			args = append(args, "%"+dosageForm+"%")
 		}
 
 		if kanaInitial != "" {
 			if kanaChars, ok := kanaRowMap[toKatakana(kanaInitial)]; ok {
 				var conditions []string
-				for _, char := range kanaChars {
-					hiraChar := toHiragana(char)
-					kataChar := toKatakana(char)
-					conditions = append(conditions, "kana_name LIKE ? OR kana_name LIKE ?")
-					args = append(args, kataChar+"%", hiraChar+"%")
+				for _, charStr := range kanaChars {
+					baseRunes := []rune(charStr)
+					if len(baseRunes) == 0 {
+						continue
+					}
+					baseRune := baseRunes[0]
+
+					charsToTest := []rune{baseRune}
+					if variants, found := kanaVariants[baseRune]; found {
+						charsToTest = append(charsToTest, variants...)
+					}
+
+					for _, char := range charsToTest {
+						kataChar := string(char)
+						hiraChar := toHiragana(kataChar)
+						conditions = append(conditions, "kana_name LIKE ? OR kana_name LIKE ?")
+						args = append(args, kataChar+"%", hiraChar+"%")
+					}
 				}
-				query += " AND (" + strings.Join(conditions, " OR ") + ")"
+				if len(conditions) > 0 {
+					query += " AND (" + strings.Join(conditions, " OR ") + ")"
+				}
 			}
 		}
+
+		// ▼▼▼ [修正点] モーダル内検索のキーワードがあれば、絞り込み条件を追加 ▼▼▼
+		if searchQuery != "" {
+			query += " AND (kana_name LIKE ? OR product_name LIKE ?)"
+			args = append(args, "%"+searchQuery+"%", "%"+searchQuery+"%")
+		}
+		// ▲▲▲ 修正ここまで ▲▲▲
 
 		query += " ORDER BY kana_name"
 
@@ -84,9 +114,18 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 				}
 				formattedSpec := units.FormatPackageSpec(&tempJcshms)
 
+				janUnitName := master.YjUnitName
+				if master.JanUnitCode != 0 {
+					resolved := units.ResolveName(fmt.Sprintf("%d", master.JanUnitCode))
+					if resolved != fmt.Sprintf("%d", master.JanUnitCode) {
+						janUnitName = resolved
+					}
+				}
+
 				view := model.ProductMasterView{
 					ProductMaster:        *master,
 					FormattedPackageSpec: formattedSpec,
+					JanUnitName:          janUnitName,
 				}
 				results = append(results, view)
 				seenYjCodes[master.YjCode] = true

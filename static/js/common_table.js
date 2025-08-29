@@ -1,31 +1,24 @@
-// C:\Dev\WASABI\static\js\common_table.js
+import { clientMap, wholesalerMap } from './master_data.js';
 
-import { clientMap, wholesalerMap } from './master_data.js'; // ★ 一元管理しているマップをインポート
-
-export const transactionTypeMap = {
-    0: "棚卸", 1: "納品", 2: "返品", 3: "処方", 4: "棚卸増",
-    5: "棚卸減", 11: "入庫", 12: "出庫", 30: "月末",
+export const transactionTypeMap = { 
+    0: "棚卸", 1: "納品", 2: "返品", 3: "処方", 4: "棚卸増", 
+    5: "棚卸減", 11: "入庫", 12: "出庫", 30: "月末", 
 };
 
-/**
- * 取引レコードを受け取り、状況に応じて得意先名または卸業者名を返す関数
- * @param {object} rec - 取引レコード
- * @returns {string} 得意先名、卸業者名、またはコード
- */
-function getClientOrWholesalerName(rec) {
+function getClientOrWholesalerName(rec) { 
     if (!rec.clientCode) return '';
-
-    // flagが1(納品)または2(返品)の場合、clientCodeは卸業者コードを指す
-    if (rec.flag === 1 || rec.flag === 2) {
+    if (rec.flag === 1 || rec.flag === 2) { 
         return wholesalerMap.get(rec.clientCode) || rec.clientCode;
     }
-
-    // それ以外の場合、clientCodeは得意先コードを指す
     return clientMap.get(rec.clientCode) || rec.clientCode;
 }
 
-// teble.htmlのレイアウトを正確に再現する関数
-export function createUploadTableHTML(tableId) {
+/**
+ * [修正点]
+ * 汎用性を高めるため、tbodyの中身を空にして返すように変更。
+ * 呼び出し元で中身を結合して使用する。
+ */
+export function createUploadTableHTML(tableId) { 
   const colgroup = `
     <colgroup>
       <col class="col-1"><col class="col-2"><col class="col-3"><col class="col-4"><col class="col-5">
@@ -48,23 +41,40 @@ export function createUploadTableHTML(tableId) {
       </tr>
     </thead>
   `;
-  return `<table id="${tableId}" class="data-table">${colgroup}${header}<tbody>
-    <tr><td colspan="14">ファイルを選択してください。</td></tr>
-  </tbody></table>`;
+  // 中身が空のtbodyを持つテーブルの骨格を返す
+  return `<table id="${tableId}" class="data-table">${colgroup}${header}<tbody></tbody></table>`;
 }
 
-// 新レイアウトに合わせて表示用の行を生成する関数
-export function renderUploadTableRows(tableId, records) {
-  const tbody = document.querySelector(`#${tableId} tbody`);
-  if (!records || records.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="14">対象データがありません。</td></tr>`;
-    return;
+/**
+ * [修正点]
+ * DOMを直接操作するのをやめ、テーブルの中身となるHTML文字列を生成して返すように変更。
+ * 引数からtableIdを削除。
+ * @param {Array} records - 表示する取引記録の配列
+ * @returns {string} 生成された <tr>...</tr> のHTML文字列
+ */
+export function renderUploadTableRows(records) {
+  if (!records || records.length === 0) { 
+    return `<tr><td colspan="14">対象データがありません。</td></tr>`;
   }
   
+  const getTxClass = (flag) => {
+    switch (flag) {
+      case 2:
+        return 'tx-return';
+      case 0:
+      case 4:
+      case 5:
+        return 'tx-inventory';
+      default:
+        return '';
+    }
+  };
+
   let html = "";
   records.forEach(rec => {
+    const rowClass = getTxClass(rec.flag);
     html += `
-      <tr>
+      <tr class="${rowClass}">
         <td rowspan="2"></td>
         <td>${rec.transactionDate || ""}</td>
         <td class="yj-jan-code">${rec.yjCode || ""}</td>
@@ -72,18 +82,16 @@ export function renderUploadTableRows(tableId, records) {
         <td class="right">${rec.datQuantity?.toFixed(2) || ""}</td>
         <td class="right">${rec.yjQuantity?.toFixed(2) || ""}</td>
         <td class="right">${rec.yjPackUnitQty || ""}</td>
-   
-         <td>${rec.yjUnitName || ""}</td>
+        <td>${rec.yjUnitName || ""}</td>
         <td class="right">${rec.unitPrice?.toFixed(4) || ""}</td>
         <td class="right">${rec.taxAmount?.toFixed(2) || ""}</td>
         <td>${rec.expiryDate || ""}</td>
         <td class="left">${getClientOrWholesalerName(rec)}</td>
         <td class="right">${rec.lineNumber || ""}</td>
       </tr>
-      <tr>
+      <tr class="${rowClass}">
         <td>${transactionTypeMap[rec.flag] ?? ""}</td>
         <td class="yj-jan-code">${rec.janCode || ""}</td>
-      
         <td class="left">${rec.packageSpec || ""}</td>
         <td class="left">${rec.makerName || ""}</td>
         <td class="left">${rec.usageClassification || ""}</td>
@@ -98,31 +106,34 @@ export function renderUploadTableRows(tableId, records) {
       </tr>
     `;
   });
-  tbody.innerHTML = html;
+  
+  // DOM操作の代わりにHTML文字列を返す
+  return html;
 }
-// (setupDateDropdown and setupClientDropdown functions are unchanged)
-export function setupDateDropdown(inputEl) {
-  if (!inputEl) return;
+
+export function setupDateDropdown(inputEl) { 
+  if (!inputEl) return; 
   inputEl.value = new Date().toISOString().slice(0, 10);
 }
-export async function setupClientDropdown(selectEl) {
-  if (!selectEl) return;
-  const preservedOptions = Array.from(selectEl.querySelectorAll('option[value=""]'));
-  selectEl.innerHTML = '';
+
+export async function setupClientDropdown(selectEl) { 
+  if (!selectEl) return; 
+  const preservedOptions = Array.from(selectEl.querySelectorAll('option[value=""]')); 
+  selectEl.innerHTML = ''; 
   preservedOptions.forEach(opt => selectEl.appendChild(opt));
-  try {
-    const res = await fetch('/api/clients');
+  try { 
+    const res = await fetch('/api/clients'); 
     if (!res.ok) throw new Error('Failed to fetch clients');
     const clients = await res.json();
-    if (clients) {
-      clients.forEach(c => {
-        const opt = document.createElement('option');
-        opt.value = c.code;
-        opt.textContent = `${c.code}:${c.name}`;
-        selectEl.appendChild(opt);
+    if (clients) { 
+      clients.forEach(c => { 
+        const opt = document.createElement('option'); 
+        opt.value = c.code; 
+        opt.textContent = `${c.code}:${c.name}`; 
+        selectEl.appendChild(opt); 
       });
     }
-  } catch (err) {
+  } catch (err) { 
     console.error("得意先リストの取得に失敗:", err);
   }
 }
