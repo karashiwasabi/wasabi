@@ -1,4 +1,4 @@
-// C:\Dev\WASABI\db\search.go
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\search.go
 
 package db
 
@@ -11,7 +11,16 @@ import (
 	"wasabi/units"
 )
 
-// SearchJcshmsByName は製品名またはカナ名（部分一致）でJCSHMSマスタを検索し、表示用のモデルを返します。
+/**
+ * @brief 製品名またはカナ名でJCSHMSマスタを検索し、表示用のモデルを返します。
+ * @param conn データベース接続
+ * @param nameQuery 検索キーワード
+ * @return []model.ProductMasterView 検索結果のスライス
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * この関数は `product_master` テーブルではなく、`jcshms` と `jancode` テーブルを直接検索します。
+ * アプリ内にまだ存在しない公式の医薬品マスターを探すために使用されます。
+ */
 func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterView, error) {
 	const q = `
 		SELECT
@@ -64,7 +73,6 @@ func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterVi
 
 		janUnitCodeInt, _ := strconv.Atoi(tempJcshms.JA007.String)
 
-		// ▼▼▼ [修正点] ProductMaster構造体からJanUnitNameの設定を削除 ▼▼▼
 		view := model.ProductMasterView{
 			ProductMaster: model.ProductMaster{
 				ProductCode:         jc000.String,
@@ -84,23 +92,27 @@ func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterVi
 			FormattedPackageSpec: units.FormatPackageSpec(&tempJcshms),
 		}
 
-		// ▼▼▼ [修正点] ProductMasterViewのJanUnitNameフィールドに値を設定するロジックを追加 ▼▼▼
 		if view.ProductMaster.JanUnitCode == 0 {
 			view.JanUnitName = view.ProductMaster.YjUnitName
 		} else {
 			view.JanUnitName = units.ResolveName(tempJcshms.JA007.String)
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
-		// ▲▲▲ 修正ここまで ▲▲▲
 		results = append(results, view)
 	}
 	return results, nil
 }
 
-// SearchAllProductMastersByName は製品名またはカナ名（部分一致）でproduct_masterテーブル全体を検索します。
+/**
+ * @brief 製品名またはカナ名で `product_master` テーブル全体を検索します。
+ * @param conn データベース接続
+ * @param nameQuery 検索キーワード
+ * @return []model.ProductMasterView 検索結果のスライス
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * JCSHMS由来のマスターと、手動で登録されたPROVISIONALマスターの両方が検索対象になります。
+ */
 func SearchAllProductMastersByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterView, error) {
 	q := `SELECT ` + SelectColumns + ` FROM product_master 
-
 		  WHERE kana_name LIKE ? OR product_name LIKE ? ORDER BY kana_name LIMIT 500`
 
 	rows, err := conn.Query(q, "%"+nameQuery+"%", "%"+nameQuery+"%")

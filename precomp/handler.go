@@ -10,6 +10,9 @@ import (
 	"strconv" // strconvを追加
 	"wasabi/db"
 
+	"os"
+	"path/filepath"
+
 	"golang.org/x/text/encoding/japanese" // transformを追加
 	"golang.org/x/text/transform"
 )
@@ -95,7 +98,6 @@ func ClearPrecompHandler(conn *sql.DB) http.HandlerFunc {
 
 // ▼▼▼【ここから追加】▼▼▼
 
-// ExportPrecompHandler は予製リストをCSVとしてエクスポートします。
 func ExportPrecompHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		patientNumber := r.URL.Query().Get("patientNumber")
@@ -110,34 +112,39 @@ func ExportPrecompHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		fileName := fmt.Sprintf("precomp_%s.csv", patientNumber)
-		w.Header().Set("Content-Type", "text/csv")
-		w.Header().Set("Content-Disposition", "attachment; filename="+fileName)
-		w.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM
-
-		csvWriter := csv.NewWriter(w)
-		defer csvWriter.Flush()
-
-		// ヘッダーを書き込み
-		header := []string{"product_code", "product_name", "quantity_jan", "unit_name"}
-		if err := csvWriter.Write(header); err != nil {
-			log.Printf("Failed to write CSV header for precomp export: %v", err)
+		dirPath := filepath.Join("download", "exports")
+		if err := os.MkdirAll(dirPath, 0755); err != nil {
+			http.Error(w, "Failed to create directory", http.StatusInternalServerError)
 			return
 		}
+		fileName := fmt.Sprintf("precomp_%s.csv", patientNumber)
+		filePath := filepath.Join(dirPath, fileName)
 
-		// データを書き込み
+		file, err := os.Create(filePath)
+		if err != nil {
+			http.Error(w, "Failed to create file", http.StatusInternalServerError)
+			return
+		}
+		defer file.Close()
+
+		file.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM
+		csvWriter := csv.NewWriter(file)
+
+		header := []string{"product_code", "product_name", "quantity_jan", "unit_name"}
+		csvWriter.Write(header)
+
 		for _, rec := range records {
 			row := []string{
-				rec.JanCode,
+				fmt.Sprintf(`="%s"`, rec.JanCode), // Excel対応
 				rec.ProductName,
 				fmt.Sprintf("%f", rec.JanQuantity),
 				rec.JanUnitName,
 			}
-			if err := csvWriter.Write(row); err != nil {
-				log.Printf("Failed to write CSV row for precomp export: %v", err)
-				continue
-			}
+			csvWriter.Write(row)
 		}
+		csvWriter.Flush()
+
+		http.ServeFile(w, r, filePath)
 	}
 }
 

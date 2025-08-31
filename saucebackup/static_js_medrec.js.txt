@@ -1,0 +1,39 @@
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\medrec.js
+
+export function initMedrec() {
+    const downloadBtn = document.getElementById('medrecDownloadBtn');
+    if (!downloadBtn) return;
+
+    downloadBtn.addEventListener('click', async () => {
+        if (!confirm('e-mednet.jpにログインし、納品データをダウンロードします。よろしいですか？')) {
+            return;
+        }
+
+        window.showLoading();
+        try {
+            const res = await fetch('/api/medrec/download', {
+                method: 'POST',
+            });
+            
+            // ▼▼▼ [ここから修正] エラーハンドリングを改善 ▼▼▼
+            if (!res.ok) {
+                const errorText = await res.text();
+                try {
+                    const resData = JSON.parse(errorText);
+                    throw new Error(resData.message || `ダウンロードに失敗しました (HTTP ${res.status})`);
+                } catch (e) {
+                    throw new Error(errorText || `ダウンロードに失敗しました (HTTP ${res.status})`);
+                }
+            }
+            const resData = await res.json();
+            window.showNotification(resData.message, 'success');
+            // ▲▲▲ [修正ここまで] ▲▲▲
+        } catch (err) {
+            console.error('Download failed:', err);
+            const errorMessage = err.message || 'サーバーとの通信に失敗しました。設定画面でID/パスワードが正しいか確認してください。';
+            window.showNotification(errorMessage, 'error');
+        } finally {
+            window.hideLoading();
+        }
+    });
+}

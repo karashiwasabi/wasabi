@@ -1,4 +1,4 @@
-// C:\Dev\WASABI\db\product_master.go
+// C:\Users\wasab\OneDrive\デス\WASABI\db\product_master.go
 
 package db
 
@@ -11,7 +11,8 @@ import (
 	"wasabi/units"
 )
 
-// ▼▼▼ [修正点] カラム一覧から package_spec を削除 ▼▼▼
+// SelectColumns は product_master テーブルからレコードを取得する際の標準的なカラムリストです。
+// この定数を使用することで、クエリ全体でカラムの順序と内容の一貫性を保ちます。
 const SelectColumns = `
 	product_code, yj_code, product_name, origin, kana_name, maker_name,
 	usage_classification, package_form, yj_unit_name, yj_pack_unit_qty,
@@ -20,12 +21,16 @@ const SelectColumns = `
 	jan_pack_unit_qty, nhi_price, purchase_price, supplier_wholesale
 `
 
-// ▲▲▲ 修正ここまで ▲▲▲
-
-// ScanProductMaster maps a database row to a ProductMaster struct.
+/**
+ * @brief データベースの行データから model.ProductMaster 構造体に値をスキャンします。
+ * @param row スキャン対象の行 (*sql.Row または *sql.Rows)
+ * @return *model.ProductMaster スキャン結果のポインタ
+ * @return error スキャン中にエラーが発生した場合
+ * @details
+ * SelectColumns定数で定義された順序でカラムをスキャンします。
+ */
 func ScanProductMaster(row interface{ Scan(...interface{}) error }) (*model.ProductMaster, error) {
 	var m model.ProductMaster
-	// ▼▼▼ [修正点] スキャン対象から &m.PackageSpec を削除 ▼▼▼
 	err := row.Scan(
 		&m.ProductCode, &m.YjCode, &m.ProductName, &m.Origin, &m.KanaName, &m.MakerName,
 		&m.UsageClassification, &m.PackageForm, &m.YjUnitName, &m.YjPackUnitQty,
@@ -33,16 +38,19 @@ func ScanProductMaster(row interface{ Scan(...interface{}) error }) (*model.Prod
 		&m.FlagStimulant, &m.FlagStimulantRaw, &m.JanPackInnerQty, &m.JanUnitCode,
 		&m.JanPackUnitQty, &m.NhiPrice, &m.PurchasePrice, &m.SupplierWholesale,
 	)
-	// ▲▲▲ 修正ここまで ▲▲▲
 	if err != nil {
 		return nil, err
 	}
 	return &m, nil
 }
 
-// CreateProductMasterInTx creates a new product master within a transaction.
+/**
+ * @brief 新しい製品マスターレコードをトランザクション内で作成します。
+ * @param tx SQLトランザクションオブジェクト
+ * @param rec 登録する製品マスターの入力データ
+ * @return error 処理中にエラーが発生した場合
+ */
 func CreateProductMasterInTx(tx *sql.Tx, rec model.ProductMasterInput) error {
-	// ▼▼▼ [修正点] INSERT文から package_spec と対応するプレースホルダを削除 ▼▼▼
 	const q = `INSERT INTO product_master (
 		product_code, yj_code, product_name, origin, kana_name, maker_name,
 		usage_classification, package_form, yj_unit_name, yj_pack_unit_qty,
@@ -50,9 +58,7 @@ func CreateProductMasterInTx(tx *sql.Tx, rec model.ProductMasterInput) error {
 		flag_stimulant, flag_stimulant_raw, jan_pack_inner_qty, jan_unit_code,
 		jan_pack_unit_qty, nhi_price, purchase_price, supplier_wholesale
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	// ▲▲▲ 修正ここまで ▲▲▲
 
-	// ▼▼▼ [修正点] Execの引数から rec.PackageSpec を削除 ▼▼▼
 	_, err := tx.Exec(q,
 		rec.ProductCode, rec.YjCode, rec.ProductName, rec.Origin, rec.KanaName, rec.MakerName,
 		rec.UsageClassification, rec.PackageForm, rec.YjUnitName, rec.YjPackUnitQty,
@@ -60,16 +66,21 @@ func CreateProductMasterInTx(tx *sql.Tx, rec model.ProductMasterInput) error {
 		rec.FlagStimulant, rec.FlagStimulantRaw, rec.JanPackInnerQty, rec.JanUnitCode,
 		rec.JanPackUnitQty, rec.NhiPrice, rec.PurchasePrice, rec.SupplierWholesale,
 	)
-	// ▲▲▲ 修正ここまで ▲▲▲
 	if err != nil {
 		return fmt.Errorf("CreateProductMasterInTx failed: %w", err)
 	}
 	return nil
 }
 
-// UpsertProductMasterInTx updates a product master or inserts it if it doesn't exist.
+/**
+ * @brief 製品マスターレコードをトランザクション内でUPSERT（挿入または更新）します。
+ * @param tx SQLトランザクションオブジェクト
+ * @param rec 登録・更新する製品マスターの入力データ
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * product_codeが競合した場合は、INSERTの代わりにUPDATEが実行されます。
+ */
 func UpsertProductMasterInTx(tx *sql.Tx, rec model.ProductMasterInput) error {
-	// ▼▼▼ [修正点] UPSERT文から package_spec と対応するプレースホルダ・更新句を削除 ▼▼▼
 	const q = `INSERT INTO product_master (
 		product_code, yj_code, product_name, origin, kana_name, maker_name,
 		usage_classification, package_form, yj_unit_name, yj_pack_unit_qty,
@@ -89,9 +100,7 @@ func UpsertProductMasterInTx(tx *sql.Tx, rec model.ProductMasterInput) error {
 		jan_unit_code=excluded.jan_unit_code, jan_pack_unit_qty=excluded.jan_pack_unit_qty, 
 		nhi_price=excluded.nhi_price, purchase_price=excluded.purchase_price, 
 		supplier_wholesale=excluded.supplier_wholesale`
-	// ▲▲▲ 修正ここまで ▲▲▲
 
-	// ▼▼▼ [修正点] Execの引数から rec.PackageSpec を削除 ▼▼▼
 	_, err := tx.Exec(q,
 		rec.ProductCode, rec.YjCode, rec.ProductName, rec.Origin, rec.KanaName, rec.MakerName,
 		rec.UsageClassification, rec.PackageForm, rec.YjUnitName, rec.YjPackUnitQty,
@@ -99,14 +108,19 @@ func UpsertProductMasterInTx(tx *sql.Tx, rec model.ProductMasterInput) error {
 		rec.FlagStimulant, rec.FlagStimulantRaw, rec.JanPackInnerQty, rec.JanUnitCode,
 		rec.JanPackUnitQty, rec.NhiPrice, rec.PurchasePrice, rec.SupplierWholesale,
 	)
-	// ▲▲▲ 修正ここまで ▲▲▲
 	if err != nil {
 		return fmt.Errorf("UpsertProductMasterInTx failed: %w", err)
 	}
 	return nil
 }
 
-// GetProductMasterByCode は製品コードをキーに単一の製品マスターを取得します。
+/**
+ * @brief 製品コードをキーに単一の製品マスターを取得します。
+ * @param dbtx DBTXインターフェース（*sql.DB または *sql.Tx）
+ * @param code 検索対象の製品コード(JANコード)
+ * @return *model.ProductMaster 取得した製品マスター。見つからない場合はnil。
+ * @return error 処理中にエラーが発生した場合
+ */
 func GetProductMasterByCode(dbtx DBTX, code string) (*model.ProductMaster, error) {
 	q := `SELECT ` + SelectColumns + ` FROM product_master WHERE product_code = ? LIMIT 1`
 	m, err := ScanProductMaster(dbtx.QueryRow(q, code))
@@ -119,7 +133,15 @@ func GetProductMasterByCode(dbtx DBTX, code string) (*model.ProductMaster, error
 	return m, nil
 }
 
-// GetProductMastersByCodesMap は複数の製品コードをキーに製品マスターをマップで取得します。
+/**
+ * @brief 複数の製品コードをキーに製品マスターをマップ形式で取得します。
+ * @param dbtx DBTXインターフェース
+ * @param codes 検索対象の製品コードのスライス
+ * @return map[string]*model.ProductMaster 製品コードをキーとした製品マスターのマップ
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * N+1問題を避けるためIN句で一括取得します。
+ */
 func GetProductMastersByCodesMap(dbtx DBTX, codes []string) (map[string]*model.ProductMaster, error) {
 	if len(codes) == 0 {
 		return make(map[string]*model.ProductMaster), nil
@@ -148,8 +170,15 @@ func GetProductMastersByCodesMap(dbtx DBTX, codes []string) (map[string]*model.P
 	return mastersMap, nil
 }
 
-// GetEditableProductMasters fetches all non-JCSHMS product masters for the edit screen.
-func GetEditableProductMasters(conn *sql.DB) ([]model.ProductMasterView, error) {
+/**
+ * @brief 編集可能な製品マスター（JCSHMS由来でないもの）を全て取得します。
+ * @param conn データベース接続
+ * @return []model.ProductMaster 製品マスタースライス
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * 「マスター」画面での表示や、製品マスターのエクスポート機能で使用されます。
+ */
+func GetEditableProductMasters(conn *sql.DB) ([]model.ProductMaster, error) {
 	q := `SELECT ` + SelectColumns + ` FROM product_master WHERE origin != 'JCSHMS' ORDER BY kana_name`
 
 	rows, err := conn.Query(q)
@@ -158,35 +187,25 @@ func GetEditableProductMasters(conn *sql.DB) ([]model.ProductMasterView, error) 
 	}
 	defer rows.Close()
 
-	var mastersView []model.ProductMasterView
+	var masters []model.ProductMaster
 	for rows.Next() {
 		m, err := ScanProductMaster(rows)
 		if err != nil {
 			return nil, err
 		}
-
-		// ▼▼▼ 修正点 ▼▼▼
-		tempJcshms := model.JCShms{
-			JC037: m.PackageForm,
-			JC039: m.YjUnitName,
-			JC044: m.YjPackUnitQty,
-			JA006: sql.NullFloat64{Float64: m.JanPackInnerQty, Valid: true},
-			JA008: sql.NullFloat64{Float64: m.JanPackUnitQty, Valid: true},
-			JA007: sql.NullString{String: fmt.Sprintf("%d", m.JanUnitCode), Valid: true},
-		}
-		formattedSpec := units.FormatPackageSpec(&tempJcshms)
-		// ▲▲▲ 修正ここまで ▲▲▲
-
-		mastersView = append(mastersView, model.ProductMasterView{
-			ProductMaster:        *m,
-			FormattedPackageSpec: formattedSpec,
-		})
+		masters = append(masters, *m)
 	}
-	return mastersView, nil
+	return masters, nil
 }
 
-// ▼▼▼ [修正点] 引数を conn *sql.DB から dbtx DBTX に変更 ▼▼▼
-// GetAllProductMasters retrieves all product master records.
+/**
+ * @brief 全ての製品マスターレコードを取得します。
+ * @param dbtx DBTXインターフェース
+ * @return []*model.ProductMaster 製品マスターのスライス
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * 剤型区分とカナ名でソートされた順序で返します。
+ */
 func GetAllProductMasters(dbtx DBTX) ([]*model.ProductMaster, error) {
 	q := `SELECT ` + SelectColumns + ` FROM product_master 
 		ORDER BY
@@ -201,7 +220,7 @@ func GetAllProductMasters(dbtx DBTX) ([]*model.ProductMaster, error) {
 			END,
 			kana_name`
 
-	rows, err := dbtx.Query(q) // conn.Query から dbtx.Query に変更
+	rows, err := dbtx.Query(q)
 	if err != nil {
 		return nil, fmt.Errorf("GetAllProductMasters failed: %w", err)
 	}
@@ -218,9 +237,13 @@ func GetAllProductMasters(dbtx DBTX) ([]*model.ProductMaster, error) {
 	return masters, nil
 }
 
-// ▲▲▲ 修正ここまで ▲▲▲
-
-// GetProductMastersByYjCode はYJコードに紐づく全ての製品マスターを表示用のViewモデルとして取得します。
+/**
+ * @brief YJコードに紐づく全ての製品マスターを表示用のViewモデルとして取得します。
+ * @param dbtx DBTXインターフェース
+ * @param yjCode 検索対象のYJコード
+ * @return []model.ProductMasterView 画面表示用の製品マスタースライス
+ * @return error 処理中にエラーが発生した場合
+ */
 func GetProductMastersByYjCode(dbtx DBTX, yjCode string) ([]model.ProductMasterView, error) {
 	q := `SELECT ` + SelectColumns + ` FROM product_master WHERE yj_code = ? ORDER BY product_name`
 	rows, err := dbtx.Query(q, yjCode)
@@ -236,7 +259,6 @@ func GetProductMastersByYjCode(dbtx DBTX, yjCode string) ([]model.ProductMasterV
 			return nil, err
 		}
 
-		// ▼▼▼ [修正点] 組み立て包装の生成に必要なデータを全て渡すように修正 ▼▼▼
 		tempJcshms := model.JCShms{
 			JC037: m.PackageForm,
 			JC039: m.YjUnitName,
@@ -245,7 +267,6 @@ func GetProductMastersByYjCode(dbtx DBTX, yjCode string) ([]model.ProductMasterV
 			JA008: sql.NullFloat64{Float64: m.JanPackUnitQty, Valid: true},
 			JA007: sql.NullString{String: fmt.Sprintf("%d", m.JanUnitCode), Valid: true},
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
 		formattedSpec := units.FormatPackageSpec(&tempJcshms)
 
 		mastersView = append(mastersView, model.ProductMasterView{
@@ -256,7 +277,14 @@ func GetProductMastersByYjCode(dbtx DBTX, yjCode string) ([]model.ProductMasterV
 	return mastersView, nil
 }
 
-// UpdatePricesAndSuppliersInTx は複数の製品の納入価格と主要卸を一括で更新します。
+/**
+ * @brief 複数の製品の納入価格と主要卸を一括で更新します。
+ * @param tx SQLトランザクションオブジェクト
+ * @param updates 更新内容のスライス
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * 「価格更新」画面で使用されます。
+ */
 func UpdatePricesAndSuppliersInTx(tx *sql.Tx, updates []model.PriceUpdate) error {
 	const q = `UPDATE product_master SET purchase_price = ?, supplier_wholesale = ? WHERE product_code = ?`
 	stmt, err := tx.Prepare(q)
@@ -273,7 +301,13 @@ func UpdatePricesAndSuppliersInTx(tx *sql.Tx, updates []model.PriceUpdate) error
 	return nil
 }
 
-// ClearAllProductMasters はproduct_masterテーブルの全レコードを削除します。
+/**
+ * @brief product_masterテーブルの全レコードを削除します。
+ * @param conn データベース接続
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * 関連するMA2Yのシーケンスもリセットします。
+ */
 func ClearAllProductMasters(conn *sql.DB) error {
 	tx, err := conn.Begin()
 	if err != nil {
@@ -287,7 +321,6 @@ func ClearAllProductMasters(conn *sql.DB) error {
 
 	// MA2Yのシーケンスもリセットする
 	if _, err := tx.Exec(`UPDATE code_sequences SET last_no = 0 WHERE name = 'MA2Y'`); err != nil {
-		// テーブルが空だった場合などはエラーになるが、処理は続行してよい
 		log.Printf("Could not reset sequence for MA2Y (this is normal if table was empty): %v", err)
 	}
 

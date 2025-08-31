@@ -1,0 +1,289 @@
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\master_edit.js
+
+import { showModal } from './inout_modal.js';
+import { hiraganaToKatakana } from './utils.js';
+
+let view, tableContainer, refreshBtn, addRowBtn, kanaNameInput, dosageFormInput;
+let allMasters = []; // サーバーから取得した全マスターデータを保持する配列
+let unitMap = {};
+
+async function fetchUnitMap() {
+    if (Object.keys(unitMap).length > 0) return;
+    try {
+        const res = await fetch('/api/units/map');
+        if (!res.ok) throw new Error('単位マスタの取得に失敗');
+        unitMap = await res.json();
+    } catch (err) {
+        console.error(err);
+        window.showNotification(err.message, 'error');
+    }
+}
+
+function formatPackageSpecForRow(tbody) {
+    if (!tbody) return;
+    const getVal = (name) => tbody.querySelector(`[name="${name}"]`)?.value || '';
+    const packageForm = getVal('packageForm');
+    const yjPackUnitQty = getVal('yjPackUnitQty');
+    const yjUnitName = getVal('yjUnitName');
+    const janPackInnerQty = getVal('janPackInnerQty');
+    const janPackUnitQty = getVal('janPackUnitQty');
+    const janUnitCode = getVal('janUnitCode');
+    
+    let formattedSpec = `${packageForm} ${yjPackUnitQty}${yjUnitName}`;
+    if (parseFloat(janPackInnerQty) > 0 && parseFloat(janPackUnitQty) > 0) {
+        let janUnitName = (janUnitCode === '0' || janUnitCode === '') ?
+            '' : (unitMap[janUnitCode] || '');
+        formattedSpec += ` (${janPackInnerQty}${yjUnitName}×${janPackUnitQty}${janUnitName})`;
+    }
+    const targetCell = tbody.querySelector('.formatted-spec-cell');
+    if (targetCell) targetCell.textContent = formattedSpec;
+}
+
+// ▼▼▼【ここからが修正箇所です】▼▼▼
+function createMasterRowHTML(master = {}) {
+    const isNew = !master.productCode;
+    const rowId = master.productCode || `new-${Date.now()}`;
+    
+    // YJコードのreadonly属性を isNew で制御
+    const topRowFields = [
+        { key: 'productCode', ph: '製品コード(JAN)', readonly: !isNew },
+        { key: 'yjCode', ph: 'YJコード', readonly: isNew }, // 新規行の場合は読み取り専用に
+        { key: 'productName', ph: '製品名', colspan: 2 },
+        { key: 'kanaName', ph: 'カナ名' },
+        { key: 'makerName', ph: 'メーカー名' },
+        { key: 'usageClassification', ph: '剤型(JC013)' },
+    ];
+    // ▲▲▲【修正ここまで】▲▲▲
+
+    const flags = [
+        { key: 'flagPoison', ph: '毒', opts: [0, 1] }, { key: 'flagDeleterious', ph: '劇', opts: [0, 1] },
+        { key: 'flagNarcotic', ph: '麻', opts: [0, 1] }, { key: 'flagPsychotropic', ph: '向', opts: [0, 1, 2, 3] },
+        { key: 'flagStimulant', ph: '覚', opts: [0, 1] }, { key: 'flagStimulantRaw', ph: '覚原', opts: [0, 1] },
+    ];
+    const bottomRowFields = [
+        { key: 'nhiPrice', ph: '薬価', type: 'number', step: '0.0001', value: master.nhiPrice || 0 },
+        { key: 'packageForm', ph: '包装(JC037)' }, { key: 'yjUnitName', ph: 'YJ単位' },
+        { key: 'yjPackUnitQty', ph: 'YJ包装数量', type: 'number', value: master.yjPackUnitQty || 0 },
+        { key: 'janPackInnerQty', ph: '内包装数量', type: 'number', value: master.janPackInnerQty || 0 },
+        { key: 'janUnitCode', ph: 'JAN単位', type: 'select', value: master.janUnitCode || 0 },
+        { key: 'janPackUnitQty', ph: 'JAN包装数量', type: 'number', value: master.janPackUnitQty || 0 },
+    ];
+
+    let topRowCellsHTML = topRowFields.map(f => `<td ${f.colspan ? `colspan="${f.colspan}"` : ''}><input type="${f.type || 'text'}" name="${f.key}" value="${f.value || master[f.key] || ''}" placeholder="${f.ph}" ${f.readonly ? 'readonly' : ''} ${f.step ? `step="${f.step}"` : ''}></td>`).join('');
+    
+    topRowCellsHTML += flags.map(f => {
+        const options = f.opts.map(o => `<option value="${o}" ${o == (master[f.key] || 0) ? 'selected' : ''}>${o}</option>`).join('');
+        return `<td><select name="${f.key}">${options}</select></td>`;
+    }).join('');
+    topRowCellsHTML += `<td><button class="save-master-btn btn">保存</button></td>`;
+
+    let bottomRowCellsHTML = bottomRowFields.map(f => {
+        if (f.type === 'select') {
+            let options = `<option value="0">YJ単位と同じ</option>`;
+            for (const [code, name] of Object.entries(unitMap)) {
+                if (code !== '0') options += `<option value="${code}" ${code == f.value ? 'selected' : ''}>${name}</option>`;
+            }
+            return `<td><select name="${f.key}">${options}</select></td>`;
+        }
+        return `<td><input type="${f.type || 'text'}" name="${f.key}" value="${f.value ?? master[f.key] ?? ''}" placeholder="${f.ph}"></td>`;
+    }).join('');
+    bottomRowCellsHTML += `<td class="formatted-spec-cell" colspan="6"></td><td><button class="quote-jcshms-btn btn">引用</button></td>`;
+    return `<tbody data-record-id="${rowId}"><tr class="data-row-top">${topRowCellsHTML}</tr><tr class="data-row-bottom">${bottomRowCellsHTML}</tr></tbody>`;
+}
+
+function renderMasters(mastersToRender) {
+    if (!mastersToRender || mastersToRender.length === 0) {
+        tableContainer.innerHTML = '<p>対象のマスターが見つかりません。</p>';
+        return;
+    }
+    const tableHeader = `<thead>
+        <tr><th>製品コード(JAN)</th><th>YJコード</th><th colspan="2">製品名</th><th>カナ名</th><th>メーカー名</th><th>剤型</th><th>毒</th><th>劇</th><th>麻</th><th>向</th><th>覚</th><th>覚原</th><th>操作</th></tr>
+        <tr><th>薬価</th><th>包装</th><th>YJ単位</th><th>YJ包装数量</th><th>内包装数量</th><th>JAN単位</th><th>JAN包装数量</th><th colspan="6">組み立て包装</th><th>操作</th></tr>
+    </thead>`;
+    const allTablesHTML = mastersToRender.map(master => {
+        const tableContent = createMasterRowHTML(master);
+        return `<table class="data-table" style="margin-bottom: 15px;">${tableHeader}${tableContent}</table>`;
+    }).join('');
+    tableContainer.innerHTML = allTablesHTML;
+    tableContainer.querySelectorAll('tbody[data-record-id]').forEach(formatPackageSpecForRow);
+}
+
+function applyFiltersAndRender() {
+    const kanaFilter = hiraganaToKatakana(kanaNameInput.value).toLowerCase();
+    const dosageFilter = dosageFormInput.value;
+    let filteredMasters = allMasters;
+
+    if (kanaFilter) {
+        filteredMasters = filteredMasters.filter(p => 
+            (p.productName && p.productName.toLowerCase().includes(kanaFilter)) || 
+            (p.kanaName && p.kanaName.toLowerCase().includes(kanaFilter))
+        );
+    }
+    
+    if (dosageFilter) {
+        filteredMasters = filteredMasters.filter(p => 
+            p.usageClassification && p.usageClassification.trim() === dosageFilter
+        );
+    }
+    
+    renderMasters(filteredMasters);
+}
+
+async function loadAndRenderMasters() {
+    tableContainer.innerHTML = `<p>読み込み中...</p>`;
+    try {
+        const res = await fetch('/api/masters/editable');
+        if (!res.ok) throw new Error('マスターの読み込みに失敗しました。');
+        allMasters = await res.json();
+        applyFiltersAndRender();
+    } catch (err) {
+        tableContainer.innerHTML = `<p style="color:red;">${err.message}</p>`;
+    }
+}
+
+function populateFormWithJcshms(selectedProduct, tbody) {
+    if (!tbody) return;
+    const setVal = (name, value) => {
+        const el = tbody.querySelector(`[name="${name}"]`);
+        if (el) el.value = value !== undefined ? value : '';
+    };
+    const productCodeInput = tbody.querySelector('[name="productCode"]');
+    if (productCodeInput && !productCodeInput.readOnly) {
+        productCodeInput.value = selectedProduct.productCode || '';
+    }
+    setVal('yjCode', selectedProduct.yjCode); setVal('productName', selectedProduct.productName);
+    setVal('kanaName', selectedProduct.kanaName); setVal('makerName', selectedProduct.makerName);
+    setVal('usageClassification', selectedProduct.usageClassification); setVal('packageForm', selectedProduct.packageForm);
+    setVal('nhiPrice', selectedProduct.nhiPrice); setVal('flagPoison', selectedProduct.flagPoison);
+    setVal('flagDeleterious', selectedProduct.flagDeleterious); setVal('flagNarcotic', selectedProduct.flagNarcotic);
+    setVal('flagPsychotropic', selectedProduct.flagPsychotropic); setVal('flagStimulant', selectedProduct.flagStimulant);
+    setVal('flagStimulantRaw', selectedProduct.flagStimulantRaw); setVal('yjUnitName', selectedProduct.yjUnitName);
+    setVal('yjPackUnitQty', selectedProduct.yjPackUnitQty); setVal('janPackInnerQty', selectedProduct.janPackInnerQty);
+    setVal('janUnitCode', selectedProduct.janUnitCode); setVal('janPackUnitQty', selectedProduct.janPackUnitQty);
+    formatPackageSpecForRow(tbody);
+}
+
+export async function initMasterEdit() {
+    view = document.getElementById('master-edit-view');
+    if (!view) return;
+    tableContainer = document.getElementById('master-edit-container');
+    refreshBtn = document.getElementById('refreshMastersBtn');
+    addRowBtn = document.getElementById('addMasterRowBtn');
+    kanaNameInput = document.getElementById('master-edit-kanaName');
+    dosageFormInput = document.getElementById('master-edit-dosageForm');
+
+    await fetchUnitMap();
+
+    refreshBtn.addEventListener('click', loadAndRenderMasters);
+
+    // ▼▼▼【ここからが修正箇所です】▼▼▼
+    addRowBtn.addEventListener('click', async () => {
+        window.showLoading();
+        try {
+            // 1. 新しいYJコードをサーバーから取得
+            const res = await fetch('/api/sequence/next/MA2Y');
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.message || 'YJコードの採番に失敗しました。');
+            
+            // 2. 取得したYJコードをmasterオブジェクトにセット
+            const newMasterData = { yjCode: data.nextCode };
+
+            // 3. テーブルのヘッダーと、YJコードがセットされた新しい行のHTMLを生成
+            const tableHeader = `<thead>
+                <tr><th>製品コード(JAN)</th><th>YJコード</th><th colspan="2">製品名</th><th>カナ名</th><th>メーカー名</th><th>剤型</th><th>毒</th><th>劇</th><th>麻</th><th>向</th><th>覚</th><th>覚原</th><th>操作</th></tr>
+                <tr><th>薬価</th><th>包装</th><th>YJ単位</th><th>YJ包装数量</th><th>内包装数量</th><th>JAN単位</th><th>JAN包装数量</th><th colspan="6">組み立て包装</th><th>操作</th></tr>
+            </thead>`;
+            const newRowContent = createMasterRowHTML(newMasterData);
+            const newTableHTML = `<table class="data-table" style="margin-bottom: 15px;">${tableHeader}${newRowContent}</table>`;
+
+            // 4. 画面に追加
+            tableContainer.insertAdjacentHTML('beforeend', newTableHTML);
+            const newTable = tableContainer.lastElementChild;
+            
+            if (newTable) {
+                newTable.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                // フォーカスを製品コード(JAN)入力欄に当てる
+                const firstInput = newTable.querySelector('input[name="productCode"]');
+                if (firstInput) firstInput.focus();
+            }
+        } catch (err) {
+            window.showNotification(err.message, 'error');
+        } finally {
+            window.hideLoading();
+        }
+    });
+    // ▲▲▲【修正ここまで】▲▲▲
+
+    kanaNameInput.addEventListener('input', applyFiltersAndRender);
+    dosageFormInput.addEventListener('change', applyFiltersAndRender);
+    
+    tableContainer.addEventListener('input', (e) => {
+        const tbody = e.target.closest('tbody[data-record-id]');
+        if (tbody) {
+            formatPackageSpecForRow(tbody);
+        }
+    });
+
+    tableContainer.addEventListener('click', async (e) => {
+        const target = e.target;
+        const tbody = target.closest('tbody[data-record-id]');
+        if (!tbody) return;
+
+        if (target.classList.contains('save-master-btn')) {
+            const data = {};
+            tbody.querySelectorAll('input, select').forEach(el => {
+                const name = el.name;
+                const value = el.value;
+                
+                // ▼▼▼【修正点】readonlyのYJコードもデータに含めるようにする ▼▼▼
+                if (el.readOnly) {
+                    data[name] = value;
+                } 
+                // ▲▲▲【修正ここまで】▲▲▲
+                else if (el.tagName === 'SELECT' || el.type === 'number') {
+                    const numValue = parseFloat(value);
+                    data[name] = !isNaN(numValue) ? numValue : 0;
+                } else {
+                    data[name] = value;
+                }
+            });
+      
+            data.packageSpec = data.packageForm;
+            data.origin = "PROVISIONAL";
+            data.purchasePrice = 0;
+            data.supplierWholesale = '';
+
+            if (!data.productCode) {
+                window.showNotification('製品コードは必須です。', 'error');
+                return;
+            }
+            window.showLoading();
+            try {
+                const res = await fetch('/api/master/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data),
+                });
+                const resData = await res.json();
+                if (!res.ok) throw new Error(resData.message || '保存に失敗しました。');
+                window.showNotification(resData.message, 'success');
+                loadAndRenderMasters();
+            } catch (err) {
+                window.showNotification(err.message, 'error');
+            } finally {
+                window.hideLoading();
+            }
+        }
+        if (target.classList.contains('quote-jcshms-btn')) {
+            showModal(tbody, populateFormWithJcshms);
+        }
+    });
+}
+
+export function resetMasterEditView() {
+    if (tableContainer) {
+        if(kanaNameInput) kanaNameInput.value = '';
+        if(dosageFormInput) dosageFormInput.value = '';
+        loadAndRenderMasters();
+    }
+}

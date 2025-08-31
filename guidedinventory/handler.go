@@ -24,9 +24,11 @@ type StockLedgerYJGroupView struct {
 	PackageLedgers []StockLedgerPackageGroupView `json:"packageLedgers"`
 }
 
+// ▼▼▼ [修正箇所] ResponseDataView構造体にDeadStockDetailsを追加 ▼▼▼
 type ResponseDataView struct {
-	StockLedger    []StockLedgerYJGroupView  `json:"stockLedger"`
-	PrecompDetails []model.TransactionRecord `json:"precompDetails"`
+	StockLedger      []StockLedgerYJGroupView  `json:"stockLedger"`
+	PrecompDetails   []model.TransactionRecord `json:"precompDetails"`
+	DeadStockDetails []model.DeadStockRecord   `json:"deadStockDetails"`
 }
 
 // ▲▲▲ 修正ここまで ▲▲▲
@@ -105,10 +107,19 @@ func GetInventoryDataHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		response := ResponseDataView{
-			StockLedger:    stockLedgerView,
-			PrecompDetails: precompDetails,
+		// ▼▼▼ [修正箇所] DeadStockDetailsを取得し、レスポンスに含める ▼▼▼
+		deadStockDetails, err := db.GetDeadStockByProductCodes(conn, productCodes)
+		if err != nil {
+			// エラーでも処理は続行するがログには残す
+			log.Printf("WARN: Failed to get dead stock details for inventory adjustment: %v", err)
 		}
+
+		response := ResponseDataView{
+			StockLedger:      stockLedgerView,
+			PrecompDetails:   precompDetails,
+			DeadStockDetails: deadStockDetails, // 取得したデータをセット
+		}
+		// ▲▲▲ 修正ここまで ▲▲▲
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)

@@ -1,3 +1,5 @@
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\settings.js
+
 let view, userIDInput, passwordInput, saveBtn;
 let wholesalerCodeInput, wholesalerNameInput, addWholesalerBtn, wholesalersTableBody;
 
@@ -9,35 +11,53 @@ async function loadSettings() {
         userIDInput.value = settings.emednetUserId || '';
         passwordInput.value = settings.emednetPassword || '';
     } catch (err) {
-        console.error(err); // ★ エラー詳細をコンソールに出力
+        console.error(err);
         window.showNotification(err.message, 'error');
     }
 }
 
+// ▼▼▼ [ここから修正] saveSettings関数を全面的に書き換え ▼▼▼
 async function saveSettings() {
-    const settings = {
-        emednetUserId: userIDInput.value,
-        emednetPassword: passwordInput.value,
-    };
     window.showLoading();
     try {
+        // ステップ1: まず現在の設定を全てサーバーから読み込む
+        const currentSettingsRes = await fetch('/api/settings/get');
+        if (!currentSettingsRes.ok) throw new Error('現在の設定の読み込みに失敗しました。');
+        const currentSettings = await currentSettingsRes.json();
+
+        // ステップ2: 画面の入力値を取得
+        const userId = userIDInput.value;
+        const password = passwordInput.value;
+
+        // ステップ3: 読み込んだ現在の設定に、画面の入力値をマージ（上書き）する
+        const newSettings = {
+            ...currentSettings, // 既存の設定を保持
+            emednetUserId: userId,
+            emednetPassword: password,
+            edeUserId: userId,       // edeの設定も同じ値で上書き
+            edePassword: password,   // edeの設定も同じ値で上書き
+        };
+
+        // ステップ4: 完成した設定オブジェクトをサーバーに送信して保存
         const res = await fetch('/api/settings/save', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(settings),
+            body: JSON.stringify(newSettings),
         });
         const resData = await res.json();
         if (!res.ok) throw new Error(resData.message || '設定の保存に失敗しました。');
         window.showNotification(resData.message, 'success');
+
     } catch (err) {
-        console.error(err); // ★ エラー詳細をコンソールに出力
+        console.error(err);
         window.showNotification(err.message, 'error');
     } finally {
         window.hideLoading();
     }
 }
+// ▲▲▲ [修正ここまで] ▲▲▲
 
-// 卸業者リストを描画する関数
+// (これ以降の関数は変更ありません)
 function renderWholesalers(wholesalers) {
     if (!wholesalers) {
         wholesalersTableBody.innerHTML = '<tr><td colspan="3">登録されている卸業者がありません。</td></tr>';
@@ -52,7 +72,6 @@ function renderWholesalers(wholesalers) {
     `).join('');
 }
 
-// 卸業者リストをサーバーから読み込む関数
 async function loadWholesalers() {
     try {
         const res = await fetch('/api/settings/wholesalers');
@@ -60,16 +79,14 @@ async function loadWholesalers() {
         const data = await res.json();
         renderWholesalers(data);
     } catch (err) {
-        console.error(err); // ★ エラー詳細をコンソールに出力
+        console.error(err);
         window.showNotification(err.message, 'error');
     }
 }
 
-// 卸業者を追加する関数
 async function addWholesaler() {
     const code = wholesalerCodeInput.value.trim();
     const name = wholesalerNameInput.value.trim();
-
     if (!code || !name) {
         window.showNotification('卸コードと卸業者名の両方を入力してください。', 'error');
         return;
@@ -88,9 +105,9 @@ async function addWholesaler() {
         window.showNotification(resData.message, 'success');
         wholesalerCodeInput.value = '';
         wholesalerNameInput.value = '';
-        loadWholesalers(); // リストを再読み込み
+        loadWholesalers(); 
     } catch (err) {
-        console.error(err); // ★ エラー詳細をコンソールに出力
+        console.error(err);
         window.showNotification(err.message, 'error');
     } finally {
         window.hideLoading();
@@ -110,8 +127,6 @@ export function initSettings() {
     addWholesalerBtn = document.getElementById('addWholesalerBtn');
     wholesalersTableBody = document.querySelector('#wholesalers-table tbody');
     const clearTransactionsBtn = document.getElementById('clearAllTransactionsBtn');
-    
-    // ▼▼▼【ここからが、本来の追加箇所です】▼▼▼
     const clearMastersBtn = document.getElementById('clearAllMastersBtn');
     
     clearMastersBtn.addEventListener('click', async () => {
@@ -135,14 +150,10 @@ export function initSettings() {
             window.hideLoading();
         }
     });
-    // ▲▲▲【ここまでが、本来の追加箇所です】▲▲▲
 
     saveBtn.addEventListener('click', saveSettings);
     addWholesalerBtn.addEventListener('click', addWholesaler);
     
-
-
-    // ▼▼▼【ここから追加】▼▼▼
     clearTransactionsBtn.addEventListener('click', async () => {
         if (!confirm('本当にすべての取引履歴（入出庫、納品、処方、棚卸など）を削除しますか？\n\nこの操作は元に戻せません。')) {
             return;
@@ -164,7 +175,6 @@ export function initSettings() {
             window.hideLoading();
         }
     });
-    // ▲▲▲【追加ここまで】▲▲▲
 
     wholesalersTableBody.addEventListener('click', async (e) => {
         if (e.target.classList.contains('delete-wholesaler-btn')) {
@@ -182,9 +192,9 @@ export function initSettings() {
                 const resData = await res.json();
                 if (!res.ok) throw new Error(resData.message || '削除に失敗しました。');
                 window.showNotification(resData.message, 'success');
-                loadWholesalers(); // リストを再読み込み
+                loadWholesalers(); 
             } catch (err) {
-                console.error(err); // ★ エラー詳細をコンソールに出力
+                console.error(err); 
                 window.showNotification(err.message, 'error');
             } finally {
                 window.hideLoading();
@@ -193,7 +203,6 @@ export function initSettings() {
     });
 }
 
-// 画面が表示されるたびに最新の設定を読み込むための関数
 export function onViewShow() {
     loadSettings();
     loadWholesalers();

@@ -10,9 +10,21 @@ import (
 	"wasabi/model"
 )
 
-// ▼▼▼ [修正点] 引数に yjCode を追加し、receiptNumberの生成ロジックを変更 ▼▼▼
+/**
+ * @brief 棚卸調整画面で入力された在庫・ロット情報を保存します。
+ * @param tx SQLトランザクションオブジェクト
+ * @param date 棚卸日 (YYYYMMDD)
+ * @param yjCode 対象のYJコード
+ * @param allPackagings 対象YJコードに属する全包装のマスター情報
+ * @param inventoryData JANコードをキー、YJ単位での在庫数量を値とするマップ
+ * @param deadstockData 保存するロット・期限情報のスライス
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * 1. 指定された日付・YJコードグループの既存の棚卸レコード(flag=0)を全て削除します。
+ * 2. YJコードグループに属する全ての包装について、新しい在庫数を登録します（入力がなければ0で登録）。
+ * 3. 在庫数が1以上ある品物について、既存のロット・期限情報を削除し、新しい情報を登録します。
+ */
 func SaveGuidedInventoryData(tx *sql.Tx, date string, yjCode string, allPackagings []model.ProductMaster, inventoryData map[string]float64, deadstockData []model.DeadStockRecord) error {
-
 	var allProductCodes []string
 	mastersMap := make(map[string]*model.ProductMaster)
 	for _, pkg := range allPackagings {
@@ -52,7 +64,7 @@ INSERT INTO transaction_records (
 			continue
 		}
 
-		yjQty := inventoryData[productCode]
+		yjQty := inventoryData[productCode] // マップにキーがなくても0が返る
 
 		if yjQty > 0 {
 			productCodesWithInventory = append(productCodesWithInventory, productCode)
@@ -90,6 +102,7 @@ INSERT INTO transaction_records (
 		}
 	}
 
+	// 在庫が1以上ある品目について、ロット・期限情報を更新する
 	if len(productCodesWithInventory) > 0 {
 		var relevantDeadstockData []model.DeadStockRecord
 		for _, ds := range deadstockData {
@@ -112,9 +125,12 @@ INSERT INTO transaction_records (
 	return nil
 }
 
-// ▲▲▲ 修正ここまで ▲▲▲
-
-// (DeleteDeadStockRecordsByProductCodes に変更はありません)
+/**
+ * @brief 指定された製品コード群に紐づくデッドストック（ロット・期限）情報を削除します。
+ * @param tx SQLトランザクションオブジェクト
+ * @param productCodes 削除対象の製品コードのスライス
+ * @return error 処理中にエラーが発生した場合
+ */
 func DeleteDeadStockRecordsByProductCodes(tx *sql.Tx, productCodes []string) error {
 	if len(productCodes) == 0 {
 		return nil

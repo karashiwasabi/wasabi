@@ -12,7 +12,6 @@ import (
 	"wasabi/model"
 )
 
-// ▼▼▼ [修正点] ListInventoryProductsHandler関数全体を書き換える ▼▼▼
 // ListInventoryProductsHandler returns all product masters with their last inventory date.
 func ListInventoryProductsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -43,8 +42,6 @@ func ListInventoryProductsHandler(conn *sql.DB) http.HandlerFunc {
 		json.NewEncoder(w).Encode(result)
 	}
 }
-
-// ▲▲▲ 修正ここまで ▲▲▲
 
 type ManualInventoryRecord struct {
 	ProductCode string  `json:"productCode"`
@@ -77,17 +74,20 @@ func SaveManualInventoryHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer tx.Rollback()
 
-		if err := db.DeleteTransactionsByFlagAndDate(tx, 0, payload.Date); err != nil {
-			http.Error(w, "Failed to clear old inventory data", http.StatusInternalServerError)
-			return
-		}
-
 		var productCodes []string
 		recordsMap := make(map[string]float64)
 		for _, rec := range payload.Records {
-			if rec.YjQuantity != 0 {
-				productCodes = append(productCodes, rec.ProductCode)
-				recordsMap[rec.ProductCode] = rec.YjQuantity
+			// ▼▼▼ [修正点] 数量が0の場合も処理対象とするため、if文を削除 ▼▼▼
+			productCodes = append(productCodes, rec.ProductCode)
+			recordsMap[rec.ProductCode] = rec.YjQuantity
+			// ▲▲▲ 修正ここまで ▲▲▲
+		}
+
+		// 指定された日付の、入力があった品目の古い棚卸データ「のみ」を削除する
+		if len(productCodes) > 0 {
+			if err := db.DeleteTransactionsByFlagAndDateAndCodes(tx, 0, payload.Date, productCodes); err != nil {
+				http.Error(w, "Failed to clear old inventory data for specified products", http.StatusInternalServerError)
+				return
 			}
 		}
 
@@ -121,13 +121,11 @@ func SaveManualInventoryHandler(conn *sql.DB) http.HandlerFunc {
 				LineNumber:      fmt.Sprintf("%d", i+1),
 			}
 
-			// ▼▼▼ [修正点] ProcessingStatusの設定を削除 ▼▼▼
 			if master.Origin == "JCSHMS" {
 				tr.ProcessFlagMA = "COMPLETE"
 			} else {
 				tr.ProcessFlagMA = "PROVISIONAL"
 			}
-			// ▲▲▲ 修正ここまで ▲▲▲
 
 			if master.JanPackInnerQty > 0 {
 				tr.JanQuantity = tr.YjQuantity / master.JanPackInnerQty

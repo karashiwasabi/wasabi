@@ -3,11 +3,11 @@
 package pricing
 
 import (
-	"bytes"
 	"database/sql"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
-	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,11 +15,10 @@ import (
 	"wasabi/db"
 	"wasabi/model"
 	"wasabi/units"
-
-	"github.com/xuri/excelize/v2"
 )
 
-// GetExportDataHandler generates an Excel file for price quotation requests (template).
+// ▼▼▼ [ここから修正] GetExportDataHandler内のフィルタリングロジックを変更 ▼▼▼
+// GetExportDataHandler generates a CSV file for price quotation requests (template).
 func GetExportDataHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		wholesalerName := r.URL.Query().Get("wholesalerName")
@@ -37,9 +36,20 @@ func GetExportDataHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
+		// --- ここからが新しいフィルタリング処理 ---
+		var mastersToProcess []*model.ProductMaster
+		for _, p := range allMasters {
+			// product_codeが'99999'で始まり、かつ長さが13文字を超える仮コードは除外する
+			if strings.HasPrefix(p.ProductCode, "99999") && len(p.ProductCode) > 13 {
+				continue // スキップ
+			}
+			mastersToProcess = append(mastersToProcess, p)
+		}
+		// --- フィルタリング処理ここまで ---
+
 		var dataToExport []*model.ProductMaster
 		if unregisteredOnly {
-			for _, p := range allMasters {
+			for _, p := range mastersToProcess { // allMastersの代わりにフィルタ済みのmastersToProcessを使用
 				if p.SupplierWholesale == "" {
 					uc := p.UsageClassification
 					if uc == "機" || uc == "他" || ((uc == "内" || uc == "外" || uc == "歯" || uc == "注") && p.Origin == "JCSHMS") {
@@ -52,28 +62,27 @@ func GetExportDataHandler(conn *sql.DB) http.HandlerFunc {
 				return
 			}
 		} else {
-			dataToExport = allMasters
+			dataToExport = mastersToProcess // allMastersの代わりにフィルタ済みのmastersToProcessを使用
 		}
 
-		f := excelize.NewFile()
-		sheetName := "見積依頼"
-		index, _ := f.NewSheet(sheetName)
-		f.SetActiveSheet(index)
-		f.DeleteSheet("Sheet1")
+		dateStr := r.URL.Query().Get("date")
+		fileType := "ALL"
+		if unregisteredOnly {
+			fileType = "UNREGISTERED"
+		}
+		fileName := fmt.Sprintf("価格見積依頼_%s_%s_%s.csv", wholesalerName, fileType, dateStr)
+
+		w.Header().Set("Content-Type", "text/csv")
+		w.Header().Set("Content-Disposition", "attachment; filename="+fileName)
+		w.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM
+
+		csvWriter := csv.NewWriter(w)
+		defer csvWriter.Flush()
 
 		headers := []string{"product_code", "product_name", "maker_name", "package_spec", "purchase_price"}
-		for i, h := range headers {
-			cell, _ := excelize.CoordinatesToCellName(i+1, 1)
-			f.SetCellValue(sheetName, cell, h)
-		}
+		csvWriter.Write(headers)
 
-		style, _ := f.NewStyle(&excelize.Style{
-			NumFmt: 49, // Text
-		})
-		f.SetColStyle(sheetName, "A", style)
-
-		for i, m := range dataToExport {
-			rowNum := i + 2
+		for _, m := range dataToExport {
 			tempJcshms := model.JCShms{
 				JC037: m.PackageForm,
 				JC039: m.YjUnitName,
@@ -84,28 +93,19 @@ func GetExportDataHandler(conn *sql.DB) http.HandlerFunc {
 			}
 			formattedSpec := units.FormatPackageSpec(&tempJcshms)
 
-			f.SetCellValue(sheetName, fmt.Sprintf("A%d", rowNum), m.ProductCode)
-			f.SetCellValue(sheetName, fmt.Sprintf("B%d", rowNum), m.ProductName)
-			f.SetCellValue(sheetName, fmt.Sprintf("C%d", rowNum), m.MakerName)
-			f.SetCellValue(sheetName, fmt.Sprintf("D%d", rowNum), formattedSpec)
-			f.SetCellValue(sheetName, fmt.Sprintf("E%d", rowNum), "")
-		}
-
-		dateStr := r.URL.Query().Get("date")
-		fileType := "ALL"
-		if unregisteredOnly {
-			fileType = "UNREGISTERED"
-		}
-		fileName := fmt.Sprintf("価格見積依頼_%s_%s_%s.xlsx", wholesalerName, fileType, dateStr)
-
-		w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-		w.Header().Set("Content-Disposition", "attachment; filename="+fileName)
-
-		if err := f.Write(w); err != nil {
-			http.Error(w, "Failed to write excel file", http.StatusInternalServerError)
+			record := []string{
+				fmt.Sprintf("=%q", m.ProductCode),
+				m.ProductName,
+				m.MakerName,
+				formattedSpec,
+				"", // purchase_price is left empty
+			}
+			csvWriter.Write(record)
 		}
 	}
 }
+
+// ▲▲▲ [修正ここまで] ▲▲▲
 
 type QuoteDataWithSpec struct {
 	model.ProductMaster
@@ -118,6 +118,7 @@ type UploadResponse struct {
 	WholesalerOrder []string            `json:"wholesalerOrder"`
 }
 
+// UploadQuotesHandler handles uploading quote CSV files from wholesalers.
 func UploadQuotesHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseMultipartForm(32 << 20); err != nil {
@@ -144,28 +145,16 @@ func UploadQuotesHandler(conn *sql.DB) http.HandlerFunc {
 			wholesalerName := wholesalerNames[i]
 			file, err := fileHeader.Open()
 			if err != nil {
+				log.Printf("WARN: could not open uploaded file for %s: %v", wholesalerName, err)
 				continue
 			}
 			defer file.Close()
 
-			buf, err := io.ReadAll(file)
-			if err != nil {
-				continue
-			}
-
-			f, err := excelize.OpenReader(bytes.NewReader(buf))
-			if err != nil {
-				continue
-			}
-
-			sheetList := f.GetSheetList()
-			if len(sheetList) == 0 {
-				continue
-			}
-			sheetName := sheetList[0]
-
-			rows, err := f.GetRows(sheetName)
+			csvReader := csv.NewReader(file)
+			csvReader.LazyQuotes = true
+			rows, err := csvReader.ReadAll()
 			if err != nil || len(rows) < 1 {
+				log.Printf("WARN: could not parse CSV for %s: %v", wholesalerName, err)
 				continue
 			}
 
@@ -181,6 +170,7 @@ func UploadQuotesHandler(conn *sql.DB) http.HandlerFunc {
 			}
 
 			if codeIndex == -1 || priceIndex == -1 {
+				log.Printf("WARN: required columns not found in file from %s", wholesalerName)
 				continue
 			}
 
@@ -189,7 +179,7 @@ func UploadQuotesHandler(conn *sql.DB) http.HandlerFunc {
 					continue
 				}
 
-				productCode := row[codeIndex]
+				productCode := strings.Trim(strings.TrimSpace(row[codeIndex]), `="`)
 				priceStr := row[priceIndex]
 
 				if productCode == "" || priceStr == "" {
@@ -310,33 +300,24 @@ func DirectImportHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer file.Close()
 
-		f, err := excelize.OpenReader(file)
+		csvReader := csv.NewReader(file)
+		csvReader.LazyQuotes = true
+		rows, err := csvReader.ReadAll()
 		if err != nil {
-			http.Error(w, "Failed to read excel file: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		sheetList := f.GetSheetList()
-		if len(sheetList) == 0 {
-			http.Error(w, "No sheets in the excel file", http.StatusBadRequest)
-			return
-		}
-		rows, err := f.GetRows(sheetList[0])
-		if err != nil {
-			http.Error(w, "Failed to get rows from sheet: "+err.Error(), http.StatusBadRequest)
+			http.Error(w, "Failed to parse CSV file: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 
 		var updates []model.PriceUpdate
 		for i, row := range rows {
-			if i == 0 {
+			if i == 0 { // Skip header
 				continue
 			}
-			if len(row) < 6 {
+			if len(row) < 6 { // Expecting at least 6 columns
 				continue
 			}
 
-			productCode := strings.TrimSpace(row[0])
+			productCode := strings.Trim(strings.TrimSpace(row[0]), `="`)
 			priceStr := strings.TrimSpace(row[4])
 			supplierCode := strings.TrimSpace(row[5])
 
@@ -385,7 +366,7 @@ func DirectImportHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// BackupExportHandler exports the current purchase prices and wholesalers as a backup.
+// BackupExportHandler exports the current purchase prices and wholesalers as a backup CSV.
 func BackupExportHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		allMasters, err := db.GetAllProductMasters(conn)
@@ -394,24 +375,19 @@ func BackupExportHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		f := excelize.NewFile()
-		sheetName := "納入価・卸バックアップ"
-		index, _ := f.NewSheet(sheetName)
-		f.SetActiveSheet(index)
-		f.DeleteSheet("Sheet1")
+		now := time.Now()
+		fileName := fmt.Sprintf("納入価・卸バックアップ_%s.csv", now.Format("20060102_150405"))
+		w.Header().Set("Content-Type", "text/csv")
+		w.Header().Set("Content-Disposition", "attachment; filename="+fileName)
+		w.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM
+
+		csvWriter := csv.NewWriter(w)
+		defer csvWriter.Flush()
 
 		headers := []string{"product_code", "product_name", "maker_name", "package_spec", "purchase_price", "supplier_wholesale"}
-		for i, h := range headers {
-			cell, _ := excelize.CoordinatesToCellName(i+1, 1)
-			f.SetCellValue(sheetName, cell, h)
-		}
+		csvWriter.Write(headers)
 
-		style, _ := f.NewStyle(&excelize.Style{NumFmt: 49}) // Text
-		f.SetColStyle(sheetName, "A", style)
-		f.SetColStyle(sheetName, "F", style)
-
-		for i, m := range allMasters {
-			rowNum := i + 2
+		for _, m := range allMasters {
 			tempJcshms := model.JCShms{
 				JC037: m.PackageForm,
 				JC039: m.YjUnitName,
@@ -422,22 +398,15 @@ func BackupExportHandler(conn *sql.DB) http.HandlerFunc {
 			}
 			formattedSpec := units.FormatPackageSpec(&tempJcshms)
 
-			f.SetCellValue(sheetName, fmt.Sprintf("A%d", rowNum), m.ProductCode)
-			f.SetCellValue(sheetName, fmt.Sprintf("B%d", rowNum), m.ProductName)
-			f.SetCellValue(sheetName, fmt.Sprintf("C%d", rowNum), m.MakerName)
-			f.SetCellValue(sheetName, fmt.Sprintf("D%d", rowNum), formattedSpec)
-			f.SetCellValue(sheetName, fmt.Sprintf("E%d", rowNum), m.PurchasePrice)
-			f.SetCellValue(sheetName, fmt.Sprintf("F%d", rowNum), m.SupplierWholesale)
-		}
-
-		now := time.Now()
-		fileName := fmt.Sprintf("納入価・卸バックアップ_%s.xlsx", now.Format("20060102_150405"))
-
-		w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-		w.Header().Set("Content-Disposition", "attachment; filename="+fileName)
-
-		if err := f.Write(w); err != nil {
-			http.Error(w, "Failed to write excel file", http.StatusInternalServerError)
+			record := []string{
+				fmt.Sprintf("=%q", m.ProductCode),
+				m.ProductName,
+				m.MakerName,
+				formattedSpec,
+				strconv.FormatFloat(m.PurchasePrice, 'f', 2, 64),
+				m.SupplierWholesale,
+			}
+			csvWriter.Write(record)
 		}
 	}
 }

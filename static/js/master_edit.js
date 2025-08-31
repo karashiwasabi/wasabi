@@ -1,11 +1,10 @@
-// C:\Dev\WASABI\static\js\master_edit.js
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\master_edit.js
 
 import { showModal } from './inout_modal.js';
-// ▼▼▼ [修正点] utilsから変換関数をインポート ▼▼▼
 import { hiraganaToKatakana } from './utils.js';
-// ▲▲▲ 修正ここまで ▲▲▲
 
-let view, tableContainer, refreshBtn, addRowBtn;
+let view, tableContainer, refreshBtn, addRowBtn, kanaNameInput, dosageFormInput;
+let allMasters = []; // サーバーから取得した全マスターデータを保持する配列
 let unitMap = {};
 
 async function fetchUnitMap() {
@@ -40,17 +39,22 @@ function formatPackageSpecForRow(tbody) {
     if (targetCell) targetCell.textContent = formattedSpec;
 }
 
+// ▼▼▼【ここからが修正箇所です】▼▼▼
 function createMasterRowHTML(master = {}) {
     const isNew = !master.productCode;
     const rowId = master.productCode || `new-${Date.now()}`;
+    
+    // YJコードのreadonly属性を isNew で制御
     const topRowFields = [
         { key: 'productCode', ph: '製品コード(JAN)', readonly: !isNew },
-        { key: 'yjCode', ph: 'YJコード' },
+        { key: 'yjCode', ph: 'YJコード', readonly: isNew }, // 新規行の場合は読み取り専用に
         { key: 'productName', ph: '製品名', colspan: 2 },
         { key: 'kanaName', ph: 'カナ名' },
         { key: 'makerName', ph: 'メーカー名' },
         { key: 'usageClassification', ph: '剤型(JC013)' },
     ];
+    // ▲▲▲【修正ここまで】▲▲▲
+
     const flags = [
         { key: 'flagPoison', ph: '毒', opts: [0, 1] }, { key: 'flagDeleterious', ph: '劇', opts: [0, 1] },
         { key: 'flagNarcotic', ph: '麻', opts: [0, 1] }, { key: 'flagPsychotropic', ph: '向', opts: [0, 1, 2, 3] },
@@ -66,6 +70,7 @@ function createMasterRowHTML(master = {}) {
     ];
 
     let topRowCellsHTML = topRowFields.map(f => `<td ${f.colspan ? `colspan="${f.colspan}"` : ''}><input type="${f.type || 'text'}" name="${f.key}" value="${f.value || master[f.key] || ''}" placeholder="${f.ph}" ${f.readonly ? 'readonly' : ''} ${f.step ? `step="${f.step}"` : ''}></td>`).join('');
+    
     topRowCellsHTML += flags.map(f => {
         const options = f.opts.map(o => `<option value="${o}" ${o == (master[f.key] || 0) ? 'selected' : ''}>${o}</option>`).join('');
         return `<td><select name="${f.key}">${options}</select></td>`;
@@ -86,22 +91,51 @@ function createMasterRowHTML(master = {}) {
     return `<tbody data-record-id="${rowId}"><tr class="data-row-top">${topRowCellsHTML}</tr><tr class="data-row-bottom">${bottomRowCellsHTML}</tr></tbody>`;
 }
 
+function renderMasters(mastersToRender) {
+    if (!mastersToRender || mastersToRender.length === 0) {
+        tableContainer.innerHTML = '<p>対象のマスターが見つかりません。</p>';
+        return;
+    }
+    const tableHeader = `<thead>
+        <tr><th>製品コード(JAN)</th><th>YJコード</th><th colspan="2">製品名</th><th>カナ名</th><th>メーカー名</th><th>剤型</th><th>毒</th><th>劇</th><th>麻</th><th>向</th><th>覚</th><th>覚原</th><th>操作</th></tr>
+        <tr><th>薬価</th><th>包装</th><th>YJ単位</th><th>YJ包装数量</th><th>内包装数量</th><th>JAN単位</th><th>JAN包装数量</th><th colspan="6">組み立て包装</th><th>操作</th></tr>
+    </thead>`;
+    const allTablesHTML = mastersToRender.map(master => {
+        const tableContent = createMasterRowHTML(master);
+        return `<table class="data-table" style="margin-bottom: 15px;">${tableHeader}${tableContent}</table>`;
+    }).join('');
+    tableContainer.innerHTML = allTablesHTML;
+    tableContainer.querySelectorAll('tbody[data-record-id]').forEach(formatPackageSpecForRow);
+}
+
+function applyFiltersAndRender() {
+    const kanaFilter = hiraganaToKatakana(kanaNameInput.value).toLowerCase();
+    const dosageFilter = dosageFormInput.value;
+    let filteredMasters = allMasters;
+
+    if (kanaFilter) {
+        filteredMasters = filteredMasters.filter(p => 
+            (p.productName && p.productName.toLowerCase().includes(kanaFilter)) || 
+            (p.kanaName && p.kanaName.toLowerCase().includes(kanaFilter))
+        );
+    }
+    
+    if (dosageFilter) {
+        filteredMasters = filteredMasters.filter(p => 
+            p.usageClassification && p.usageClassification.trim() === dosageFilter
+        );
+    }
+    
+    renderMasters(filteredMasters);
+}
+
 async function loadAndRenderMasters() {
     tableContainer.innerHTML = `<p>読み込み中...</p>`;
     try {
         const res = await fetch('/api/masters/editable');
         if (!res.ok) throw new Error('マスターの読み込みに失敗しました。');
-        const masters = await res.json();
-        const tableHeader = `<thead>
-            <tr><th>製品コード(JAN)</th><th>YJコード</th><th colspan="2">製品名</th><th>カナ名</th><th>メーカー名</th><th>剤型</th><th>毒</th><th>劇</th><th>麻</th><th>向</th><th>覚</th><th>覚原</th><th>操作</th></tr>
-            <tr><th>薬価</th><th>包装</th><th>YJ単位</th><th>YJ包装数量</th><th>内包装数量</th><th>JAN単位</th><th>JAN包装数量</th><th colspan="6">組み立て包装</th><th>操作</th></tr>
-        </thead>`;
-        const allTablesHTML = masters.map(master => {
-            const tableContent = createMasterRowHTML(master);
-            return `<table class="data-table" style="margin-bottom: 15px;">${tableHeader}${tableContent}</table>`;
-        }).join('');
-        tableContainer.innerHTML = allTablesHTML;
-        tableContainer.querySelectorAll('tbody[data-record-id]').forEach(formatPackageSpecForRow);
+        allMasters = await res.json();
+        applyFiltersAndRender();
     } catch (err) {
         tableContainer.innerHTML = `<p style="color:red;">${err.message}</p>`;
     }
@@ -135,37 +169,60 @@ export async function initMasterEdit() {
     tableContainer = document.getElementById('master-edit-container');
     refreshBtn = document.getElementById('refreshMastersBtn');
     addRowBtn = document.getElementById('addMasterRowBtn');
+    kanaNameInput = document.getElementById('master-edit-kanaName');
+    dosageFormInput = document.getElementById('master-edit-dosageForm');
 
     await fetchUnitMap();
 
     refreshBtn.addEventListener('click', loadAndRenderMasters);
-    addRowBtn.addEventListener('click', () => {
-        const tableHeader = `<thead>
-            <tr><th>製品コード(JAN)</th><th>YJコード</th><th colspan="2">製品名</th><th>カナ名</th><th>メーカー名</th><th>剤型</th><th>毒</th><th>劇</th><th>麻</th><th>向</th><th>覚</th><th>覚原</th><th>操作</th></tr>
-            <tr><th>薬価</th><th>包装</th><th>YJ単位</th><th>YJ包装数量</th><th>内包装数量</th><th>JAN単位</th><th>JAN包装数量</th><th colspan="6">組み立て包装</th><th>操作</th></tr>
-        </thead>`;
-        const newRowContent = createMasterRowHTML();
-        const newTableHTML = `<table class="data-table" style="margin-bottom: 15px;">${tableHeader}${newRowContent}</table>`;
-        tableContainer.insertAdjacentHTML('beforeend', newTableHTML);
-        const newTable = tableContainer.lastElementChild;
-        if (newTable) {
-            newTable.scrollIntoView({ behavior: 'smooth', block: 'end' });
-            const firstInput = newTable.querySelector('input');
-            if (firstInput) firstInput.focus();
+
+    // ▼▼▼【ここからが修正箇所です】▼▼▼
+    addRowBtn.addEventListener('click', async () => {
+        window.showLoading();
+        try {
+            // 1. 新しいYJコードをサーバーから取得
+            const res = await fetch('/api/sequence/next/MA2Y');
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.message || 'YJコードの採番に失敗しました。');
+            
+            // 2. 取得したYJコードをmasterオブジェクトにセット
+            const newMasterData = { yjCode: data.nextCode };
+
+            // 3. テーブルのヘッダーと、YJコードがセットされた新しい行のHTMLを生成
+            const tableHeader = `<thead>
+                <tr><th>製品コード(JAN)</th><th>YJコード</th><th colspan="2">製品名</th><th>カナ名</th><th>メーカー名</th><th>剤型</th><th>毒</th><th>劇</th><th>麻</th><th>向</th><th>覚</th><th>覚原</th><th>操作</th></tr>
+                <tr><th>薬価</th><th>包装</th><th>YJ単位</th><th>YJ包装数量</th><th>内包装数量</th><th>JAN単位</th><th>JAN包装数量</th><th colspan="6">組み立て包装</th><th>操作</th></tr>
+            </thead>`;
+            const newRowContent = createMasterRowHTML(newMasterData);
+            const newTableHTML = `<table class="data-table" style="margin-bottom: 15px;">${tableHeader}${newRowContent}</table>`;
+
+            // 4. 画面に追加
+            tableContainer.insertAdjacentHTML('beforeend', newTableHTML);
+            const newTable = tableContainer.lastElementChild;
+            
+            if (newTable) {
+                newTable.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                // フォーカスを製品コード(JAN)入力欄に当てる
+                const firstInput = newTable.querySelector('input[name="productCode"]');
+                if (firstInput) firstInput.focus();
+            }
+        } catch (err) {
+            window.showNotification(err.message, 'error');
+        } finally {
+            window.hideLoading();
         }
     });
+    // ▲▲▲【修正ここまで】▲▲▲
 
-    // ▼▼▼ [修正点] inputイベントリスナーを修正し、カナ変換を追加 ▼▼▼
+    kanaNameInput.addEventListener('input', applyFiltersAndRender);
+    dosageFormInput.addEventListener('change', applyFiltersAndRender);
+    
     tableContainer.addEventListener('input', (e) => {
-        const target = e.target;
-        const tbody = target.closest('tbody[data-record-id]');
-        
-        // 包装仕様のフォーマット（既存の処理）
+        const tbody = e.target.closest('tbody[data-record-id]');
         if (tbody) {
             formatPackageSpecForRow(tbody);
         }
     });
-    // ▲▲▲ 修正ここまで ▲▲▲
 
     tableContainer.addEventListener('click', async (e) => {
         const target = e.target;
@@ -177,7 +234,13 @@ export async function initMasterEdit() {
             tbody.querySelectorAll('input, select').forEach(el => {
                 const name = el.name;
                 const value = el.value;
-                if (el.tagName === 'SELECT' || el.type === 'number') {
+                
+                // ▼▼▼【修正点】readonlyのYJコードもデータに含めるようにする ▼▼▼
+                if (el.readOnly) {
+                    data[name] = value;
+                } 
+                // ▲▲▲【修正ここまで】▲▲▲
+                else if (el.tagName === 'SELECT' || el.type === 'number') {
                     const numValue = parseFloat(value);
                     data[name] = !isNaN(numValue) ? numValue : 0;
                 } else {
@@ -219,6 +282,8 @@ export async function initMasterEdit() {
 
 export function resetMasterEditView() {
     if (tableContainer) {
+        if(kanaNameInput) kanaNameInput.value = '';
+        if(dosageFormInput) dosageFormInput.value = '';
         loadAndRenderMasters();
     }
 }

@@ -1,0 +1,93 @@
+package parsers
+
+import (
+	"encoding/csv"
+	"fmt"
+	"io"
+	"strconv"
+	"strings"
+	"wasabi/model"
+
+	"golang.org/x/text/encoding/japanese"
+	"golang.org/x/text/transform"
+)
+
+// ParsedInventoryDataはファイル全体の構造体です
+type ParsedInventoryData struct {
+	Date    string
+	Records []model.UnifiedInputRecord
+}
+
+// trimQuotesは文字列から空白とシングルクォートを除去します
+func trimQuotes(s string) string {
+	return strings.Trim(strings.TrimSpace(s), "'")
+}
+
+// ParseInventoryFileは棚卸ファイルを解析し、UnifiedInputRecordのスライスを返します
+func ParseInventoryFile(r io.Reader) (*ParsedInventoryData, error) {
+	decoder := japanese.ShiftJIS.NewDecoder()
+	reader := csv.NewReader(transform.NewReader(r, decoder))
+	reader.FieldsPerRecord = -1
+
+	var result ParsedInventoryData
+
+	// ▼▼▼ [修正点] 重複するJANコードの数量を合算するためのマップを準備 ▼▼▼
+	recordMap := make(map[string]*model.UnifiedInputRecord)
+	// ▲▲▲ 修正ここまで ▲▲▲
+
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, fmt.Errorf("csv read all error: %w", err)
+	}
+
+	for _, row := range records {
+		if len(row) == 0 {
+			continue
+		}
+
+		rowType := strings.TrimSpace(row[0])
+		switch rowType {
+		case "H":
+			if len(row) > 4 {
+				result.Date = trimQuotes(row[4])
+			}
+		case "R1":
+			if len(row) > 45 {
+				janCode := trimQuotes(row[45])
+				if janCode == "" {
+					continue // JANコードがないレコードは集計できないためスキップ
+				}
+
+				physicalJanQty, _ := strconv.ParseFloat(strings.TrimSpace(row[21]), 64)
+
+				// ▼▼▼ [修正点] 重複チェックと数量の合算ロジック ▼▼▼
+				if existing, ok := recordMap[janCode]; ok {
+					// 既にマップに存在する場合、数量を加算
+					existing.JanQuantity += physicalJanQty
+				} else {
+					// マップに存在しない場合、新しいレコードとして追加
+					innerPackQty, _ := strconv.ParseFloat(strings.TrimSpace(row[17]), 64)
+					recordMap[janCode] = &model.UnifiedInputRecord{
+						ProductName:     trimQuotes(row[12]),
+						YjUnitName:      trimQuotes(row[16]),
+						JanPackInnerQty: innerPackQty,
+						JanQuantity:     physicalJanQty,
+						YjCode:          trimQuotes(row[42]),
+						JanCode:         janCode,
+					}
+				}
+				// ▲▲▲ 修正ここまで ▲▲▲
+			}
+		}
+	}
+
+	// ▼▼▼ [修正点] 合算後のマップから最終的なスライスを作成 ▼▼▼
+	finalRecords := make([]model.UnifiedInputRecord, 0, len(recordMap))
+	for _, rec := range recordMap {
+		finalRecords = append(finalRecords, *rec)
+	}
+	result.Records = finalRecords
+	// ▲▲▲ 修正ここまで ▲▲▲
+
+	return &result, nil
+}

@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>WASABI</title>
+    <script src="https://cdn.jsdelivr.net/npm/encoding-japanese@2.1.0/encoding.min.js"></script>
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <link rel="stylesheet" href="/static/css/inout.css">
+</head>
+<body>
+
+<header id="main-header">
+    <button id="inOutViewBtn" class="btn btn-blue">入庫・出庫</button>
+    <button id="precompBtn" class="btn btn-blue">予製</button>
+    <button id="datBtn" class="btn btn-azure">納品・返品</button>
+    <button id="medrecDownloadBtn" class="btn btn-azure">chrome連携</button>
+    <button id="edeDownloadBtn" class="btn btn-azure">edge連携</button>
+    <button id="usageBtn" class="btn btn-red">処方</button>
+    <button id="inventoryBtn" class="btn btn-green">棚卸読込</button>
+    <button id="manualInventoryBtn" class="btn btn-green">棚卸入力</button>
+    <button id="inventoryAdjustmentBtn" class="btn btn-green">棚卸調整</button>
+    <button id="aggregationBtn" class="btn btn-spring-green">集計</button>
+    <button id="valuationBtn" class="btn btn-spring-green">在庫評価</button>
+    <button id="orderBtn" class="btn btn-orange">発注</button>
+    <button id="backorderBtn" class="btn btn-orange">発注残</button>
+    <button id="returnsBtn" class="btn btn-yellow">返品リスト</button>
+    <button id="deadStockBtn" class="btn btn-yellow">デッドストック</button>
+    <button id="pricingBtn" class="btn btn-violet">価格更新</button>
+    <button id="exportPricingBtn" class="btn btn-violet">納入価・卸バックアップ</button>
+    <button id="masterEditViewBtn" class="btn btn-magenta">マスター</button>
+    <button id="exportProductsBtn" class="btn btn-magenta">製品エクスポート</button>
+    <button id="importProductsBtn" class="btn btn-magenta">製品インポート</button>
+    <button id="reprocessBtn" class="btn btn-rose">再計算</button>
+    <button id="exportClientsBtn" class="btn btn-cyan">得意先エクスポート</button>
+    <button id="importClientsBtn" class="btn btn-cyan">得意先インポート</button>
+    <button id="settingsBtn" class="btn btn-chartreuse">設定</button>
+</header>
+
+<main>
+    <input type="file" id="datFileInput" multiple style="display:none;">
+    <input type="file" id="usageFileInput" style="display:none;">
+    <input type="file" id="inventoryFileInput" style="display:none;">
+
+<div id="in-out-view" class="inout-view-container">
+    <div class="inout-header-controls">
+        <div class="field-group"><label for="in-out-date">日付</label><input type="date" id="in-out-date"></div>
+        <div class="field-group"><label for="in-out-type">種別</label><select id="in-out-type"><option>入庫</option><option>出庫</option></select></div>
+        <div class="field-group"><label for="in-out-client">得意先</label><select id="in-out-client"></select></div>
+        <div class="field-group"><label for="in-out-receipt">伝票番号</label><select id="in-out-receipt"></select></div>
+        <div class="buttons-group"><button id="saveBtn" class="btn">保存</button><button id="deleteBtn" class="btn">伝票削除</button></div>
+    </div>
+    <div class="inout-details-header"><button id="addRowBtn" class="btn">明細を追加</button></div>
+    <div id="inout-details-container"></div>
+</div>
+
+<div id="upload-view" class="hidden">
+    <p id="upload-view-title" class="view-subtitle">File Upload</p>
+    <div id="upload-output-container"></div>
+</div>
+    
+<div id="inventory-view" class="hidden">
+    <p class="view-subtitle">Inventory File Upload</p>
+    <div id="inventory-output-container"></div>
+</div>
+
+<div id="manual-inventory-view" class="hidden">
+    <p class="view-title">棚卸（手入力）</p>
+    <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end;">
+    <div class="field-group">
+            <label for="manual-inv-date">棚卸日</label>
+            <input type="date" id="manual-inv-date">
+        </div>
+        <div class="field-group">
+            <label for="manual-inv-kanaName">製品名/カナ名</label>
+            <input type="text" id="manual-inv-kanaName" placeholder="（部分一致）">
+        </div>
+<div class="field-group">
+    <label for="manual-inv-dosageForm">剤型</label>
+    <select id="manual-inv-dosageForm">
+        <option value="">すべて</option>
+        <option value="内">内</option>
+        <option value="外">外</option>
+        <option value="歯">歯</option>
+        <option value="注">注</option>
+        <option value="機">機</option>
+        <option value="他">他</option>
+    </select>
+</div>
+        <div class="buttons-group">
+            <button id="save-manual-inv-btn" class="btn" style="background-color: #0d6efd; color: white;">この内容で棚卸を保存</button>
+        </div>
+    </div>
+    <div id="manual-inventory-container">
+        <p>読み込み中...</p>
+    </div>
+</div>
+
+    <div id="inventory-adjustment-view" class="hidden inout-view-container">
+    <p class="view-title">棚卸調整</p>
+        <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
+            <div class="field-group">
+                <label for="ia-dosageForm">1. 剤型で絞り込み</label>
+                <select id="ia-dosageForm">
+                    <option value="">すべて</option>
+                    <option value="内">内</option>
+                    <option value="外">外</option>
+                    <option value="歯">歯</option>
+                    <option value="注">注</option>
+                    <option value="機">機</option>
+                    <option value="他">他</option>
+                </select>
+            </div>
+            <div class="field-group">
+                <label for="ia-kanaInitial">2. カナ名 (頭文字)</label>
+                <select id="ia-kanaInitial">
+                    <option value="">すべて</option>
+                    <option value="ア">ア行</option>
+                    <option value="カ">カ行</option>
+                    <option value="サ">サ行</option>
+                    <option value="タ">タ行</option>
+                    <option value="ナ">ナ行</option>
+                    <option value="ハ">ハ行</option>
+                    <option value="マ">マ行</option>
+                    <option value="ヤ">ヤ行</option>
+                    <option value="ラ">ラ行</option>
+                    <option value="ワ">ワ行</option>
+                </select>
+            </div>
+            <div class="field-group">
+                 <label>3. 品目を選択</label>
+                <button id="ia-select-product-btn" class="btn">品目を選択...</button>
+            </div>
+            <div class="field-group" style="margin-left: auto;">
+                <label for="ia-startDate">期間 開始</label>
+                <input type="date" id="ia-startDate">
+            </div>
+            <div class="field-group">
+                <label for="ia-endDate">期間 終了</label>
+                <input type="date" id="ia-endDate">
+            </div>
+        </div>
+        <div id="inventory-adjustment-output">
+            <p>フィルターで品目を選択してください。</p>
+        </div>
+    </div>
+
+<div id="search-modal" class="modal-overlay hidden">
+    <div class="modal-content">
+        <div class="modal-header">
+        <p class="modal-title">薬品検索</p>
+        <button id="closeModalBtn" class="close-button">&times;</button>
+        </div>
+        <div style="display: flex; gap: 5px; margin-bottom: 10px;">
+        <input type="text" id="product-search-input" placeholder="製品名またはカナ名（2文字以上）" style="flex-grow: 1; padding: 5px;">
+        <button id="product-search-btn" class="btn">検索</button>
+        </div>
+        <div class="modal-body" id="search-results-container">
+        <table id="search-results-table">
+            <thead><tr><th>製品名</th><th>メーカー</th><th>包装</th><th>YJコード</th><th>JANコード</th><th>選択</th></tr></thead>
+            <tbody></tbody>
+        </table>
+        </div>
+    </div>
+</div>
+
+<div id="master-edit-view" class="hidden">
+    <div class="inout-header-controls" style="justify-content: flex-start; gap: 20px;">
+        <div class="field-group">
+            <label for="master-edit-kanaName">製品名/カナ名</label>
+            <input type="text" id="master-edit-kanaName" placeholder="（部分一致）">
+        </div>
+        <div class="field-group">
+            <label for="master-edit-dosageForm">剤型</label>
+            <select id="master-edit-dosageForm">
+                <option value="">すべて</option>
+                <option value="内">内</option>
+                <option value="外">外</option>
+                <option value="歯">歯</option>
+                <option value="注">注</option>
+                <option value="機">機</option>
+                <option value="他">他</option>
+            </select>
+        </div>
+        <div class="buttons-group" style="margin-left: auto;">
+            <button id="addMasterRowBtn" class="btn">新規行を追加</button>
+            <button id="refreshMastersBtn" class="btn">一覧を更新</button>
+        </div>
+    </div>
+    <div id="master-edit-container"></div>
+    </div>
+
+<div id="precomp-view" class="hidden inout-view-container">
+<div class="inout-header-controls">
+        <div class="field-group">
+            <label for="precomp-patient-number">患者番号</label>
+        <input type="text" id="precomp-patient-number" placeholder="患者番号を入力">
+        </div>
+        <button id="precomp-load-btn" class="btn">呼び出し</button>
+        
+ <div class="buttons-group">
+            <button id="precomp-import-btn" class="btn">CSVインポート</button>
+            <button id="precomp-import-all-btn" class="btn">CSVインポート（全件）</button>
+            <button id="precomp-export-btn" class="btn">CSVエクスポート</button>
+            <button id="precomp-export-all-btn" class="btn">CSVエクスポート（全件）</button>
+            <button id="precomp-clear-btn" class="btn" style="background-color: #dc3545; color: white;">中断</button>
+            <button id="precomp-save-btn" class="btn" style="background-color: #0d6efd; color: white;">保存</button>
+        </div>
+    </div>
+    <div class="inout-details-header">
+        <button id="precomp-add-row-btn" class="btn">明細を追加</button>
+    </div>
+    <div id="precomp-details-container">
+    </div>
+</div>
+
+<div id="settings-view" class="hidden">
+    <div class="settings-form-container">
+        <fieldset>
+            <legend>e-mednet / ede 連携設定</legend>
+            <p style="font-size: 11px; margin-bottom: 10px;">e-mednetとedeで共通のIDとパスワードを使用します。</p>
+             <div class="field-group">
+                <label for="emednetUserID">ユーザーID</label>
+                <input type="text" id="emednetUserID" style="width: 300px;">
+            </div>
+            <div class="field-group">
+                <label for="emednetPassword">パスワード</label>
+                 <input type="password" id="emednetPassword" style="width: 300px;">
+            </div>
+        </fieldset>
+
+        <fieldset style="margin-top: 20px;">
+            <legend>卸業者管理</legend>
+            <div style="display: flex; gap: 10px; align-items: flex-end; margin-bottom: 10px;">
+                <div class="field-group">
+                    <label for="wholesalerCode">卸コード (数字)</label>
+                    <input type="text" id="wholesalerCode" placeholder="例: 12345">
+                </div>
+                <div class="field-group">
+                    <label for="wholesalerName">卸業者名</label>
+                    <input type="text" id="wholesalerName" placeholder="例: 株式会社〇〇">
+                </div>
+                <button id="addWholesalerBtn" class="btn">追加</button>
+            </div>
+            <table class="data-table" id="wholesalers-table">
+                <thead>
+                    <tr>
+                        <th style="width: 30%;">卸コード</th>
+                        <th style="width: 50%;">卸業者名</th>
+                        <th style="width: 20%;">操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                </tbody>
+            </table>
+        </fieldset>
+
+        <fieldset style="margin-top: 20px;">
+            <legend>マスターデータ管理</legend>
+            <div class="buttons-group">
+                <button id="reloadJcshmsBtn" class="btn">JCSHMSマスター再読込</button>
+            </div>
+            <p style="font-size: 11px; margin-top: 5px;">SOUフォルダ内のJCSHMS.CSVとJANCODE.CSVをデータベースに再登録します。処理には数分かかる場合があります。</p>
+        </fieldset>
+        
+        <fieldset style="margin-top: 20px; border-color: #dc3545;">
+            <legend style="color: #dc3545;">データメンテナンス</legend>
+            
+            <div class="buttons-group" style="margin-top: 20px;">
+                <button id="clearAllTransactionsBtn" class="btn" style="background-color: #dc3545; color: white;">全取引データ削除</button>
+ <button id="clearAllMastersBtn" class="btn" style="background-color: #dc3545; color: white;">製品マスター全削除</button>
+            </div>
+            <p style="font-size: 11px; margin-top: 5px; color: #dc3545;">
+                <strong>注意:</strong> この操作は全ての取引履歴を完全に削除します。マスターデータは維持されますが、在庫は全て0になります。この操作は元に戻せません。
+            </p>
+        </fieldset>
+
+        <div class="buttons-group" style="margin-top: 20px;">
+            <button id="saveSettingsBtn" class="btn" style="background-color: #0d6efd; color: white;">設定を保存</button>
+        </div>
+    </div>
+</div>
+<div id="deadstock-view" class="hidden">
+    <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
+        <div class="field-group">
+            <label for="ds-startDate">期間 開始</label>
+            <input type="date" id="ds-startDate">
+        </div>
+        <div class="field-group">
+            <label for="ds-endDate">期間 終了</label>
+            <input type="date" id="ds-endDate">
+        </div>
+        <div class="field-group">
+            <label for="ds-kanaName">製品名/カナ名</label>
+            <input type="text" id="ds-kanaName" placeholder="（部分一致）">
+        </div>
+        <div class="field-group">
+            <label for="ds-dosageForm">剤型</label>
+            <select id="ds-dosageForm">
+                <option value="">すべて</option>
+                <option value="内">内</option>
+                <option value="外">外</option>
+                <option value="歯">歯</option>
+                <option value="注">注</option>
+                <option value="機">機</option>
+                <option value="他">他</option>
+            </select>
+        </div>
+        <div class="field-group">
+            <label><input type="checkbox" id="ds-exclude-zero-stock"> 在庫が0の品目を除外</label>
+        </div>
+        <div class="buttons-group">
+            <button id="run-dead-stock-btn" class="btn">リスト作成</button>
+            <button id="import-deadstock-btn" class="btn">CSV読込</button>
+            <button id="create-deadstock-csv-btn" class="btn">CSV作成</button>
+        </div>
+    </div>
+    <div id="deadstock-output-container"></div>
+</div>
+
+<div id="order-view" class="hidden">
+    <div class="controls-grid" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
+        <div class="field-group">
+            <label for="order-startDate">期間 開始</label>
+            <input type="date" id="order-startDate">
+        </div>
+        <div class="field-group">
+            <label for="order-endDate">期間 終了</label>
+            <input type="date" id="order-endDate">
+        </div>
+        <div class="field-group">
+            <label for="order-kanaName">薬品名カナ</label>
+            <input type="text" id="order-kanaName" placeholder="（前方一致）">
+        </div>
+        <div class="field-group">
+            <label for="order-dosageForm">剤形</label>
+            <input type="text" id="order-dosageForm" placeholder="（部分一致）">
+        </div>
+        <div class="field-group">
+            <label for="order-reorder-coefficient">発注点係数</label>
+            <input type="number" id="order-reorder-coefficient" value="1.5" step="0.1">
+        </div>
+        <div class="field-group">
+            <button id="generate-order-candidates-btn" class="btn">不足品リストを作成</button>
+        </div>
+                <div class="field-group">
+            <button id="createOrderCsvBtn" class="btn" style="background-color: #198754; color: white;">発注書作成 (CSVダウンロード)</button>
+        </div>
+    </div>
+    <div id="order-candidates-output">
+    </div>
+</div>
+
+<div id="backorder-view" class="hidden">
+    <div class="filter-container">
+        <p class="view-subtitle" style="margin:0;">発注残一覧</p>
+    </div>
+    <div id="backorder-output-container"></div>
+</div>
+
+<div id="pricing-view" class="hidden">
+<p class="view-title">卸別・納入価格一括更新</p>
+<div class="controls-grid" style="border: 1px solid #ccc; padding: 10px; margin-bottom: 15px;">
+        <div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-end;">
+
+            <fieldset style="border: 1px solid #ccc; padding: 10px;">
+                <legend>ステップ1: テンプレート出力</legend>
+                <div class="field-group">
+                    <label for="pricing-wholesaler-select">見積もり依頼する卸業者を選択</label>
+                    <select id="pricing-wholesaler-select"></select>
+                </div>
+                <button id="pricing-export-btn" class="btn">全品の見積依頼Excelを出力</button>
+                <button id="pricing-export-unregistered-btn" class="btn">未登録品の見積依頼Excelを出力</button>
+            </fieldset>
+            
+            <fieldset style="border: 1px solid #ccc; padding: 10px;">
+                <legend>ステップ2: 見積もり入力</legend>
+                <div class="field-group">
+                    <label for="pricing-upload-input">卸から回収したCSVファイルを選択 (複数可)</label>
+                    <input type="file" id="pricing-upload-input" multiple accept=".csv">
+                </div>
+            </fieldset>
+
+            <fieldset style="border: 1px solid #ccc; padding: 10px;">
+                <legend>ステップ3: マスター更新</legend>
+                <button id="set-lowest-price-btn" class="btn">一括で最安値に設定</button>
+                <button id="pricing-bulk-update-btn" class="btn" style="background-color: #dc3545; color: white;">一覧の選択内容でマスターを一括更新</button>
+            </fieldset>
+
+                        <fieldset style="border: 1px solid #ccc; padding: 10px;">
+                <legend>ステップ4: 納入価一括インポート</legend>
+                <div class="field-group">
+                    <label for="pricing-direct-import-input">卸コードと納入価が入力済みのCSVファイルを選択</label>
+                    <input type="file" id="pricing-direct-import-input" style="display:none;" accept=".csv">
+                    <button id="pricing-direct-import-btn" class="btn">ファイルを選択して一括更新</button>
+                </div>
+            </fieldset>
+            
+            <fieldset style="border: 1px solid #ccc; padding: 10px;">
+                <legend>フィルター</legend>
+                <div class="field-group">
+                    <label for="pricing-maker-filter">メーカー名絞り込み</label>
+                    <input type="text" id="pricing-maker-filter" placeholder="メーカー名を入力">
+                </div>
+                <div class="field-group">
+                    <label><input type="checkbox" id="pricing-unregistered-filter"> 採用卸 未登録のみ</label>
+                </div>
+            </fieldset>
+            </div>
+    </div>
+    <div id="pricing-output-container">
+        <p>ステップ2で回収済みExcelをアップロードしてください。</p>
+    </div>
+</div>
+
+<div id="aggregation-view" class="hidden">
+    <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
+            <div class="field-group"><label for="startDate">開始日</label><input type="date" id="startDate"></div>
+            <div class="field-group"><label for="endDate">終了日</label><input type="date" id="endDate"></div>
+            
+            <div class="field-group">
+                <label for="agg-kanaName">製品名/カナ名</label>
+                <input type="text" id="agg-kanaName" placeholder="（部分一致）">
+            </div>
+
+            <div class="field-group">
+                <label for="agg-dosageForm">剤型</label>
+                <select id="agg-dosageForm">
+                    <option value="all">すべて</option>
+                    <option value="内">内</option>
+                    <option value="外">外</option>
+                    <option value="歯">歯</option>
+                    <option value="注">注</option>
+                    <option value="機">機</option>
+                    <option value="他">他</option>
+                </select>
+            </div>
+
+            <div class="field-group"><label for="reorder-coefficient">発注点係数</label><input type="number" id="reorder-coefficient" value="1.5" step="0.1" style="width: 80px;"></div>
+            <div class="field-group">
+                <label>薬の種類</label>
+                <div style="display: flex; flex-wrap: wrap; gap: 5px 10px;">
+                    <label><input type="checkbox" name="drugType" value="poison">毒</label>
+                    <label><input type="checkbox" name="drugType" value="deleterious">劇</label>
+                    <label><input type="checkbox" name="drugType" value="narcotic">麻</label>
+                    <label><input type="checkbox" name="drugType" value="psychotropic1">向1</label>
+                    <label><input type="checkbox" name="drugType" value="psychotropic2">向2</label>
+                    <label><input type="checkbox" name="drugType" value="psychotropic3">向3</label>
+                    <label><input type="checkbox" name="drugType" value="stimulant">覚</label>
+                    <label><input type="checkbox" name="drugType" value="stimulant_raw">覚原</label>
+                </div>
+            </div>
+            <div class="field-group"><label><input type="checkbox" id="reorder-needed-filter"> 不足品のみ</label></div>
+            <div class="field-group"><label><input type="checkbox" id="movement-only-filter"> 期間内に動きがあった品目のみ</label></div>
+            <div class="buttons-group" style="margin-left: auto;">
+                <button id="run-aggregation-btn" class="btn">集計実行</button>
+                <button id="print-aggregation-btn" class="btn">印刷</button>
+            </div>
+        </div>
+        <div id="aggregation-output-container"></div>
+</div>
+    
+<div id="valuation-view" class="hidden">
+        <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
+            <div class="field-group">
+                <label for="valuation-date">評価基準日</label>
+                <input type="date" id="valuation-date">
+            </div>
+
+            <div class="field-group">
+                <label for="val-kanaName">製品名/カナ名</label>
+                <input type="text" id="val-kanaName" placeholder="（部分一致）">
+            </div>
+
+            <div class="field-group">
+                <label for="val-dosageForm">剤型</label>
+                <select id="val-dosageForm">
+                    <option value="all">すべて</option>
+                    <option value="内">内</option>
+                    <option value="外">外</option>
+                    <option value="歯">歯</option>
+                    <option value="注">注</option>
+                    <option value="機">機</option>
+                    <option value="他">他</option>
+                </select>
+            </div>
+
+            <div class="buttons-group">
+                <button id="run-valuation-btn" class="btn">計算実行</button>
+                <button id="export-valuation-btn" class="btn">Excelエクスポート</button>
+            </div>
+        </div>
+        <div id="valuation-output-container">
+            <p>評価基準日を指定して「計算実行」を押してください。</p>
+        </div>
+</div>
+
+<div id="returns-view" class="hidden">
+        <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
+            <div class="field-group">
+                <label for="ret-startDate">期間 開始</label>
+                <input type="date" id="ret-startDate">
+            </div>
+            <div class="field-group">
+                <label for="ret-endDate">期間 終了</label>
+                <input type="date" id="ret-endDate">
+            </div>
+            <div class="field-group">
+                <label for="ret-kanaName">薬品名カナ</label>
+                <input type="text" id="ret-kanaName" placeholder="（前方一致）">
+            </div>
+            <div class="field-group">
+                <label for="ret-dosageForm">剤形</label>
+                <select id="ret-dosageForm">
+                    <option value="">すべて</option>
+                    <option value="内">内</option>
+                    <option value="外">外</option>
+                    <option value="歯">歯</option>
+                    <option value="注">注</option>
+                    <option value="機">機</option>
+                    <option value="他">他</option>
+                </select>
+            </div>
+            <div class="field-group">
+                <label for="ret-coefficient">係数</label>
+                <input type="number" id="ret-coefficient" value="1.5" step="0.1" style="width: 80px;">
+            </div>
+            <div class="buttons-group">
+                <button id="run-returns-list-btn" class="btn">リスト作成</button>
+                <button id="print-returns-list-btn" class="btn">印刷</button>
+            </div>
+        </div>
+        <div id="returns-list-output-container">
+            <p>フィルター条件を指定して「リスト作成」を押してください。</p>
+        </div>
+</div>
+
+<input type="file" id="importClientsInput" style="display:none;" accept=".xlsx">
+<input type="file" id="importDeadstockInput" style="display:none;" accept=".csv">
+<input type="file" id="importProductsInput" style="display:none;" accept=".csv">
+<input type="file" id="precomp-import-input" style="display:none;" accept=".csv">
+<input type="file" id="precomp-import-all-input" style="display:none;" accept=".csv">
+
+</main>
+
+<div id="loading-overlay" class="hidden"><div class="spinner"></div><p>Processing...</p></div>
+<div id="notification-box" class="notification-box"></div>
+
+<script type="module" src="/static/js/app.js"></script>
+</body>
+</html>

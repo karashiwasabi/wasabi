@@ -104,9 +104,9 @@ function createRowHTML(record = {}, unitName = '単位', isFirstRow = false) {
     const expiry = record.expiryDate || '';
     const lot = record.lotNumber || '';
     const recordId = record.id || `new-${Date.now()}`;
-    const buttonHTML = isFirstRow
-        ? `<button class="btn add-ds-row-btn">＋</button>`
-        : `<button class="btn delete-ds-row-btn">－</button>`;
+    // ▼▼▼ [修正箇所] isFirstRowによる分岐をなくし、常に「－」ボタンを表示する ▼▼▼
+    const buttonHTML = `<button class="btn delete-ds-row-btn">－</button>`;
+    // ▲▲▲ 修正ここまで ▲▲▲
     return `
         <tr data-record-id="${recordId}">
             <td>
@@ -126,9 +126,11 @@ function createProductHTML(product) {
     const janUnit = product.yjUnitName || '単位';
     let rowsHTML = '';
     if (product.savedRecords && product.savedRecords.length > 0) {
-        rowsHTML = product.savedRecords.map((rec, index) => createRowHTML(rec, janUnit, index === 0)).join('');
+        // isFirstRowを常にfalseにすることで、全行に「－」ボタンが付くようになります
+        rowsHTML = product.savedRecords.map((rec, index) => createRowHTML(rec, janUnit, false)).join('');
     } else {
-        rowsHTML = createRowHTML({ stockQuantityJan: product.currentStock }, janUnit, true);
+        // 既存レコードがない場合は、空の入力行を1つ用意します
+        rowsHTML = createRowHTML({ stockQuantityJan: product.currentStock }, janUnit, false);
     }
 
     return `
@@ -139,6 +141,7 @@ function createProductHTML(product) {
              data-package-form="${product.packageForm}"
              data-jan-pack-inner-qty="${product.janPackInnerQty}"
              data-yj-unit-name="${product.yjUnitName}">
+      
             <div class="product-header" style="padding: 4px 8px; background-color: #f0f0f0; border-top: 1px solid #ccc; display: flex; justify-content: space-between;">
                 <span>
                     <strong>JAN: ${product.productCode}</strong>
@@ -158,7 +161,9 @@ function createProductHTML(product) {
                     </thead>
                     <tbody>${rowsHTML}</tbody>
                 </table>
-               <div class="entry-controls" style="text-align: right; padding: 4px;">
+ 
+                <div class="entry-controls" style="text-align: right; padding: 4px; display: flex; justify-content: space-between; align-items: center;">
+                    <button class="btn add-ds-row-btn">＋ロット情報を追加</button>
                     <button class="btn save-ds-btn" style="background-color: #0d6efd; color: white;">このJANの期限・ロットを保存</button>
                 </div>
             </div>
@@ -249,10 +254,160 @@ export function initDeadStock() {
     importInput = document.getElementById('importDeadstockInput');
 
     const today = new Date();
-    const threeMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 3, today.getDate());
+    const threeMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 3, 1);
     endDateInput.value = today.toISOString().slice(0, 10);
     startDateInput.value = threeMonthsAgo.toISOString().slice(0, 10);
     
+    // ▼▼▼ [修正箇所] イベントリスナーを view から outputContainer に変更し、その中に全てのクリック処理をまとめます ▼▼▼
+    if (outputContainer) {
+        outputContainer.addEventListener('click', async (e) => {
+            const target = e.target;
+
+            // 「ロット情報を追加」ボタンの処理
+            if (target.classList.contains('add-ds-row-btn')) {
+                const productContainer = target.closest('.dead-stock-product-container');
+                const unitNameSpan = productContainer.querySelector('.ds-unit-name');
+                const unitName = unitNameSpan ? unitNameSpan.textContent : '単位';
+                const tbody = productContainer.querySelector('tbody');
+                tbody.insertAdjacentHTML('beforeend', createRowHTML({}, unitName, false));
+            }
+
+            // 「－」(削除)ボタンの処理
+            if (target.classList.contains('delete-ds-row-btn')) {
+                const row = target.closest('tr');
+                if (row) {
+                    row.remove();
+                }
+            }
+            
+            // 「このJANの期限・ロットを保存」ボタンの処理
+            if (target.classList.contains('save-ds-btn')) {
+                const productContainer = target.closest('.dead-stock-product-container');
+                const productCode = productContainer.dataset.productCode;
+                const yjCode = productContainer.dataset.yjCode;
+                const rows = productContainer.querySelectorAll('tbody tr');
+                const payload = [];
+                const pkgContainer = productContainer.closest('.dead-stock-package-container');
+                const pkgHeaderText = pkgContainer.querySelector('.agg-pkg-header span:first-child').textContent;
+                const pkgInfo = pkgHeaderText.replace('包装: ', '').split('|');
+                rows.forEach(row => {
+                    payload.push({
+                        productCode: productCode,
+                        yjCode: yjCode,
+                        packageForm: pkgInfo[0] || '',
+                        janPackInnerQty: parseFloat(pkgInfo[1]) || 0,
+                        yjUnitName: pkgInfo[2] || '',
+                        stockQuantityJan: parseFloat(row.querySelector('.ds-stock-quantity').value) || 0,
+                        expiryDate: row.querySelector('.ds-expiry-date').value,
+                        lotNumber: row.querySelector('.ds-lot-number').value,
+                    });
+                });
+                window.showLoading();
+                try {
+                    const res = await fetch('/api/deadstock/save', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload),
+                    });
+                    const resData = await res.json();
+                    if (!res.ok) throw new Error(resData.message || '保存に失敗しました。');
+                    window.showNotification(resData.message, 'success');
+                } catch (err) {
+                    window.showNotification(`エラー: ${err.message}`, 'error');
+                } finally {
+                    window.hideLoading();
+                }
+            }
+            
+            // 「JAN品目追加」ボタンの処理
+            if (target.classList.contains('add-jan-btn')) {
+                const yjCode = target.dataset.yjCode;
+                window.showLoading();
+                try {
+                    const resMasters = await fetch(`/api/masters/by_yj_code?yj_code=${yjCode}`);
+                    if (!resMasters.ok) throw new Error('製品リストの取得に失敗');
+                    const masters = await resMasters.json();
+                    if (!masters || masters.length === 0) {
+                        throw new Error('このYJコードに紐づく製品マスターが見つかりません。');
+                    }
+                    
+                    const targetWrapper = target.closest(`[data-yj-code-wrapper]`);
+                    showModal(targetWrapper, async (selectedProduct, wrapper) => {
+                        window.showLoading();
+                        try {
+                            const resStock = await fetch(`/api/stock/current?jan_code=${selectedProduct.productCode}`);
+                            if (!resStock.ok) throw new Error('在庫数の取得に失敗');
+                            const stockData = await resStock.json();
+                            
+                            const newPackageKey = `${selectedProduct.packageForm}|${selectedProduct.janPackInnerQty}|${selectedProduct.yjUnitName}`;
+                            
+                            const newProductData = {
+                                ...selectedProduct,
+                                currentStock: stockData.stock,
+                                savedRecords: [],
+                            };
+                            
+                            const newProductHTML = createProductHTML(newProductData);
+
+                            const packagesContainer = wrapper.querySelector('.packages-container');
+                            let targetPackageContainer = null;
+                            packagesContainer.querySelectorAll('.dead-stock-package-container').forEach(pkgDiv => {
+                                const headerText = pkgDiv.querySelector('.agg-pkg-header span:first-child').textContent;
+                                if (headerText.includes(newPackageKey)) {
+                                    targetPackageContainer = pkgDiv.querySelector('.products-container');
+                                }
+                            });
+                            if (!targetPackageContainer) {
+                                const newPackageGroupData = {
+                                    packageKey: newPackageKey,
+                                    totalStock: newProductData.currentStock,
+                                    products: [newProductData]
+                                };
+                                const newPackageGroupHTML = createPackageGroupHTML(newPackageGroupData);
+                                packagesContainer.insertAdjacentHTML('beforeend', newPackageGroupHTML);
+                            } else {
+                                targetPackageContainer.insertAdjacentHTML('beforeend', newProductHTML);
+                            }
+                        } catch (err) {
+                            window.showNotification(err.message, 'error');
+                        } finally {
+                            window.hideLoading();
+                        }
+                    }, { initialResults: masters, searchApi: `/api/masters/by_yj_code?yj_code=${yjCode}` });
+                } catch (err) {
+                    window.showNotification(err.message, 'error');
+                } finally {
+                    window.hideLoading();
+                }
+            }
+        });
+    }
+
+    // 「リスト作成」ボタンのイベントリスナーは静的なので、viewに設定したままでOK
+    if (view) {
+        const runBtn = view.querySelector('#run-dead-stock-btn');
+        if (runBtn) {
+            runBtn.addEventListener('click', () => {
+                window.showLoading();
+                const params = new URLSearchParams({
+                    startDate: startDateInput.value.replace(/-/g, ''),
+                    endDate: endDateInput.value.replace(/-/g, ''),
+                    excludeZeroStock: excludeZeroStockCheckbox.checked,
+                    kanaName: hiraganaToKatakana(kanaNameInput.value),
+                    dosageForm: dosageFormInput.value,
+                });
+                fetch(`/api/deadstock/list?${params.toString()}`)
+                    .then(res => {
+                        if (!res.ok) { return res.text().then(text => { throw new Error(text || 'Failed to generate dead stock list') }); }
+                        return res.json();
+                    })
+                    .then(data => renderDeadStockList(data))
+                    .catch(err => { outputContainer.innerHTML = `<p style="color:red;">エラー: ${err.message}</p>`; })
+                    .finally(() => { window.hideLoading(); });
+            });
+        }
+    }
+
     if (createCsvBtn) {
         createCsvBtn.addEventListener('click', () => {
             const dataForCsv = [];
@@ -384,16 +539,23 @@ export function initDeadStock() {
             }
             
             if (target.classList.contains('add-ds-row-btn')) {
+                // ▼▼▼ [修正箇所] closestで探す対象を .dead-stock-product-container に変更 ▼▼▼
                 const productContainer = target.closest('.dead-stock-product-container');
+                // ▲▲▲ 修正ここまで ▲▲▲
                 const unitNameSpan = productContainer.querySelector('.ds-unit-name');
                 const unitName = unitNameSpan ? unitNameSpan.textContent : '単位';
                 const tbody = productContainer.querySelector('tbody');
                 tbody.insertAdjacentHTML('beforeend', createRowHTML({}, unitName, false));
             }
 
+            // ▼▼▼ [修正点3] 存在しなかった削除ボタンの処理をここに追加 ▼▼▼
             if (target.classList.contains('delete-ds-row-btn')) {
-                target.closest('tr').remove();
+                const row = target.closest('tr');
+                if (row) {
+                    row.remove();
+                }
             }
+            // ▲▲▲ 修正ここまで ▲▲▲
 
             if (target.classList.contains('save-ds-btn')) {
                 const productContainer = target.closest('.dead-stock-product-container');

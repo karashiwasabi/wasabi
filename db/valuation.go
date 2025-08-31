@@ -1,4 +1,5 @@
-// C:\Dev\WASABI\db\valuation.go
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\valuation.go
+
 package db
 
 import (
@@ -10,7 +11,7 @@ import (
 	"wasabi/units"
 )
 
-// ValuationGroup は剤型ごとの集計結果を保持します
+// ValuationGroup は剤型ごとの在庫評価額の集計結果を保持します。
 type ValuationGroup struct {
 	UsageClassification string                     `json:"usageClassification"`
 	DetailRows          []model.ValuationDetailRow `json:"detailRows"`
@@ -18,9 +19,22 @@ type ValuationGroup struct {
 	TotalPurchaseValue  float64                    `json:"totalPurchaseValue"`
 }
 
-// GetInventoryValuation は指定日の在庫評価レポートを生成します
+/**
+ * @brief 指定された基準日の在庫評価レポートを生成します。
+ * @param conn データベース接続
+ * @param filters 絞り込み条件（基準日、カナ名、剤型）
+ * @return []ValuationGroup 剤型でグループ化された在庫評価レポート
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * 以下のステップでレポートを生成します。
+ * 1. フィルタ条件に合致する製品マスターを取得します。
+ * 2. 関連する全期間の取引履歴を一括で取得します。
+ * 3. 包装グループごとに、基準日時点の在庫を復元計算します。
+ * 4. 在庫数に薬価・納入価を乗算して評価額を算出します。
+ * 5. 最終結果を剤型ごとにグループ化し、ソートして返却します。
+ */
 func GetInventoryValuation(conn *sql.DB, filters model.ValuationFilters) ([]ValuationGroup, error) {
-	// === ステップ1: フィルターに合致する製品マスターを取得 ===
+	// ステップ1: フィルターに合致する製品マスターを取得
 	masterQuery := `SELECT ` + SelectColumns + ` FROM product_master WHERE 1=1`
 	var masterArgs []interface{}
 	if filters.KanaName != "" {
@@ -44,7 +58,7 @@ func GetInventoryValuation(conn *sql.DB, filters model.ValuationFilters) ([]Valu
 		}
 	}
 
-	// === ステップ2: 関連する全期間のトランザクションを一括取得 ===
+	// ステップ2: 関連する全期間のトランザクションを一括取得
 	var productCodes []string
 	for _, m := range allMasters {
 		productCodes = append(productCodes, m.ProductCode)
@@ -58,7 +72,7 @@ func GetInventoryValuation(conn *sql.DB, filters model.ValuationFilters) ([]Valu
 		return nil, fmt.Errorf("failed to get transactions for valuation: %w", err)
 	}
 
-	// === ステップ3: 包装グループごとに在庫を計算し、詳細行を作成 ===
+	// ステップ3: 包装グループごとに在庫を計算し、詳細行を作成
 	mastersByPackageKey := make(map[string][]*model.ProductMaster)
 	for _, master := range allMasters {
 		key := fmt.Sprintf("%s|%s|%g|%s", master.YjCode, master.PackageForm, master.JanPackInnerQty, master.YjUnitName)
@@ -68,7 +82,6 @@ func GetInventoryValuation(conn *sql.DB, filters model.ValuationFilters) ([]Valu
 	var detailRows []model.ValuationDetailRow
 
 	for _, mastersInPackageGroup := range mastersByPackageKey {
-		// (トランザクション集計と在庫計算ロジック)
 		var allTxsForPackage []*model.TransactionRecord
 		for _, m := range mastersInPackageGroup {
 			if txs, ok := transactionsByProductCode[m.ProductCode]; ok {
@@ -76,13 +89,13 @@ func GetInventoryValuation(conn *sql.DB, filters model.ValuationFilters) ([]Valu
 			}
 		}
 
+		// 基準日までの取引に絞り込み、ソートする
 		var txsUpToDate []*model.TransactionRecord
 		for _, t := range allTxsForPackage {
 			if t.TransactionDate <= filters.Date {
 				txsUpToDate = append(txsUpToDate, t)
 			}
 		}
-
 		sort.Slice(txsUpToDate, func(i, j int) bool {
 			if txsUpToDate[i].TransactionDate != txsUpToDate[j].TransactionDate {
 				return txsUpToDate[i].TransactionDate < txsUpToDate[j].TransactionDate
@@ -90,6 +103,7 @@ func GetInventoryValuation(conn *sql.DB, filters model.ValuationFilters) ([]Valu
 			return txsUpToDate[i].ID < txsUpToDate[j].ID
 		})
 
+		// 基準日時点の在庫を計算
 		var runningBalance float64
 		latestInventoryDate := ""
 		inventorySumsByDate := make(map[string]float64)
@@ -120,29 +134,25 @@ func GetInventoryValuation(conn *sql.DB, filters model.ValuationFilters) ([]Valu
 			continue
 		}
 
-		// ▼▼▼ [修正点] 代表製品名をJCSHMS由来のものから優先的に選択するロジックを追加 ▼▼▼
+		// 包装グループの代表マスターを選択 (JCSHMS由来を優先)
 		var repMaster *model.ProductMaster
 		if len(mastersInPackageGroup) > 0 {
-			// まずリストの最初のマスターをフォールバックとして設定
 			repMaster = mastersInPackageGroup[0]
-			// JCSHMS由来のマスターを探す
 			for _, m := range mastersInPackageGroup {
 				if m.Origin == "JCSHMS" {
-					repMaster = m // JCSHMS由来のマスターが見つかれば、それを代表とする
+					repMaster = m
 					break
 				}
 			}
 		} else {
-			continue // マスターがなければこの包装グループはスキップ
+			continue
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
 
 		showAlert := false
 		if repMaster.Origin != "JCSHMS" && !yjHasJcshmsMaster[repMaster.YjCode] {
 			showAlert = true
 		}
 
-		// 包装仕様を生成
 		tempJcshms := model.JCShms{
 			JC037: repMaster.PackageForm, JC039: repMaster.YjUnitName, JC044: repMaster.YjPackUnitQty,
 			JA006: sql.NullFloat64{Float64: repMaster.JanPackInnerQty, Valid: true},
@@ -175,7 +185,7 @@ func GetInventoryValuation(conn *sql.DB, filters model.ValuationFilters) ([]Valu
 		})
 	}
 
-	// === ステップ4: 剤型ごとにグルーピング ===
+	// ステップ4: 剤型ごとにグルーピング
 	mastersByJanCode := make(map[string]*model.ProductMaster)
 	for _, m := range allMasters {
 		mastersByJanCode[m.ProductCode] = m
@@ -198,7 +208,7 @@ func GetInventoryValuation(conn *sql.DB, filters model.ValuationFilters) ([]Valu
 		group.TotalPurchaseValue += row.TotalPurchaseValue
 	}
 
-	// (並び替えロジックは変更なし)
+	// グループと、各グループ内の詳細行をソート
 	order := map[string]int{"1": 1, "内": 1, "2": 2, "外": 2, "3": 3, "歯": 3, "4": 4, "注": 4, "5": 5, "機": 5, "6": 6, "他": 6}
 	var finalResult []ValuationGroup
 	for _, group := range resultGroups {
@@ -222,6 +232,7 @@ func GetInventoryValuation(conn *sql.DB, filters model.ValuationFilters) ([]Valu
 	return finalResult, nil
 }
 
+// getAllProductMastersFiltered はフィルタ条件に基づいて製品マスターを取得するヘルパー関数です。
 func getAllProductMastersFiltered(conn *sql.DB, query string, args ...interface{}) ([]*model.ProductMaster, error) {
 	rows, err := conn.Query(query, args...)
 	if err != nil {
@@ -240,6 +251,7 @@ func getAllProductMastersFiltered(conn *sql.DB, query string, args ...interface{
 	return masters, nil
 }
 
+// getAllTransactionsForProducts は複数の製品コードに関連する全取引履歴を取得するヘルパー関数です。
 func getAllTransactionsForProducts(conn *sql.DB, productCodes []string) (map[string][]*model.TransactionRecord, error) {
 	transactionsByProductCode := make(map[string][]*model.TransactionRecord)
 	if len(productCodes) == 0 {

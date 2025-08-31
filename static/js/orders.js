@@ -1,3 +1,5 @@
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\orders.js
+
 import { hiraganaToKatakana } from './utils.js';
 
 function formatBalance(balance) {
@@ -27,7 +29,7 @@ function renderOrderCandidates(data, container, wholesalers) {
                     不足数: ${formatBalance(yjShortfall)}
                 </span>
             </div>
-              <table class="data-table" style="margin-bottom: 20px;">
+            <table class="data-table" style="margin-bottom: 20px;">
                 <thead>
                     <tr>
                         <th style="width: 25%;">製品名（包装）</th>
@@ -46,6 +48,11 @@ function renderOrderCandidates(data, container, wholesalers) {
                 pkg.masters.forEach(master => {
                     const pkgShortfall = pkg.reorderPoint - (pkg.endingBalance || 0);
                     if (pkgShortfall > 0) {
+                        // ▼▼▼ [ここから修正] ▼▼▼
+                        const isProvisional = master.productCode.startsWith('99999') && master.productCode.length > 13;
+                        const rowClass = isProvisional ? 'provisional-order-item' : '';
+                        const disabledAttr = isProvisional ? 'disabled' : '';
+
                         const recommendedOrder = master.yjPackUnitQty > 0 ? Math.ceil(pkgShortfall / master.yjPackUnitQty) : 0;
                         
                         let rowWholesalerOptions = '<option value="">--- 選択 ---</option>';
@@ -54,28 +61,33 @@ function renderOrderCandidates(data, container, wholesalers) {
                             rowWholesalerOptions += `<option value="${w.code}" ${isSelected ? 'selected' : ''}>${w.name}</option>`;
                         });
 
-                        // ▼▼▼ [修正点] data属性に計算用の値を追加し、表示列のロジックを変更 ▼▼▼
+                        let actionCellHTML = '';
+                        if (isProvisional) {
+                            actionCellHTML = '<td><span style="color: red; font-weight: bold;">発注不可</span></td>';
+                        } else {
+                            actionCellHTML = '<td><button class="remove-order-item-btn btn">除外</button></td>';
+                        }
+
                         html += `
-                            <tr data-jan-code="${master.productCode}" 
-                                 data-yj-code="${yjGroup.yjCode}"
-                                 data-product-name="${master.productName}"
-                                 data-package-form="${master.packageForm}"
-                                 data-jan-pack-inner-qty="${master.janPackInnerQty}"
-                                 data-yj-unit-name="${master.yjUnitName}"
-                                 data-yj-pack-unit-qty="${master.yjPackUnitQty}"
-                                 data-order-multiplier="${master.yjPackUnitQty}"> 
-                                 <td class="left">${master.productName}</td>
-                                 <td class="left">${master.makerName || ''}</td>
+                            <tr class="${rowClass}" 
+                                data-jan-code="${master.productCode}" 
+                                data-yj-code="${yjGroup.yjCode}"
+                                data-product-name="${master.productName}"
+                                data-package-form="${master.packageForm}"
+                                data-jan-pack-inner-qty="${master.janPackInnerQty}"
+                                data-yj-unit-name="${master.yjUnitName}"
+                                data-yj-pack-unit-qty="${master.yjPackUnitQty}"
+                                data-order-multiplier="${master.yjPackUnitQty}"> 
+                                <td class="left">${master.productName}</td>
+                                <td class="left">${master.makerName || ''}</td>
                                 <td class="left">${master.formattedPackageSpec}</td>
-                                <td><select class="wholesaler-select" style="width: 100%;">${rowWholesalerOptions}</select></td>
-                                
+                                <td><select class="wholesaler-select" style="width: 100%;" ${disabledAttr}>${rowWholesalerOptions}</select></td>
                                 <td>1包装 (${master.yjPackUnitQty} ${master.yjUnitName})</td>
-                                
-                                <td><input type="number" value="${recommendedOrder}" class="order-quantity-input" style="width: 80px;"></td>
-                                <td><button class="remove-order-item-btn btn">除外</button></td>
+                                <td><input type="number" value="${recommendedOrder}" class="order-quantity-input" style="width: 80px;" ${disabledAttr}></td>
+                                ${actionCellHTML}
                             </tr>
                         `;
-                        // ▲▲▲ 修正ここまで ▲▲▲
+                        // ▲▲▲ [修正ここまで] ▲▲▲
                     }
                 });
             }
@@ -98,18 +110,16 @@ export function initOrders() {
     const coefficientInput = document.getElementById('order-reorder-coefficient');
     const createCsvBtn = document.getElementById('createOrderCsvBtn');
     const today = new Date();
-    const threeMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 3, today.getDate());
+    const threeMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 3, 1);
     endDateInput.value = today.toISOString().slice(0, 10);
     startDateInput.value = threeMonthsAgo.toISOString().slice(0, 10);
-    
+
     runBtn.addEventListener('click', async () => {
         window.showLoading();
         const params = new URLSearchParams({
             startDate: startDateInput.value.replace(/-/g, ''),
             endDate: endDateInput.value.replace(/-/g, ''),
-        // ▼▼▼ [修正点] 検索実行時にカナ変換 ▼▼▼
-        kanaName: hiraganaToKatakana(kanaNameInput.value),
-        // ▲▲▲ 修正ここまで ▲▲▲
+            kanaName: hiraganaToKatakana(kanaNameInput.value),
             dosageForm: dosageFormInput.value,
             coefficient: coefficientInput.value,
         });
@@ -127,10 +137,10 @@ export function initOrders() {
         } catch (err) {
             outputContainer.innerHTML = `<p style="color:red;">エラー: ${err.message}</p>`;
         } finally {
-            window.hideLoading();
+             window.hideLoading();
         }
     });
-    
+
     createCsvBtn.addEventListener('click', async () => {
         const rows = outputContainer.querySelectorAll('tbody tr');
         if (rows.length === 0) {
@@ -143,6 +153,12 @@ export function initOrders() {
         let hasItemsToOrder = false;
 
         rows.forEach(row => {
+            // ▼▼▼ [ここから修正] 発注不可の行をスキップする処理を追加 ▼▼▼
+            if (row.classList.contains('provisional-order-item')) {
+                return; // この行はスキップ
+            }
+            // ▲▲▲ [修正ここまで] ▲▲▲
+
             const quantityInput = row.querySelector('.order-quantity-input');
             const quantity = parseInt(quantityInput.value, 10);
             
@@ -155,7 +171,6 @@ export function initOrders() {
                 const csvRow = [janCode, `"${productName}"`, quantity, wholesalerCode].join(',');
                 csvContent += csvRow + "\r\n";
 
-                // ▼▼▼ [修正点] 計算用の値をdata属性から取得するように変更 ▼▼▼
                 const orderMultiplier = parseFloat(row.dataset.orderMultiplier) || 0;
                 
                 backorderPayload.push({
@@ -167,7 +182,6 @@ export function initOrders() {
                     productName: row.dataset.productName,
                     yjPackUnitQty: parseFloat(row.dataset.yjPackUnitQty) || 0,
                 });
-                // ▲▲▲ 修正ここまで ▲▲▲
             }
         });
 
@@ -187,8 +201,14 @@ export function initOrders() {
             if (!res.ok) throw new Error(resData.message || '発注残の登録に失敗しました。');
             
             window.showNotification(resData.message, 'success');
-            
-            const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csvContent], { type: 'text/csv;charset=utf-8;' });
+            const sjisArray = Encoding.convert(csvContent, {
+                to: 'SJIS',
+                from: 'UNICODE',
+                type: 'array'
+            });
+            const sjisUint8Array = new Uint8Array(sjisArray);
+
+            const blob = new Blob([sjisUint8Array], { type: 'text/csv' });
             const link = document.createElement("a");
             const url = URL.createObjectURL(blob);
             const now = new Date();

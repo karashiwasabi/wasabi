@@ -7,11 +7,8 @@ let view, outputContainer;
 let dosageFormFilter, kanaInitialFilter, selectProductBtn, startDateFilter, endDateFilter;
 let currentYjCode = null;
 let lastLoadedDataCache = null;
-// ▼▼▼ [修正点] 単位名解決用のマップを追加 ▼▼▼
-let unitMap = {}; 
-// ▲▲▲ 修正ここまで ▲▲▲
+let unitMap = {};
 
-// ▼▼▼ [修正点] 単位マップを事前に読み込む関数を追加 ▼▼▼
 async function fetchUnitMap() {
     if (Object.keys(unitMap).length > 0) return;
     try {
@@ -25,13 +22,9 @@ async function fetchUnitMap() {
 }
 
 export async function initInventoryAdjustment() {
-// ▲▲▲ 修正ここまで ▲▲▲
+    await fetchUnitMap();
     view = document.getElementById('inventory-adjustment-view');
     if (!view) return;
-
-    // ▼▼▼ [修正点] 関数呼び出しを追加 ▼▼▼
-    await fetchUnitMap();
-    // ▲▲▲ 修正ここまで ▲▲▲
 
     dosageFormFilter = document.getElementById('ia-dosageForm');
     kanaInitialFilter = document.getElementById('ia-kanaInitial');
@@ -39,9 +32,8 @@ export async function initInventoryAdjustment() {
     startDateFilter = document.getElementById('ia-startDate');
     endDateFilter = document.getElementById('ia-endDate');
     outputContainer = document.getElementById('inventory-adjustment-output');
-
     const today = new Date();
-    const oneMonthAgo = new Date(today.getFullYear(), today.getMonth() - 1, today.getDate());
+    const oneMonthAgo = new Date(today.getFullYear(), today.getMonth() - 1, 1);
     endDateFilter.value = today.toISOString().slice(0, 10);
     startDateFilter.value = oneMonthAgo.toISOString().slice(0, 10);
 
@@ -108,14 +100,17 @@ function generateFullHtml(data) {
     const yjGroup = data.stockLedger[0];
     const productName = yjGroup.productName;
     const theoreticalTotal = yjGroup.endingBalance || 0;
-
     const summaryLedgerHtml = generateSummaryLedgerHtml(yjGroup, theoreticalTotal);
     const summaryPrecompHtml = generateSummaryPrecompHtml(data.precompDetails);
     
     const inputSectionsHtml = generateInputSectionsHtml(yjGroup.packageLedgers, yjGroup.yjUnitName);
+    const deadStockReferenceHtml = generateDeadStockReferenceHtml(data.deadStockDetails);
 
     return `<h2 style="text-align: center; margin-bottom: 20px;">【棚卸調整】 ${productName} (YJ: ${yjGroup.yjCode})</h2>
-        ${summaryLedgerHtml}${summaryPrecompHtml}${inputSectionsHtml}`;
+        ${summaryLedgerHtml}
+        ${summaryPrecompHtml}
+        ${inputSectionsHtml}
+        ${deadStockReferenceHtml}`;
 }
 
 function generateSummaryLedgerHtml(yjGroup, total) {
@@ -137,7 +132,6 @@ function generateSummaryLedgerHtml(yjGroup, total) {
         `;
 
         const txTable = renderStandardTable(`ledger-table-${pkg.packageKey.replace(/[^a-zA-Z0-9]/g, '')}`, sortedTxs);
-
         return pkgHeader + txTable;
     }).join('');
 
@@ -169,12 +163,51 @@ function generateSummaryPrecompHtml(precompDetails) {
         janPackUnitQty: p.janPackUnitQty,
         janUnitName: p.janUnitName
     }));
-
     return `<div class="summary-section" style="margin-top: 15px;">
         <div class="report-section-header"><h4>予製払出明細 (全体)</h4>
         <span class="header-total" id="precomp-active-total">有効合計: 0.00</span></div>
         ${renderStandardTable('precomp-table', precompTransactions, true)}</div>`;
 }
+
+function generateDeadStockReferenceHtml(deadStockRecords) {
+    if (!deadStockRecords || deadStockRecords.length === 0) {
+        return '';
+    }
+
+    const getProductName = (productCode) => {
+        const master = findMaster(productCode);
+        return master ? master.productName : productCode;
+    };
+
+    const rowsHtml = deadStockRecords.map(rec => `
+        <tr>
+            <td class="left">${getProductName(rec.productCode)}</td>
+            <td class="right">${rec.stockQuantityJan.toFixed(2)}</td>
+            <td>${rec.expiryDate || ''}</td>
+            <td class="left">${rec.lotNumber || ''}</td>
+        </tr>
+    `).join('');
+    return `
+        <div class="summary-section" style="margin-top: 30px;">
+            <h3 class="view-subtitle">3. 参考：現在登録済みのロット・期限情報</h3>
+            <p style="font-size: 11px; margin-bottom: 5px;">※このリストは参照用です。棚卸情報を保存するには、上の「2. 棚卸入力」の欄に改めて入力してください。</p>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th style="width: 40%;">製品名</th>
+                        <th style="width: 15%;">在庫数量(JAN)</th>
+                        <th style="width: 20%;">使用期限</th>
+                        <th style="width: 25%;">ロット番号</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rowsHtml}
+                </tbody>
+            </table>
+        </div>
+    `;
+}
+
 
 function generateInputSectionsHtml(packageLedgers, yjUnitName = '単位') {
     const packageGroupsHtml = (packageLedgers || []).map(pkgLedger => {
@@ -190,7 +223,6 @@ function generateInputSectionsHtml(packageLedgers, yjUnitName = '単位') {
         html += (pkgLedger.masters || []).map(master => {
             if (!master) return '';
             
-            // ▼▼▼ [修正点] ご提案のレイアウトに変更し、単位名を動的に取得する ▼▼▼
             const janUnitName = (master.janUnitCode === 0 || !unitMap[master.janUnitCode]) ? master.yjUnitName : unitMap[master.janUnitCode];
             const unitName = master.janPackInnerQty > 0 ? janUnitName : master.yjUnitName;
 
@@ -207,11 +239,25 @@ function generateInputSectionsHtml(packageLedgers, yjUnitName = '単位') {
                         <span> (${unitName})</span>
                     </div>
                 </div>`;
+            
+            // ▼▼▼ [ここから修正] 既存のロット・期限情報を基に入力欄を生成するロジック ▼▼▼
+            const relevantDeadStock = (lastLoadedDataCache.deadStockDetails || []).filter(ds => ds.productCode === master.productCode);
+            
+            let finalInputTbodyHtml;
+            if (relevantDeadStock.length > 0) {
+                // 既存データがあれば、その数だけ入力行を生成
+                finalInputTbodyHtml = relevantDeadStock.map((rec, index) => {
+                    return createFinalInputRow(master, rec, index === 0);
+                }).join('');
+            } else {
+                // 既存データがなければ、空の入力行を1つだけ生成
+                finalInputTbodyHtml = createFinalInputRow(master, null, true);
+            }
             // ▲▲▲ 修正ここまで ▲▲▲
 
             const finalInputTable = renderStandardTable(`final-table-${master.productCode}`, [], false, 
                 `<tbody class="final-input-tbody" data-product-code="${master.productCode}">
-                    ${createFinalInputRow(master, true)}
+                    ${finalInputTbodyHtml}
                 </tbody>`);
             
             return `<div class="product-input-group" style="padding-left: 20px; margin-top: 10px;">${shelfStockInput}${finalInputTable}</div>`;
@@ -228,37 +274,40 @@ function generateInputSectionsHtml(packageLedgers, yjUnitName = '単位') {
         ${packageGroupsHtml}</div>`;
 }
 
-
-function createFinalInputRow(master, isPrimary = false) {
+// ▼▼▼ [ここから修正] createFinalInputRowのシグネチャと内容を修正 ▼▼▼
+function createFinalInputRow(master, deadStockRecord = null, isPrimary = false) {
     const actionButtons = isPrimary ? `
         <button class="btn add-deadstock-row-btn" data-product-code="${master.productCode}">＋</button>
         <button class="btn register-inventory-btn">登録</button>
     ` : `<button class="btn delete-deadstock-row-btn">－</button>`;
+    
     const quantityInputClass = isPrimary ? 'final-inventory-input' : 'lot-quantity-input';
     const quantityPlaceholder = isPrimary ? '目安をここに転記' : 'ロット数量';
 
-    // ▼▼▼ [修正点] フロントエンドでの単位名解決ロジックを削除 ▼▼▼
-    // 以下の処理は不要になりました。サーバーから渡される master.janUnitName を直接使用します。
-    // const janUnitName = (master.janUnitCode === 0 || !unitMap[master.janUnitCode]) ? master.yjUnitName : unitMap[master.janUnitCode];
-    // ▲▲▲ 修正ここまで ▲▲▲
+    // 事前入力用の値を変数に格納
+    const quantity = deadStockRecord ? deadStockRecord.stockQuantityJan : '';
+    const expiry = deadStockRecord ? deadStockRecord.expiryDate : '';
+    const lot = deadStockRecord ? deadStockRecord.lotNumber : '';
 
     const topRow = `<tr class="inventory-row"><td rowspan="2"><div style="display: flex; flex-direction: column; gap: 4px;">${actionButtons}</div></td>
         <td>(棚卸日)</td><td class="yj-jan-code">${master.yjCode}</td><td class="left" colspan="2">${master.productName}</td>
         <td></td><td></td><td class="right">${master.yjPackUnitQty || ''}</td><td>${master.yjUnitName || ''}</td>
-        <td></td><td></td><td><input type="text" class="expiry-input" placeholder="YYYYMM"></td><td></td><td></td></tr>`;
+        <td></td><td></td><td><input type="text" class="expiry-input" placeholder="YYYYMM" value="${expiry}"></td><td></td><td></td></tr>`;
     const bottomRow = `<tr class="inventory-row"><td>棚卸</td><td class="yj-jan-code">${master.productCode}</td>
         <td>${master.formattedPackageSpec || ''}</td><td>${master.makerName || ''}</td><td>${master.usageClassification || ''}</td>
-        <td><input type="number" class="${quantityInputClass}" data-product-code="${master.productCode}" placeholder="${quantityPlaceholder}"></td>
+        <td><input type="number" class="${quantityInputClass}" data-product-code="${master.productCode}" placeholder="${quantityPlaceholder}" value="${quantity}"></td>
         <td class="right">${master.janPackUnitQty || ''}</td><td>${master.janUnitName || ''}</td>
-        <td></td><td></td><td><input type="text" class="lot-input" placeholder="ロット番号"></td><td></td><td></td></tr>`;
+        <td></td><td></td><td><input type="text" class="lot-input" placeholder="ロット番号" value="${lot}"></td><td></td><td></td></tr>`;
     return topRow + bottomRow;
 }
+// ▲▲▲ 修正ここまで ▲▲▲
 
 function renderStandardTable(id, records, addCheckbox = false, customBody = null) {
     const header = `<thead>
            <tr><th rowspan="2">－</th><th>日付</th><th>YJ</th><th colspan="2">製品名</th><th>個数</th><th>YJ数量</th><th>YJ包装数</th><th>YJ単位</th><th>単価</th><th>税額</th><th>期限</th><th>得意先</th><th>行</th></tr>
            <tr><th>種別</th><th>JAN</th><th>包装</th><th>メーカー</th><th>剤型</th><th>JAN数量</th><th>JAN包装数</th><th>JAN単位</th><th>金額</th><th>税率</th><th>ロット</th><th>伝票番号</th><th>MA</th></tr></thead>`;
-    let bodyHtml = customBody ? customBody : `<tbody>${(!records || records.length === 0) ? '<tr><td colspan="14">対象データがありません。</td></tr>' : records.map(rec => {
+    let bodyHtml = customBody ? customBody : `<tbody>${(!records || records.length === 0) ?
+        '<tr><td colspan="14">対象データがありません。</td></tr>' : records.map(rec => {
         const top = `<tr><td rowspan="2">${addCheckbox ? `<input type="checkbox" class="precomp-active-check" data-quantity="${rec.yjQuantity}" data-product-code="${rec.janCode}">` : ''}</td>
             <td>${rec.transactionDate || ''}</td><td class="yj-jan-code">${rec.yjCode || ''}</td><td class="left" colspan="2">${rec.productName || ''}</td>
             <td class="right">${rec.datQuantity?.toFixed(2) || ''}</td><td class="right">${rec.yjQuantity?.toFixed(2) || ''}</td><td class="right">${rec.yjPackUnitQty || ''}</td><td>${rec.yjUnitName || ''}</td>
@@ -289,7 +338,7 @@ function handleClicks(e) {
         const master = findMaster(productCode);
         const tbody = document.querySelector(`.final-input-tbody[data-product-code="${productCode}"]`);
         if(master && tbody){
-            const newRowHTML = createFinalInputRow(master, false);
+            const newRowHTML = createFinalInputRow(master, null, false);
             tbody.insertAdjacentHTML('beforeend', newRowHTML);
         }
     }
@@ -325,7 +374,7 @@ function recalculateTotals() {
         const isJanInput = master.janPackInnerQty > 0;
         const shelfStockYj = isJanInput ? shelfStockInputVal * master.janPackInnerQty : shelfStockInputVal;
         const precompStockYj = precompTotalsByPackage[productCode] || 0;
-     
+    
         const finalStockYj = shelfStockYj + precompStockYj;
         const finalStockForDisplay = isJanInput ? (finalStockYj / master.janPackInnerQty) : finalStockYj;
         const displaySpan = document.querySelector(`.calculated-total-display[data-product-code="${productCode}"]`);
@@ -373,7 +422,6 @@ async function saveInventoryData() {
     const inventoryData = {};
     const deadStockData = [];
     const allMasters = (lastLoadedDataCache.stockLedger[0].packageLedgers || []).flatMap(pkg => pkg.masters || []);
-
     allMasters.forEach(master => {
         const productCode = master.productCode;
         const tbody = document.querySelector(`.final-input-tbody[data-product-code="${productCode}"]`);
@@ -384,7 +432,7 @@ async function saveInventoryData() {
 
         let totalInputQuantity = 0;
         const isJanInput = master.janPackInnerQty > 0;
-      
+        
         const inventoryRows = tbody.querySelectorAll('.inventory-row');
         for (let i = 0; i < inventoryRows.length; i += 2) {
             const topRow = inventoryRows[i];

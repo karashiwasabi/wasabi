@@ -11,7 +11,25 @@ import (
 	"wasabi/units"
 )
 
-// GetStockLedger generates the stock ledger report with the new, simplified calculation logic.
+/**
+ * @brief 在庫元帳レポートを生成します。
+ * @param conn データベース接続
+ * @param filters 絞り込み条件
+ * @return []model.StockLedgerYJGroup 集計結果のスライス
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * この関数はアプリケーションの在庫計算における中心的なロジックです。
+ * 以下のステップで在庫元帳を生成します。
+ * 1. フィルタ条件に合致する製品マスターを取得します。
+ * 2. 取得した製品マスターに関連する全期間の取引履歴を一括で取得します。
+ * 3. 製品をYJコードごと、さらに包装ごとにグループ化します。
+ * 4. 各包装グループについて以下の計算を行います。
+ * a. 期間開始前の取引履歴を遡り、最後の棚卸を基点とした「期間前在庫（繰越在庫）」を算出します。
+ * b. 期間内の取引を時系列で処理し、「期間内変動」「最大使用量」「期間終了在庫」を算出します。
+ * c. 発注残と予製引当数を考慮し、「有効在庫」と「発注点」を計算します。
+ * 5. 全ての包装グループのデータをYJコードごとに集計し、最終的なレポートを生成します。
+ * 6. 結果を剤型とカナ名でソートして返却します。
+ */
 func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.StockLedgerYJGroup, error) {
 	backordersMap, err := GetAllBackordersMap(conn)
 	if err != nil {
@@ -23,16 +41,14 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		return nil, fmt.Errorf("failed to get pre-compounding totals for aggregation: %w", err)
 	}
 
-	// === ステップ1: フィルターに合致する製品マスターを取得 ===
+	// ステップ1: フィルターに合致する製品マスターを取得
 	masterQuery := `SELECT ` + SelectColumns + ` FROM product_master p WHERE 1=1 `
 	var masterArgs []interface{}
 
-	// ▼▼▼ 以下を KanaName フィルターの上に追加 ▼▼▼
 	if filters.YjCode != "" {
 		masterQuery += " AND p.yj_code = ? "
 		masterArgs = append(masterArgs, filters.YjCode)
 	}
-	// ▲▲▲ 修正ここまで ▲▲▲
 
 	if filters.KanaName != "" {
 		masterQuery += " AND (p.kana_name LIKE ? OR p.product_name LIKE ?) "
@@ -88,7 +104,7 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		return []model.StockLedgerYJGroup{}, nil
 	}
 
-	// === ステップ2: 関連する全期間のトランザクションを取得 ===
+	// ステップ2: 関連する全期間のトランザクションを取得
 	var txArgs []interface{}
 	for _, pc := range productCodes {
 		txArgs = append(txArgs, pc)
@@ -111,35 +127,31 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		}
 	}
 
-	// === ステップ3: YJコードごとに集計処理 ===
+	// ステップ3: YJコードごとに集計処理
 	var result []model.StockLedgerYJGroup
 	for yjCode, mastersInYjGroup := range mastersByYjCode {
 		if len(mastersInYjGroup) == 0 {
 			continue
 		}
 
-		// ▼▼▼ [修正点] YJグループの代表製品名をJCSHMS由来のものから優先的に選択する ▼▼▼
+		// YJグループの代表製品名をJCSHMS由来のものから優先的に選択する
 		var representativeProductName string
 		var representativeYjUnitName string
 		if len(mastersInYjGroup) > 0 {
-			// まず、リストの最初のマスターをフォールバック（初期値）として設定
 			representativeProductName = mastersInYjGroup[0].ProductName
 			representativeYjUnitName = mastersInYjGroup[0].YjUnitName
-
-			// JCSHMS由来のマスターを探す
 			for _, m := range mastersInYjGroup {
 				if m.Origin == "JCSHMS" {
 					representativeProductName = m.ProductName
 					representativeYjUnitName = m.YjUnitName
-					break // JCSHMS由来のマスターが見つかったらループを抜ける
+					break
 				}
 			}
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
 
 		yjGroup := model.StockLedgerYJGroup{
 			YjCode:      yjCode,
-			ProductName: representativeProductName, // 優先的に選択された製品名を使用
+			ProductName: representativeProductName,
 			YjUnitName:  units.ResolveName(representativeYjUnitName),
 		}
 
@@ -162,6 +174,7 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 				return allTxsForPackage[i].ID < allTxsForPackage[j].ID
 			})
 
+			// 期間前在庫（繰越在庫）を計算
 			var startingBalance float64
 			latestInventoryDateBeforePeriod := ""
 			txsBeforePeriod := []*model.TransactionRecord{}
@@ -170,7 +183,7 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 			for _, t := range allTxsForPackage {
 				if t.TransactionDate < filters.StartDate {
 					txsBeforePeriod = append(txsBeforePeriod, t)
-					if t.Flag == 0 {
+					if t.Flag == 0 { // 棚卸レコード
 						inventorySumsByDate[t.TransactionDate] += t.YjQuantity
 						if t.TransactionDate > latestInventoryDateBeforePeriod {
 							latestInventoryDateBeforePeriod = t.TransactionDate
@@ -192,6 +205,7 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 				}
 			}
 
+			// 期間内変動と最終在庫を計算
 			var transactionsInPeriod []model.LedgerTransaction
 			var netChange, maxUsage float64
 			runningBalance := startingBalance
@@ -218,7 +232,7 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 
 					transactionsInPeriod = append(transactionsInPeriod, model.LedgerTransaction{TransactionRecord: *t, RunningBalance: runningBalance})
 					netChange += t.SignedYjQty()
-					if t.Flag == 3 && t.YjQuantity > maxUsage {
+					if t.Flag == 3 && t.YjQuantity > maxUsage { // 処方レコード
 						maxUsage = t.YjQuantity
 					}
 					lastProcessedDate = t.TransactionDate
@@ -291,6 +305,7 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		}
 	}
 
+	// 剤型とカナ名でソート
 	sort.Slice(result, func(i, j int) bool {
 		prio := map[string]int{
 			"1": 1, "内": 1, "2": 2, "外": 2, "3": 3, "注": 3,
@@ -312,15 +327,14 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		return masterI.KanaName < masterJ.KanaName
 	})
 
-	// ▼▼▼ [修正点] 以下のブロックを関数の最後に追加 ▼▼▼
+	// 「期間内に動きがあった品目のみ」フィルタを適用
 	if filters.MovementOnly {
 		var filteredResult []model.StockLedgerYJGroup
 		for _, yjGroup := range result {
 			hasMovement := false
 			for _, pkg := range yjGroup.PackageLedgers {
 				for _, tx := range pkg.Transactions {
-					// flagが0（棚卸）以外のトランザクションがあれば「動きあり」とみなす
-					if tx.Flag != 0 {
+					if tx.Flag != 0 { // flagが0（棚卸）以外のトランザクション
 						hasMovement = true
 						break
 					}
@@ -335,6 +349,5 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		}
 		return filteredResult, nil
 	}
-	// ▲▲▲ 修正ここまで ▲▲▲
 	return result, nil
 }

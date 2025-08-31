@@ -83,10 +83,12 @@ export function initReturnsView() {
     const coefficientInput = document.getElementById('ret-coefficient');
     const printBtn = document.getElementById('print-returns-list-btn');
 
+    // ▼▼▼ [ここから修正] ▼▼▼
     const today = new Date();
-    const threeMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 3, today.getDate());
+    const threeMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 3, 1); // 3ヶ月前の1日
     endDateInput.value = new Date().toISOString().slice(0, 10);
     startDateInput.value = threeMonthsAgo.toISOString().slice(0, 10);
+    // ▲▲▲ [修正ここまで] ▲▲▲
 
     runBtn.addEventListener('click', async () => {
         window.showLoading();

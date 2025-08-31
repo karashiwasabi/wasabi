@@ -1,4 +1,4 @@
-// C:\Dev\WASABI\db\jcshms.go
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\jcshms.go
 
 package db
 
@@ -10,8 +10,17 @@ import (
 	"wasabi/model"
 )
 
-// ▼▼▼ [修正点] 引数を conn *sql.DB から tx *sql.Tx に変更 ▼▼▼
-// GetJcshmsByCodesMap gets JCSHMS/JANCODE master info for multiple JAN codes.
+/**
+ * @brief 複数のJANコードに対応するJCSHMSおよびJANCODEマスター情報を一括で取得し、マップ形式で返します。
+ * @param tx SQLトランザクションオブジェクト
+ * @param jans 検索対象のJANコードのスライス
+ * @return map[string]*model.JCShms JANコードをキーとしたJCSHMS情報のマップ
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * N+1問題を避けるため、IN句を用いてjcshmsテーブルとjancodeテーブルにそれぞれ1回ずつクエリを発行します。
+ * これにより、多数のJANコードに対するマスター情報を効率的に取得できます。
+ * DATファイルの処理などで、未知のJANコードの詳細情報をまとめて取得する際に使用されます。
+ */
 func GetJcshmsByCodesMap(tx *sql.Tx, jans []string) (map[string]*model.JCShms, error) {
 	if len(jans) == 0 {
 		return make(map[string]*model.JCShms), nil
@@ -21,17 +30,17 @@ func GetJcshmsByCodesMap(tx *sql.Tx, jans []string) (map[string]*model.JCShms, e
 	args := make([]interface{}, len(jans))
 	for i, jan := range jans {
 		args[i] = jan
-		// Initialize the map entry to avoid nil pointer issues later
+		// 後続の処理でnilポインタエラーが発生しないように、マップのエントリを初期化
 		results[jan] = &model.JCShms{}
 	}
 
 	inClause := `(?` + strings.Repeat(",?", len(jans)-1) + `)`
 
-	// Query jcshms table
+	// jcshmsテーブルへのクエリ
 	q1 := `SELECT JC000, JC009, JC013, JC018, JC022, JC030, JC037, JC039, JC044, JC050,
 	              JC061, JC062, JC063, JC064, JC065, JC066
 	       FROM jcshms WHERE JC000 IN ` + inClause
-	rows1, err := tx.Query(q1, args...) // conn.Query から tx.Query に変更
+	rows1, err := tx.Query(q1, args...)
 	if err != nil {
 		return nil, fmt.Errorf("jcshms bulk search failed: %w", err)
 	}
@@ -63,9 +72,9 @@ func GetJcshmsByCodesMap(tx *sql.Tx, jans []string) (map[string]*model.JCShms, e
 		}
 	}
 
-	// Query jancode table
+	// jancodeテーブルへのクエリ
 	q2 := `SELECT JA001, JA006, JA007, JA008 FROM jancode WHERE JA001 IN ` + inClause
-	rows2, err := tx.Query(q2, args...) // conn.Query から tx.Query に変更
+	rows2, err := tx.Query(q2, args...)
 	if err != nil {
 		return nil, fmt.Errorf("jancode bulk search failed: %w", err)
 	}
@@ -88,5 +97,3 @@ func GetJcshmsByCodesMap(tx *sql.Tx, jans []string) (map[string]*model.JCShms, e
 
 	return results, nil
 }
-
-// ▲▲▲ 修正ここまで ▲▲▲

@@ -1,4 +1,4 @@
-// C:\Dev\WASABI\config\config.go
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\config\config.go
 
 package config
 
@@ -8,18 +8,33 @@ import (
 	"sync"
 )
 
+// Config はアプリケーションの設定情報を保持する構造体です。
+// `config.json`ファイルにこの構造体の内容が保存されます。
 type Config struct {
 	EmednetUserID   string `json:"emednetUserId"`
 	EmednetPassword string `json:"emednetPassword"`
+	EdeUserID       string `json:"edeUserId"`
+	EdePassword     string `json:"edePassword"`
 }
 
 var (
+	// cfg はアプリケーション全体で共有される設定情報を保持するグローバル変数です。
 	cfg Config
-	mu  sync.RWMutex
+	// mu は設定情報への同時アクセスを防ぎ、データの競合を避けるためのロックです。
+	mu sync.RWMutex
 )
 
+// configFilePath は設定ファイルのパスを定義する定数です。
 const configFilePath = "./config.json"
 
+/**
+ * @brief config.json ファイルから設定を読み込み、メモリにキャッシュします。
+ * @return Config 読み込まれた設定情報
+ * @return error ファイルの読み込みや解析中にエラーが発生した場合
+ * @details
+ * ファイルが存在しない場合は、空の設定情報とnilエラーを返します。
+ * 読み込み中は読み取りロックをかけ、スレッドセーフを保証します。
+ */
 func LoadConfig() (Config, error) {
 	mu.RLock()
 	defer mu.RUnlock()
@@ -27,6 +42,7 @@ func LoadConfig() (Config, error) {
 	file, err := os.ReadFile(configFilePath)
 	if err != nil {
 		if os.IsNotExist(err) {
+			// ファイルが存在しないのは初回起動時などの正常なケースなのでエラーとはしない
 			return Config{}, nil
 		}
 		return Config{}, err
@@ -40,6 +56,14 @@ func LoadConfig() (Config, error) {
 	return cfg, nil
 }
 
+/**
+ * @brief 新しい設定情報を config.json ファイルに保存します。
+ * @param newCfg 保存する新しい設定情報
+ * @return error ファイルの書き込み中にエラーが発生した場合
+ * @details
+ * 書き込み中は書き込みロックをかけ、スレッドセーフを保証します。
+ * 保存が成功すると、メモリ上のグローバルな設定情報も更新されます。
+ */
 func SaveConfig(newCfg Config) error {
 	mu.Lock()
 	defer mu.Unlock()
@@ -56,6 +80,12 @@ func SaveConfig(newCfg Config) error {
 	return nil
 }
 
+/**
+ * @brief メモリにキャッシュされている現在の設定情報を取得します。
+ * @return Config 現在の設定情報
+ * @details
+ * 読み取り中は読み取りロックをかけ、スレッドセーフを保証します。
+ */
 func GetConfig() Config {
 	mu.RLock()
 	defer mu.RUnlock()

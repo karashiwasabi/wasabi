@@ -1,27 +1,20 @@
-// C:\Dev\WASABI\static\js\master_data.js
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\master_data.js
 
 export const clientMap = new Map();
 export const wholesalerMap = new Map();
 
-/**
- * 得意先マスターをサーバーから取得し、clientMapを更新する内部関数
- */
 async function fetchAndPopulateClients() {
 	const res = await fetch('/api/clients');
 	if (!res.ok) {
 		throw new Error('得意先マスターの取得に失敗しました。');
 	}
 	const clients = await res.json();
-	clientMap.clear(); // 古いデータをクリア
-	if (clients) { // APIからの応答がnullでないことを確認
+	clientMap.clear();
+	if (clients) {
 		clients.forEach(c => clientMap.set(c.code, c.name));
 	}
 }
 
-/**
- * 新しい得意先が追加された後に呼び出すための関数を新設
- * clientMapだけを再読み込みして更新します。
- */
 export async function refreshClientMap() {
 	try {
 		await fetchAndPopulateClients();
@@ -32,25 +25,23 @@ export async function refreshClientMap() {
 	}
 }
 
-/**
- * アプリケーション起動時に一度だけ実行する関数
- */
 export async function loadMasterData() {
 	try {
-		// ▼▼▼ [修正点] 先頭にカンマを追加して、1つ目の結果を無視するように修正します ▼▼▼
-		const [, wholesalerRes] = await Promise.all([
-		// ▲▲▲ 修正ここまで ▲▲▲
-			fetchAndPopulateClients(), // 内部関数を呼び出す
+        // ▼▼▼【ここから修正】▼▼▼
+		const results = await Promise.all([
+			fetchAndPopulateClients(),
 			fetch('/api/settings/wholesalers')
 		]);
+        const wholesalerRes = results[1]; // Promise.allの結果配列から2番目の要素を取得
+        // ▲▲▲【修正ここまで】▲▲▲
 
 		if (!wholesalerRes.ok) {
 			throw new Error('卸業者マスターの読み込みに失敗しました。');
 		}
 
 		const wholesalers = await wholesalerRes.json();
-		wholesalerMap.clear(); // 古いデータをクリア
-		if (wholesalers) { // APIからの応答がnullでないことを確認
+		wholesalerMap.clear();
+		if (wholesalers) {
 			wholesalers.forEach(w => wholesalerMap.set(w.code, w.name));
 		}
 		

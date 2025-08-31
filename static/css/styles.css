@@ -22,8 +22,11 @@ header {
 }
 
 .btn {
-    font-size: 11px;
-    padding: 2px 5px;
+    font-size: inherit;      /* 文字サイズを通常のHTMLと同じにする */
+    padding: 2px 5px;        /* 余白を上下に2px、左右に5pxに設定 */
+    min-width: 75px;         /* ボタンの最小幅を75pxに設定 */
+    text-align: center;      /* 文字を中央揃えにする */
+    vertical-align: middle;  /* 隣接する要素との垂直方向の位置を調整 */
     background-color: #e9ecef;
     border: 1px solid #ced4da;
     border-radius: 4px;
@@ -96,6 +99,59 @@ th { text-align: center; background-color: #f0f0f0; }
     font-weight: bold;
 }
 /* ▲▲▲ 修正ここまで ▲▲▲ */
+
+/* ▼▼▼ [ここから修正] 以下のスタイルを追記 ▼▼▼ */
+.provisional-order-item {
+    background-color: #e9ecef !important; /* 薄いグレー */
+    color: #6c757d; /* やや薄い文字色 */
+}
+.provisional-order-item td {
+    text-decoration: line-through; /* 取り消し線 */
+}
+.provisional-order-item select:disabled,
+.provisional-order-item input:disabled {
+    background-color: #f8f9fa; /* 背景を少し明るく */
+    cursor: not-allowed; /* 操作不可カーソル */
+}
+/* ▲▲▲ [修正ここまで] ▲▲▲ */
+
+/* ▼▼▼ [ここから追加] ボタンのビビッドカラー設定 ▼▼▼ */
+.btn-red { background-color: #ff0000; color: white; border-color: #d90000; }
+.btn-red:hover { background-color: #d90000; }
+
+.btn-rose { background-color: #ff007f; color: white; border-color: #d9006c; }
+.btn-rose:hover { background-color: #d9006c; }
+
+.btn-magenta { background-color: #ff00ff; color: white; border-color: #d900d9; }
+.btn-magenta:hover { background-color: #d900d9; }
+
+.btn-violet { background-color: #7f00ff; color: white; border-color: #6c00d9; }
+.btn-violet:hover { background-color: #6c00d9; }
+
+.btn-blue { background-color: #0000ff; color: white; border-color: #0000d9; }
+.btn-blue:hover { background-color: #0000d9; }
+
+.btn-azure { background-color: #007fff; color: white; border-color: #006cd9; }
+.btn-azure:hover { background-color: #006cd9; }
+
+.btn-cyan { background-color: #00ffff; color: black; border-color: #00d9d9; }
+.btn-cyan:hover { background-color: #00d9d9; }
+
+.btn-spring-green { background-color: #00ff7f; color: black; border-color: #00d96c; }
+.btn-spring-green:hover { background-color: #00d96c; }
+
+.btn-green { background-color: #00ff00; color: black; border-color: #00d900; }
+.btn-green:hover { background-color: #00d900; }
+
+.btn-chartreuse { background-color: #7fff00; color: black; border-color: #6cd900; }
+.btn-chartreuse:hover { background-color: #6cd900; }
+
+.btn-yellow { background-color: #ffff00; color: black; border-color: #d9d900; }
+.btn-yellow:hover { background-color: #d9d900; }
+
+.btn-orange { background-color: #ff7f00; color: white; border-color: #d96c00; }
+.btn-orange:hover { background-color: #d96c00; }
+/* ▲▲▲ [追加ここまで] ▲▲▲ */
 
 /* ▼▼▼ [修正点] 印刷用CSSを汎用的な仕組みに全面的に書き換え ▼▼▼ */
 @media print {

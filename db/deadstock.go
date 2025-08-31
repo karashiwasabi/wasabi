@@ -1,3 +1,5 @@
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\deadstock.go
+
 package db
 
 import (
@@ -10,6 +12,20 @@ import (
 	"wasabi/model"
 )
 
+/**
+ * @brief 不動在庫リストを生成します。
+ * @param tx SQLトランザクションオブジェクト
+ * @param filters 絞り込み条件
+ * @return []model.DeadStockGroup 不動在庫リストの集計結果
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * 以下のステップで不動在庫リストを生成します。
+ * 1. フィルタ条件に合致する製品マスターの候補を全て取得します。
+ * 2. 指定された期間内に処方された（flag=3）製品のリストを取得します。
+ * 3. 1の候補リストから2のリストに含まれる製品を除外し、「不動在庫」の製品リストを確定します。
+ * 4. 不動在庫品目の現在庫と、保存済みのロット・期限情報を取得します。
+ * 5. 最終的な表示形式（YJコード > 包装単位 > 個別JAN）に整形して返却します。
+ */
 func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadStockGroup, error) {
 	log.Println("--- Dead Stock List Generation Start ---")
 
@@ -106,12 +122,8 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 	}
 
 	// ステップ4: 最終整形
-	// ▼▼▼【修正点】▼▼▼
-	// グループ化の対象を、絞り込み前の候補(candidateMasters)ではなく、
-	// 正しく不動在庫と判定されたリスト(deadStockMasters)に変更する
 	groups := make(map[string][]*model.ProductMaster)
 	for _, m := range deadStockMasters {
-		// ▲▲▲【修正ここまで】▲▲▲
 		if m.YjCode != "" {
 			groups[m.YjCode] = append(groups[m.YjCode], m)
 		}
@@ -222,6 +234,7 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 	return result, nil
 }
 
+// getSavedDeadStock は特定の製品コードに紐づくロット・期限情報をDBから取得するヘルパー関数です。
 func getSavedDeadStock(tx *sql.Tx, productCode string) ([]model.DeadStockRecord, error) {
 	const q = `SELECT id, stock_quantity_jan, expiry_date, lot_number FROM dead_stock_list WHERE product_code = ? ORDER BY id`
 	rows, err := tx.Query(q, productCode)
@@ -241,6 +254,15 @@ func getSavedDeadStock(tx *sql.Tx, productCode string) ([]model.DeadStockRecord,
 	return records, nil
 }
 
+/**
+ * @brief 手動で入力されたロット・期限情報をデッドストックテーブルに保存（UPSERT）します。
+ * @param tx SQLトランザクションオブジェクト
+ * @param records 保存するデッドストック情報のスライス
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * この関数はまず、渡されたレコードに対応する製品の既存データを全て削除します。
+ * その後、新しいレコードを挿入します。これにより、常に最新の状態でデータが保たれます。
+ */
 func UpsertDeadStockRecordsInTx(tx *sql.Tx, records []model.DeadStockRecord) error {
 	productCodes := make(map[string]struct{})
 	for _, r := range records {
@@ -284,4 +306,47 @@ func UpsertDeadStockRecordsInTx(tx *sql.Tx, records []model.DeadStockRecord) err
 		}
 	}
 	return nil
+}
+
+/**
+ * @brief 複数の製品コードに紐づく有効なデッドストックレコードを全て取得します。
+ * @param conn データベース接続
+ * @param productCodes 取得対象の製品コードのスライス
+ * @return []model.DeadStockRecord デッドストック情報のスライス
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * 「棚卸調整」画面などで、特定の製品群のロット・期限情報を参照するために使用されます。
+ */
+func GetDeadStockByProductCodes(conn *sql.DB, productCodes []string) ([]model.DeadStockRecord, error) {
+	if len(productCodes) == 0 {
+		return []model.DeadStockRecord{}, nil
+	}
+
+	placeholders := strings.Repeat("?,", len(productCodes)-1) + "?"
+	query := fmt.Sprintf(`
+		SELECT id, product_code, stock_quantity_jan, expiry_date, lot_number 
+		FROM dead_stock_list 
+		WHERE product_code IN (%s)
+		ORDER BY product_code, expiry_date, lot_number`, placeholders)
+
+	args := make([]interface{}, len(productCodes))
+	for i, code := range productCodes {
+		args[i] = code
+	}
+
+	rows, err := conn.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query dead stock records by product codes: %w", err)
+	}
+	defer rows.Close()
+
+	var records []model.DeadStockRecord
+	for rows.Next() {
+		var r model.DeadStockRecord
+		if err := rows.Scan(&r.ID, &r.ProductCode, &r.StockQuantityJan, &r.ExpiryDate, &r.LotNumber); err != nil {
+			return nil, err
+		}
+		records = append(records, r)
+	}
+	return records, nil
 }

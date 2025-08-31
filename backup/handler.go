@@ -13,11 +13,15 @@ import (
 	"strings"
 	"wasabi/db"
 	"wasabi/model"
-
-	"github.com/xuri/excelize/v2" // Corrected import path
 )
 
-// ExportClientsHandler handles exporting the client master to an Excel file.
+/**
+ * @brief 得意先マスターをCSV形式でエクスポートします。
+ * @param conn データベース接続
+ * @return http.HandlerFunc HTTPリクエストを処理するハンドラ関数
+ * @details
+ * 得意先コードはExcelで開いた際に先頭のゼロが消えないよう `="<CODE>"` の形式で出力します。
+ */
 func ExportClientsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		clients, err := db.GetAllClients(conn)
@@ -26,39 +30,36 @@ func ExportClientsHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		f := excelize.NewFile()
-		sheetName := "得意先マスター"
-		index, _ := f.NewSheet(sheetName)
-		f.SetActiveSheet(index)
-		f.DeleteSheet("Sheet1")
+		w.Header().Set("Content-Type", "text/csv")
+		w.Header().Set("Content-Disposition", `attachment; filename="client_master.csv"`)
+		w.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM
+
+		csvWriter := csv.NewWriter(w)
+		defer csvWriter.Flush()
 
 		headers := []string{"client_code", "client_name"}
-		for i, h := range headers {
-			cell, _ := excelize.CoordinatesToCellName(i+1, 1)
-			f.SetCellValue(sheetName, cell, h)
+		if err := csvWriter.Write(headers); err != nil {
+			http.Error(w, "Failed to write CSV header", http.StatusInternalServerError)
+			return
 		}
 
-		style, _ := f.NewStyle(&excelize.Style{
-			NumFmt: 49, // Text format
-		})
-		f.SetColStyle(sheetName, "A", style)
-
-		for i, client := range clients {
-			rowNum := i + 2
-			f.SetCellValue(sheetName, fmt.Sprintf("A%d", rowNum), client.Code)
-			f.SetCellValue(sheetName, fmt.Sprintf("B%d", rowNum), client.Name)
-		}
-
-		w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-		w.Header().Set("Content-Disposition", `attachment; filename="client_master.xlsx"`)
-
-		if err := f.Write(w); err != nil {
-			http.Error(w, "Failed to write excel file", http.StatusInternalServerError)
+		for _, client := range clients {
+			record := []string{
+				fmt.Sprintf("=%q", client.Code),
+				client.Name,
+			}
+			if err := csvWriter.Write(record); err != nil {
+				log.Printf("Failed to write client row to CSV (Code: %s): %v", client.Code, err)
+			}
 		}
 	}
 }
 
-// ImportClientsHandler handles importing clients from an Excel file.
+/**
+ * @brief 得意先マスターをCSVファイルからインポートします。
+ * @param conn データベース接続
+ * @return http.HandlerFunc HTTPリクエストを処理するハンドラ関数
+ */
 func ImportClientsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		file, _, err := r.FormFile("file")
@@ -68,20 +69,11 @@ func ImportClientsHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer file.Close()
 
-		f, err := excelize.OpenReader(file)
+		csvReader := csv.NewReader(file)
+		csvReader.LazyQuotes = true
+		rows, err := csvReader.ReadAll()
 		if err != nil {
-			http.Error(w, "Failed to read excel file: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		sheetList := f.GetSheetList()
-		if len(sheetList) == 0 {
-			http.Error(w, "No sheets found in the excel file", http.StatusBadRequest)
-			return
-		}
-		rows, err := f.GetRows(sheetList[0])
-		if err != nil {
-			http.Error(w, "Failed to get rows from sheet: "+err.Error(), http.StatusBadRequest)
+			http.Error(w, "Failed to parse CSV file: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 
@@ -101,13 +93,13 @@ func ImportClientsHandler(conn *sql.DB) http.HandlerFunc {
 
 		var importedCount int
 		for i, row := range rows {
-			if i == 0 {
+			if i == 0 || len(row) < 2 { // Skip header or short rows
 				continue
 			}
-			if len(row) < 2 {
-				continue
-			}
-			if _, err := stmt.Exec(row[0], row[1]); err != nil {
+			clientCode := strings.Trim(strings.TrimSpace(row[0]), `="`)
+			clientName := strings.TrimSpace(row[1])
+
+			if _, err := stmt.Exec(clientCode, clientName); err != nil {
 				log.Printf("Failed to import client row %d: %v", i+1, err)
 				http.Error(w, fmt.Sprintf("Failed to import client row %d", i+1), http.StatusInternalServerError)
 				return
@@ -130,7 +122,14 @@ func ImportClientsHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// ExportProductsHandler handles exporting editable products to an Excel file.
+/**
+ * @brief 製品マスター（編集可能データ）をCSV形式でエクスポートします。
+ * @param conn データベース接続
+ * @return http.HandlerFunc HTTPリクエストを処理するハンドラ関数
+ * @details
+ * データベースから編集可能な製品マスター（JCSHMS由来でないもの）を取得します。
+ * JANコードはExcelで開いた際に先頭のゼロが消えないよう `="<JAN>"` の形式で出力します。
+ */
 func ExportProductsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		products, err := db.GetEditableProductMasters(conn)
@@ -139,11 +138,12 @@ func ExportProductsHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		f := excelize.NewFile()
-		sheetName := "製品マスター"
-		index, _ := f.NewSheet(sheetName)
-		f.SetActiveSheet(index)
-		f.DeleteSheet("Sheet1")
+		w.Header().Set("Content-Type", "text/csv")
+		w.Header().Set("Content-Disposition", `attachment; filename="product_master_editable.csv"`)
+		w.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM for Excel compatibility
+
+		csvWriter := csv.NewWriter(w)
+		defer csvWriter.Flush()
 
 		header := []string{
 			"product_code", "yj_code", "product_name", "origin", "kana_name", "maker_name",
@@ -152,44 +152,48 @@ func ExportProductsHandler(conn *sql.DB) http.HandlerFunc {
 			"flag_psychotropic", "flag_stimulant", "flag_stimulant_raw", "jan_pack_inner_qty",
 			"jan_unit_code", "jan_pack_unit_qty", "nhi_price", "purchase_price", "supplier_wholesale",
 		}
-		for i, h := range header {
-			cell, _ := excelize.CoordinatesToCellName(i+1, 1)
-			f.SetCellValue(sheetName, cell, h)
+		if err := csvWriter.Write(header); err != nil {
+			http.Error(w, "Failed to write CSV header", http.StatusInternalServerError)
+			return
 		}
 
-		style, _ := f.NewStyle(&excelize.Style{
-			NumFmt: 49, // Text format
-		})
-		f.SetColStyle(sheetName, "A", style)
-
-		for i, p := range products {
-			rowNum := i + 2
-			row := []interface{}{
-				p.ProductCode, p.YjCode, p.ProductName, p.Origin, p.KanaName, p.MakerName,
-				p.UsageClassification, p.PackageForm,
-				p.YjUnitName, p.YjPackUnitQty, p.FlagPoison,
-				p.FlagDeleterious, p.FlagNarcotic,
-				p.FlagPsychotropic, p.FlagStimulant,
-				p.FlagStimulantRaw, p.JanPackInnerQty,
-				p.JanUnitCode, p.JanPackUnitQty,
-				p.NhiPrice, p.PurchasePrice, p.SupplierWholesale,
+		for _, p := range products {
+			record := []string{
+				fmt.Sprintf("=%q", p.ProductCode),
+				p.YjCode,
+				p.ProductName,
+				p.Origin,
+				p.KanaName,
+				p.MakerName,
+				p.UsageClassification,
+				p.PackageForm,
+				p.YjUnitName,
+				strconv.FormatFloat(p.YjPackUnitQty, 'f', -1, 64),
+				strconv.Itoa(p.FlagPoison),
+				strconv.Itoa(p.FlagDeleterious),
+				strconv.Itoa(p.FlagNarcotic),
+				strconv.Itoa(p.FlagPsychotropic),
+				strconv.Itoa(p.FlagStimulant),
+				strconv.Itoa(p.FlagStimulantRaw),
+				strconv.FormatFloat(p.JanPackInnerQty, 'f', -1, 64),
+				strconv.Itoa(p.JanUnitCode),
+				strconv.FormatFloat(p.JanPackUnitQty, 'f', -1, 64),
+				strconv.FormatFloat(p.NhiPrice, 'f', -1, 64),
+				strconv.FormatFloat(p.PurchasePrice, 'f', -1, 64),
+				p.SupplierWholesale,
 			}
-			for j, val := range row {
-				cell, _ := excelize.CoordinatesToCellName(j+1, rowNum)
-				f.SetCellValue(sheetName, cell, val)
+			if err := csvWriter.Write(record); err != nil {
+				log.Printf("Failed to write product row to CSV (JAN: %s): %v", p.ProductCode, err)
 			}
-		}
-
-		w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-		w.Header().Set("Content-Disposition", `attachment; filename="product_master_editable.xlsx"`)
-
-		if err := f.Write(w); err != nil {
-			http.Error(w, "Failed to write excel file", http.StatusInternalServerError)
 		}
 	}
 }
 
-// ImportProductsHandler handles importing the product master from a CSV file.
+/**
+ * @brief 製品マスターをCSVファイルからインポートします。
+ * @param conn データベース接続
+ * @return http.HandlerFunc HTTPリクエストを処理するハンドラ関数
+ */
 func ImportProductsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		file, _, err := r.FormFile("file")
@@ -217,10 +221,7 @@ func ImportProductsHandler(conn *sql.DB) http.HandlerFunc {
 
 		var importedCount int
 		for i, row := range rows {
-			if i == 0 {
-				continue
-			}
-			if len(row) < 22 {
+			if i == 0 || len(row) < 22 {
 				continue
 			}
 
@@ -236,9 +237,10 @@ func ImportProductsHandler(conn *sql.DB) http.HandlerFunc {
 			janPackUnitQty, _ := strconv.ParseFloat(row[18], 64)
 			nhiPrice, _ := strconv.ParseFloat(row[19], 64)
 			purchasePrice, _ := strconv.ParseFloat(row[20], 64)
+			productCode := strings.Trim(strings.TrimSpace(row[0]), `="`)
 
 			input := model.ProductMasterInput{
-				ProductCode:         strings.TrimSpace(row[0]),
+				ProductCode:         productCode,
 				YjCode:              strings.TrimSpace(row[1]),
 				ProductName:         strings.TrimSpace(row[2]),
 				Origin:              strings.TrimSpace(row[3]),

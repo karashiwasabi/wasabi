@@ -1,3 +1,5 @@
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\aggregation\handler.go
+
 package aggregation
 
 import (
@@ -10,7 +12,20 @@ import (
 	"wasabi/model"
 )
 
-// GetAggregationHandler handles the request for the stock ledger report.
+/**
+ * @brief 在庫元帳データ（集計結果）を取得するためのHTTPハンドラを返します。
+ * @param conn データベース接続
+ * @return http.HandlerFunc HTTPリクエストを処理するハンドラ関数
+ * @details
+ * HTTPリクエストのクエリパラメータからフィルタ条件を抽出し、
+ * それに基づいて在庫元帳データを生成してJSON形式で返却します。
+ * - coefficient: 発注点係数 (デフォルト: 1.5)
+ * - startDate, endDate: 集計期間
+ * - kanaName: 製品名/カナ名での絞り込み
+ * - drugTypes: 薬品種別での絞り込み (毒, 劇など)
+ * - dosageForm: 剤型での絞り込み
+ * - movementOnly: 期間内に動きがあった品目のみを対象とするか
+ */
 func GetAggregationHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -20,17 +35,14 @@ func GetAggregationHandler(conn *sql.DB) http.HandlerFunc {
 			coefficient = 1.5 // Default value
 		}
 
-		// 新しいフィルター条件を構造体に含める
 		filters := model.AggregationFilters{
-			StartDate:   q.Get("startDate"),
-			EndDate:     q.Get("endDate"),
-			KanaName:    q.Get("kanaName"),
-			DrugTypes:   strings.Split(q.Get("drugTypes"), ","),
-			DosageForm:  q.Get("dosageForm"), // 剤型を取得
-			Coefficient: coefficient,
-			// ▼▼▼ [修正点] 以下の行を追加 ▼▼▼
+			StartDate:    q.Get("startDate"),
+			EndDate:      q.Get("endDate"),
+			KanaName:     q.Get("kanaName"),
+			DrugTypes:    strings.Split(q.Get("drugTypes"), ","),
+			DosageForm:   q.Get("dosageForm"),
+			Coefficient:  coefficient,
 			MovementOnly: q.Get("movementOnly") == "true",
-			// ▲▲▲ 修正ここまで ▲▲▲
 		}
 
 		results, err := db.GetStockLedger(conn, filters)

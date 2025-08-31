@@ -1,4 +1,4 @@
-// C:\Dev\WASABI\backorder\handler.go
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\backorder\handler.go
 
 package backorder
 
@@ -12,11 +12,18 @@ import (
 	"wasabi/units"
 )
 
+// BackorderView は発注残データを画面表示用に整形するための構造体です。
+// model.Backorder の全フィールドに加え、画面表示用の包装仕様文字列を持ちます。
 type BackorderView struct {
 	model.Backorder
 	FormattedPackageSpec string `json:"formattedPackageSpec"`
 }
 
+/**
+ * @brief 全ての発注残リストを取得し、画面表示用に整形して返すためのHTTPハンドラです。
+ * @param conn データベース接続
+ * @return http.HandlerFunc HTTPリクエストを処理するハンドラ関数
+ */
 func GetBackordersHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		backorders, err := db.GetAllBackordersList(conn)
@@ -27,6 +34,7 @@ func GetBackordersHandler(conn *sql.DB) http.HandlerFunc {
 
 		backorderViews := make([]BackorderView, 0, len(backorders))
 		for _, bo := range backorders {
+			// unitsパッケージの関数に渡すため、一時的にJCShmsモデルの形式に変換
 			tempJcshms := model.JCShms{
 				JC037: bo.PackageForm,
 				JC039: bo.YjUnitName,
@@ -36,9 +44,7 @@ func GetBackordersHandler(conn *sql.DB) http.HandlerFunc {
 				JA007: sql.NullString{String: fmt.Sprintf("%d", bo.JanUnitCode), Valid: true},
 			}
 
-			// ▼▼▼ [修正点] 呼び出す関数を新しい簡易版に変更 ▼▼▼
 			formattedSpec := units.FormatSimplePackageSpec(&tempJcshms)
-			// ▲▲▲ 修正ここまで ▲▲▲
 
 			backorderViews = append(backorderViews, BackorderView{
 				Backorder:            bo,
@@ -51,6 +57,13 @@ func GetBackordersHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
+/**
+ * @brief 単一の発注残レコードを削除するためのHTTPハンドラです。
+ * @param conn データベース接続
+ * @return http.HandlerFunc HTTPリクエストを処理するハンドラ関数
+ * @details
+ * HTTPリクエストのボディから削除対象のBackorder情報を受け取り、DBから削除します。
+ */
 func DeleteBackorderHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var payload model.Backorder
@@ -81,8 +94,14 @@ func DeleteBackorderHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// ▼▼▼ [修正点] 以下の関数をファイル末尾に追加 ▼▼▼
-// BulkDeleteBackordersHandler は、複数の発注残レコードの一括削除を処理します。
+/**
+ * @brief 複数の発注残レコードを一括で削除するためのHTTPハンドラです。
+ * @param conn データベース接続
+ * @return http.HandlerFunc HTTPリクエストを処理するハンドラ関数
+ * @details
+ * HTTPリクエストのボディから削除対象のBackorder情報の配列を受け取り、ループ処理でDBから削除します。
+ * 処理は単一のトランザクション内で行われ、一件でも失敗した場合は全てロールバックされます。
+ */
 func BulkDeleteBackordersHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var payload []model.Backorder
@@ -106,7 +125,6 @@ func BulkDeleteBackordersHandler(conn *sql.DB) http.HandlerFunc {
 
 		for _, bo := range payload {
 			if err := db.DeleteBackorderInTx(tx, bo); err != nil {
-				// 1件でも失敗したらエラーを返し、全件ロールバックする
 				http.Error(w, "Failed to delete backorder: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
@@ -121,5 +139,3 @@ func BulkDeleteBackordersHandler(conn *sql.DB) http.HandlerFunc {
 		json.NewEncoder(w).Encode(map[string]string{"message": "選択された発注残を削除しました。"})
 	}
 }
-
-// ▲▲▲ 修正ここまで ▲▲▲

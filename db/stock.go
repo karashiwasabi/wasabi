@@ -1,4 +1,4 @@
-// C:\Dev\WASABI\db\stock.go
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\stock.go
 
 package db
 
@@ -7,7 +7,19 @@ import (
 	"fmt"
 )
 
-// CalculateCurrentStockForProduct は、棚卸を考慮した正確な現在庫を計算します
+/**
+ * @brief 指定された単一製品の現在の理論在庫を、棚卸を考慮して正確に計算します。
+ * @param executor DBTXインターフェース (*sql.DB または *sql.Tx)
+ * @param janCode 在庫を計算する製品のJANコード
+ * @return float64 計算されたYJ単位での在庫数量
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * 1. 最後に実施された棚卸(flag=0)の日付を取得します。
+ * 2. その日の棚卸数量を基点在庫(baseStock)とします。
+ * 3. 棚卸日以降の全ての入出庫トランザクションを合計し、純変動(netChange)を算出します。
+ * 4. 最終在庫は `baseStock + netChange` となります。
+ * 5. 棚卸履歴がない場合は、全期間のトランザクションを合計して在庫を算出します。
+ */
 func CalculateCurrentStockForProduct(executor DBTX, janCode string) (float64, error) {
 	// 1. 最新の棚卸日を取得
 	var latestInventoryDate sql.NullString
@@ -71,7 +83,16 @@ func CalculateCurrentStockForProduct(executor DBTX, janCode string) (float64, er
 	return baseStock + netChange, nil
 }
 
-// GetAllCurrentStockMap は全製品の現在庫を効率的に計算し、マップで返します
+/**
+ * @brief 全製品の現在庫を効率的に計算し、マップで返します。
+ * @param conn データベース接続
+ * @return map[string]float64 JANコードをキー、YJ単位での在庫数量を値とするマップ
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * 全製品の在庫を個別にDB問い合わせすると非常に遅いため、この関数はまず全取引記録をメモリに読み込み、
+ * プログラム内部でJANコードごとにグループ化してから在庫計算を行います。
+ * これにより、DBへのアクセスを最小限に抑え、パフォーマンスを大幅に向上させています。
+ */
 func GetAllCurrentStockMap(conn *sql.DB) (map[string]float64, error) {
 	// 全トランザクションを製品コードと日付でソートして取得
 	rows, err := conn.Query(`
@@ -84,9 +105,6 @@ func GetAllCurrentStockMap(conn *sql.DB) (map[string]float64, error) {
 	defer rows.Close()
 
 	stockMap := make(map[string]float64)
-	// ▼▼▼ [修正点] 未使用の変数を削除 ▼▼▼
-	// var currentJanCode string
-	// ▲▲▲ 修正ここまで ▲▲▲
 
 	type txRecord struct {
 		Date string

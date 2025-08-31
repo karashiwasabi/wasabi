@@ -1,0 +1,41 @@
+.inout-view-container {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.inout-header-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 16px;
+    padding: 16px;
+    border: 1px solid #000;
+    background-color: #f7f7f7;
+    align-items: flex-end;
+}
+
+.inout-header-controls .field-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.inout-header-controls .field-group label {
+    font-size: 12px;
+    font-weight: bold;
+}
+.inout-header-controls .field-group input,
+.inout-header-controls .field-group select {
+    padding: 6px;
+    border: 1px solid #000;
+    font-size: 14px;
+    min-width: 150px;
+}
+.inout-header-controls .buttons-group {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+}
+
+.inout-details-header {
+    text-align: right;
+}

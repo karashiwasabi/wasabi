@@ -57,7 +57,8 @@ func CreateMasterUpdateHandler(conn *sql.DB) http.HandlerFunc {
 
 		const updateQuery = `UPDATE product_master SET
 			yj_code=?, product_name=?, origin=?, kana_name=?, maker_name=?,
-			usage_classification=?, package_form=?, yj_unit_name=?, yj_pack_unit_qty=?,
+			usage_classification=?, package_form=?, 
+			yj_unit_name=?, yj_pack_unit_qty=?,
 			flag_poison=?, flag_deleterious=?, flag_narcotic=?, flag_psychotropic=?,
 			flag_stimulant=?, flag_stimulant_raw=?, jan_pack_inner_qty=?,
 			jan_unit_code=?, jan_pack_unit_qty=?, nhi_price=?
@@ -69,7 +70,8 @@ func CreateMasterUpdateHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer updateStmt.Close()
 
-		const orphanQuery = `UPDATE product_master SET origin = ?, product_name = ? WHERE product_code = ?`
+		const orphanQuery = `UPDATE product_master SET origin = ?, product_name = ?
+		WHERE product_code = ?`
 		orphanStmt, err := tx.Prepare(orphanQuery)
 		if err != nil {
 			http.Error(w, "PROVISIONAL化用SQLステートメントの準備に失敗しました: "+err.Error(), http.StatusInternalServerError)
@@ -86,9 +88,12 @@ func CreateMasterUpdateHandler(conn *sql.DB) http.HandlerFunc {
 				jancodeRow := newJancodeData[master.ProductCode]
 				input := createInputFromCSV(jcshmsRow, jancodeRow)
 
+				// ▼▼▼ [修正点] 以下のifブロックを変更 ▼▼▼
 				if master.Origin == "PROVISIONAL" && input.YjCode == "" {
 					input.Origin = "PROVISIONAL"
+					input.YjCode = master.YjCode // 既存のYJコードを維持する
 				}
+				// ▲▲▲ 修正ここまで ▲▲▲
 
 				_, err := updateStmt.Exec(
 					input.YjCode, input.ProductName, input.Origin, input.KanaName, input.MakerName,

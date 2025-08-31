@@ -1,3 +1,5 @@
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\precomp.go
+
 package db
 
 import (
@@ -16,15 +18,27 @@ type PrecompRecordInput struct {
 }
 
 // PrecompRecordView は予製データを画面に表示するための構造体です。
+// NOTE: この構造体は現在直接使用されていませんが、将来的な拡張のために残されています。
 type PrecompRecordView struct {
 	model.TransactionRecord
 	FormattedPackageSpec string `json:"formattedPackageSpec"`
 	JanUnitName          string `json:"janUnitName"`
 }
 
-// UpsertPreCompoundingRecordsInTx は、特定の患者の予製レコードを安全に同期します。
+/**
+ * @brief 特定の患者の予製レコードをデータベースと安全に同期します。
+ * @param tx SQLトランザクションオブジェクト
+ * @param patientNumber 対象の患者番号
+ * @param records フロントエンドから送信された最新の予製レコードのスライス
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * 以下の3ステップで、データベースの状態をフロントエンドの状態と完全に一致させます。
+ * 1. レコードが空の場合、この患者の全予製データを削除します。
+ * 2. データベースに存在するがフロントエンドのリストにないレコードを削除します。
+ * 3. フロントエンドのリストにあるレコードをDBに挿入または更新（UPSERT）します。
+ */
 func UpsertPreCompoundingRecordsInTx(tx *sql.Tx, patientNumber string, records []PrecompRecordInput) error {
-	// If the frontend sends an empty list, it means all records for this patient should be deleted.
+	// フロントエンドから空のリストが送られてきた場合、その患者の全レコードを削除する
 	if len(records) == 0 {
 		if _, err := tx.Exec("DELETE FROM precomp_records WHERE client_code = ?", patientNumber); err != nil {
 			return fmt.Errorf("failed to delete all precomp records for patient %s: %w", patientNumber, err)
@@ -32,7 +46,7 @@ func UpsertPreCompoundingRecordsInTx(tx *sql.Tx, patientNumber string, records [
 		return nil
 	}
 
-	// Step 1: Prepare a list of product codes from the payload for the `NOT IN` clause.
+	// ステップ1: フロントエンドからの製品コードリストを準備
 	productCodesInPayload := make([]interface{}, len(records)+1)
 	placeholders := make([]string, len(records))
 	productCodesInPayload[0] = patientNumber
@@ -41,14 +55,13 @@ func UpsertPreCompoundingRecordsInTx(tx *sql.Tx, patientNumber string, records [
 		productCodesInPayload[i+1] = rec.ProductCode
 	}
 
-	// Step 2: Delete records from the DB that are no longer in the list from the frontend.
+	// ステップ2: DBに存在するがフロントエンドのリストにない古いレコードを削除
 	deleteQuery := fmt.Sprintf("DELETE FROM precomp_records WHERE client_code = ? AND jan_code NOT IN (%s)", strings.Join(placeholders, ","))
 	if _, err := tx.Exec(deleteQuery, productCodesInPayload...); err != nil {
 		return fmt.Errorf("failed to delete removed precomp records for patient %s: %w", patientNumber, err)
 	}
 
-	// Step 3: Upsert the records from the payload.
-	// Note: This requires a UNIQUE constraint on (client_code, jan_code) in the precomp_records table schema.
+	// ステップ3: フロントエンドのリストにあるレコードをDBに挿入または更新 (UPSERT)
 	var productCodes []string
 	for _, rec := range records {
 		productCodes = append(productCodes, rec.ProductCode)
@@ -113,7 +126,15 @@ func UpsertPreCompoundingRecordsInTx(tx *sql.Tx, patientNumber string, records [
 	return nil
 }
 
-// GetPreCompoundingRecordsByPatient は、特定の患者の予製レコードをリストで取得します。
+/**
+ * @brief 特定の患者の予製レコードをリストで取得します。
+ * @param conn データベース接続
+ * @param patientNumber 対象の患者番号
+ * @return []model.TransactionRecord 予製レコードのスライス
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * 予製レコードをTransactionRecordの形式で取得します。flagは5（予製）として固定値を設定します。
+ */
 func GetPreCompoundingRecordsByPatient(conn *sql.DB, patientNumber string) ([]model.TransactionRecord, error) {
 	const q = `SELECT
 		id, transaction_date, client_code, receipt_number, line_number, 5 AS flag,
@@ -140,7 +161,12 @@ func GetPreCompoundingRecordsByPatient(conn *sql.DB, patientNumber string) ([]mo
 	return records, nil
 }
 
-// DeletePreCompoundingRecordsByPatient は、特定の患者の予製レコードをすべて削除します。
+/**
+ * @brief 特定の患者の予製レコードをすべて削除します。
+ * @param conn データベース接続
+ * @param patientNumber 対象の患者番号
+ * @return error 処理中にエラーが発生した場合
+ */
 func DeletePreCompoundingRecordsByPatient(conn *sql.DB, patientNumber string) error {
 	const q = `DELETE FROM precomp_records WHERE client_code = ?`
 	if _, err := conn.Exec(q, patientNumber); err != nil {
@@ -149,7 +175,14 @@ func DeletePreCompoundingRecordsByPatient(conn *sql.DB, patientNumber string) er
 	return nil
 }
 
-// GetPreCompoundingTotals は、全製品の有効な予製合計数量をマップで返します。
+/**
+ * @brief 全製品の有効な予製引当数量の合計をマップで返します。
+ * @param conn データベース接続
+ * @return map[string]float64 JANコードをキー、YJ単位での合計引当数量を値とするマップ
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * この関数が返す値は、在庫元帳の計算において発注点の調整に使用されます。
+ */
 func GetPreCompoundingTotals(conn *sql.DB) (map[string]float64, error) {
 	const q = `SELECT jan_code, SUM(yj_quantity) FROM precomp_records GROUP BY jan_code`
 	rows, err := conn.Query(q)
@@ -170,17 +203,21 @@ func GetPreCompoundingTotals(conn *sql.DB) (map[string]float64, error) {
 	return totals, nil
 }
 
-// ▼▼▼ [修正点] PreCompoundingDetailView構造体を削除し、GetPreCompoundingDetailsByProductCodesを修正 ▼▼▼
-
-// GetPreCompoundingDetailsByProductCodes は複数の製品コードに紐づく有効な予製レコードを全て取得します。
-// 返り値の型を []model.TransactionRecord に変更
+/**
+ * @brief 複数の製品コードに紐づく有効な予製レコードを全て取得します。
+ * @param conn データベース接続
+ * @param productCodes 取得対象の製品コードのスライス
+ * @return []model.TransactionRecord 予製レコードのスライス
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * 「棚卸調整」画面で、理論在庫と実在庫の差を分析する際の参考情報として使用されます。
+ */
 func GetPreCompoundingDetailsByProductCodes(conn *sql.DB, productCodes []string) ([]model.TransactionRecord, error) {
 	if len(productCodes) == 0 {
 		return []model.TransactionRecord{}, nil
 	}
 
 	placeholders := strings.Repeat("?,", len(productCodes)-1) + "?"
-	// TransactionRecordとしてスキャンできるように、全ての必要カラムを取得するクエリに変更
 	query := fmt.Sprintf(`
 		SELECT
 			p.id, p.transaction_date, p.client_code, p.receipt_number, p.line_number, 5 AS flag,
@@ -205,7 +242,6 @@ func GetPreCompoundingDetailsByProductCodes(conn *sql.DB, productCodes []string)
 
 	var records []model.TransactionRecord
 	for rows.Next() {
-		// 共通のスキャン関数を使用
 		r, err := ScanTransactionRecord(rows)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan precomp detail record: %w", err)
@@ -215,12 +251,15 @@ func GetPreCompoundingDetailsByProductCodes(conn *sql.DB, productCodes []string)
 	return records, nil
 }
 
-// ▲▲▲ 修正ここまで ▲▲▲
-
-// ▼▼▼ [修正点] 以下の関数をファイル末尾に追加 ▼▼▼
-// GetAllPreCompoundingRecords は、全患者の有効な予製レコードを全て取得します。
+/**
+ * @brief 全患者の有効な予製レコードを全て取得します。
+ * @param conn データベース接続
+ * @return []model.TransactionRecord 予製レコードのスライス
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * 予製データの一括CSVエクスポート機能で使用されます。
+ */
 func GetAllPreCompoundingRecords(conn *sql.DB) ([]model.TransactionRecord, error) {
-	// GetPreCompoundingRecordsByPatient から WHERE句を削除したクエリ
 	const q = `SELECT
 		id, transaction_date, client_code, receipt_number, line_number, 5 AS flag,
 		jan_code, yj_code, product_name, kana_name, usage_classification, package_form, package_spec, maker_name,
@@ -228,7 +267,7 @@ func GetAllPreCompoundingRecords(conn *sql.DB) ([]model.TransactionRecord, error
 		yj_quantity, yj_pack_unit_qty, yj_unit_name, 0.0, purchase_price, supplier_wholesale,
 		0.0, 0.0, 0.0, '', '', 0, 0, 0, 0, 0, 0, ''
 		FROM precomp_records 
-		ORDER BY client_code, id` // 患者番号、ID順でソート
+		ORDER BY client_code, id`
 
 	rows, err := conn.Query(q)
 	if err != nil {
@@ -246,5 +285,3 @@ func GetAllPreCompoundingRecords(conn *sql.DB) ([]model.TransactionRecord, error
 	}
 	return records, nil
 }
-
-// ▲▲▲ 修正ここまで ▲▲▲

@@ -48,27 +48,27 @@ export function initManualInventory() {
         }
     }
     
-    function applyFiltersAndRender() {
-    // ▼▼▼ [修正点] フィルター実行時にカナ変換 ▼▼▼
+function applyFiltersAndRender() {
     const kanaFilter = hiraganaToKatakana(kanaNameInput.value).toLowerCase();
-    // ▲▲▲ 修正ここまで ▲▲▲
-        const dosageFilter = dosageFormInput.value.toLowerCase();
-        
-        let filteredProducts = allProducts;
-
-        if (kanaFilter) {
-            filteredProducts = filteredProducts.filter(p => 
-                p.productName.toLowerCase().includes(kanaFilter) || p.kanaName.toLowerCase().includes(kanaFilter)
-            );
-        }
-        if (dosageFilter) {
-            filteredProducts = filteredProducts.filter(p => 
-                p.usageClassification && p.usageClassification.toLowerCase().includes(dosageFilter)
-            );
-        }
-        
-        renderProducts(filteredProducts);
+    const dosageFilter = dosageFormInput.value; // toLowerCase()を削除
+    
+    let filteredProducts = allProducts;
+    if (kanaFilter) {
+        filteredProducts = filteredProducts.filter(p => 
+            p.productName.toLowerCase().includes(kanaFilter) || p.kanaName.toLowerCase().includes(kanaFilter)
+        );
     }
+    
+    // ▼▼▼ [修正点] プルダウンに合わせた絞り込みロジックに変更 ▼▼▼
+    if (dosageFilter) {
+        filteredProducts = filteredProducts.filter(p => 
+            p.usageClassification && p.usageClassification.trim() === dosageFilter
+        );
+    }
+    // ▲▲▲ 修正ここまで ▲▲▲
+    
+    renderProducts(filteredProducts);
+}
 
     function renderProducts(productsToRender) {
         if (productsToRender.length === 0) {

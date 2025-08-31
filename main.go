@@ -1,4 +1,4 @@
-// C:\Dev\WASABI\main.go
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\main.go
 
 package main
 
@@ -14,10 +14,12 @@ import (
 	"wasabi/aggregation"
 	"wasabi/backorder"
 	"wasabi/backup"
+	"wasabi/client"
 	"wasabi/config"
 	"wasabi/dat"
 	"wasabi/db"
 	"wasabi/deadstock"
+	"wasabi/edge"
 	"wasabi/guidedinventory"
 	"wasabi/inout"
 	"wasabi/inventory"
@@ -30,6 +32,8 @@ import (
 	"wasabi/product"
 	"wasabi/reprocess"
 	"wasabi/returns"
+	"wasabi/search"
+	"wasabi/sequence"
 	"wasabi/settings"
 	"wasabi/stock"
 	"wasabi/transaction"
@@ -56,6 +60,13 @@ func main() {
 	if err := loader.InitDatabase(conn); err != nil {
 		log.Fatalf("master data initialization failed: %v", err)
 	}
+
+	// ▼▼▼ [追加] データベースマイグレーションを実行 ▼▼▼
+	if err := db.ApplyMigrations(conn); err != nil {
+		log.Fatalf("database migration failed: %v", err)
+	}
+	// ▲▲▲ [追加ここまで] ▲▲▲
+
 	if _, err := units.LoadTANIFile("SOU/TANI.CSV"); err != nil {
 		log.Fatalf("tani master init failed: %v", err)
 	}
@@ -63,7 +74,11 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// API Endpoints
+	// ... (これ以降のAPIエンドポイントの登録処理は変更なし) ...
+	mux.HandleFunc("/api/clients", client.GetAllClientsHandler(conn))
+	mux.HandleFunc("/api/products/search", search.SearchJcshmsByNameHandler(conn))
+	mux.HandleFunc("/api/masters/search_all", search.SearchAllMastersHandler(conn))
+	mux.HandleFunc("/api/masters/by_yj_code", search.GetMastersByYjCodeHandler(conn))
 	mux.HandleFunc("/api/valuation", valuation.GetValuationHandler(conn))
 	mux.HandleFunc("/api/valuation/export", valuation.ExportValuationHandler(conn))
 	mux.HandleFunc("/api/dat/upload", dat.UploadDatHandler(conn))
@@ -73,8 +88,6 @@ func main() {
 	mux.HandleFunc("/api/inventory/list", inventory.ListInventoryProductsHandler(conn))
 	mux.HandleFunc("/api/inventory/save_manual", inventory.SaveManualInventoryHandler(conn))
 	mux.HandleFunc("/api/aggregation", aggregation.GetAggregationHandler(conn))
-	mux.HandleFunc("/api/clients", db.GetAllClientsHandler(conn))
-	mux.HandleFunc("/api/products/search", db.SearchJcshmsByNameHandler(conn))
 	mux.HandleFunc("/api/units/map", units.GetTaniMapHandler())
 	mux.HandleFunc("/api/receipts", transaction.GetReceiptsHandler(conn))
 	mux.HandleFunc("/api/transaction/", transaction.GetTransactionHandler(conn))
@@ -85,9 +98,7 @@ func main() {
 	mux.HandleFunc("/api/clients/import", backup.ImportClientsHandler(conn))
 	mux.HandleFunc("/api/products/export", backup.ExportProductsHandler(conn))
 	mux.HandleFunc("/api/products/import", backup.ImportProductsHandler(conn))
-	// ▼▼▼【ここに追加】▼▼▼
 	mux.HandleFunc("/api/pricing/backup_export", pricing.BackupExportHandler(conn))
-	// ▲▲▲【追加ここまで】▲▲▲
 	mux.HandleFunc("/api/transactions/reprocess", reprocess.ProcessTransactionsHandler(conn))
 	mux.HandleFunc("/api/deadstock/list", deadstock.GetDeadStockHandler(conn))
 	mux.HandleFunc("/api/deadstock/save", deadstock.SaveDeadStockHandler(conn))
@@ -97,18 +108,13 @@ func main() {
 	mux.HandleFunc("/api/settings/wholesalers", settings.WholesalersHandler(conn))
 	mux.HandleFunc("/api/settings/wholesalers/", settings.WholesalersHandler(conn))
 	mux.HandleFunc("/api/transactions/clear_all", settings.ClearTransactionsHandler(conn))
-	// ▼▼▼【ここに追加】▼▼▼
 	mux.HandleFunc("/api/masters/clear_all", settings.ClearMastersHandler(conn))
-	// ▲▲▲【追加ここまで】▲▲▲
-	mux.HandleFunc("/api/masters/search_all", db.SearchAllMastersHandler(conn))
 	mux.HandleFunc("/api/precomp/save", precomp.SavePrecompHandler(conn))
 	mux.HandleFunc("/api/precomp/load", precomp.LoadPrecompHandler(conn))
 	mux.HandleFunc("/api/precomp/clear", precomp.ClearPrecompHandler(conn))
 	mux.HandleFunc("/api/precomp/export", precomp.ExportPrecompHandler(conn))
 	mux.HandleFunc("/api/precomp/import", precomp.ImportPrecompHandler(conn))
-	// ▼▼▼【ここに追加】▼▼▼
 	mux.HandleFunc("/api/precomp/import_all", precomp.BulkImportPrecompHandler(conn))
-	// ▲▲▲【追加ここまで】▲▲▲
 	mux.HandleFunc("/api/precomp/export_all", precomp.ExportAllPrecompHandler(conn))
 	mux.HandleFunc("/api/orders/candidates", orders.GenerateOrderCandidatesHandler(conn))
 	mux.HandleFunc("/api/orders/place", orders.PlaceOrderHandler(conn))
@@ -121,13 +127,12 @@ func main() {
 	mux.HandleFunc("/api/pricing/upload", pricing.UploadQuotesHandler(conn))
 	mux.HandleFunc("/api/pricing/update", pricing.BulkUpdateHandler(conn))
 	mux.HandleFunc("/api/pricing/all_masters", pricing.GetAllMastersForPricingHandler(conn))
-	// ▼▼▼ Add this line ▼▼▼
 	mux.HandleFunc("/api/pricing/direct_import", pricing.DirectImportHandler(conn))
-	// ▲▲▲ Addition complete ▲▲▲
-	mux.HandleFunc("/api/masters/by_yj_code", db.GetMastersByYjCodeHandler(conn))
 	mux.HandleFunc("/api/stock/current", stock.GetCurrentStockHandler(conn))
 	mux.HandleFunc("/api/stock/all_current", stock.GetAllCurrentStockHandler(conn))
 	mux.HandleFunc("/api/medrec/download", medrec.DownloadHandler(conn))
+	mux.HandleFunc("/api/edge/download", edge.DownloadHandler(conn))
+	mux.HandleFunc("/api/sequence/next/", sequence.GetNextSequenceHandler(conn))
 	mux.HandleFunc("/api/products/search_filtered", product.SearchProductsHandler(conn))
 	mux.HandleFunc("/api/inventory/adjust/data", guidedinventory.GetInventoryDataHandler(conn))
 	mux.HandleFunc("/api/inventory/adjust/save", guidedinventory.SaveInventoryDataHandler(conn))

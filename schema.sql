@@ -1,10 +1,11 @@
--- C:\Dev\WASABI\schema.sql
+-- C:\Users\wasab\OneDrive\デスクトップ\WASABI\schema.sql
 
 -- 得意先マスターテーブル
 CREATE TABLE IF NOT EXISTS client_master (
   client_code TEXT PRIMARY KEY,
   client_name TEXT NOT NULL UNIQUE
 );
+
 -- 製品マスタ (WASABIの新しい仕様)
 CREATE TABLE IF NOT EXISTS product_master (
     product_code TEXT PRIMARY KEY,
@@ -13,8 +14,8 @@ CREATE TABLE IF NOT EXISTS product_master (
     origin TEXT,
     kana_name TEXT,
     maker_name TEXT,
-    usage_classification TEXT, -- JC013 (内外区分)
-    package_form TEXT,         -- JC037 (包装)
+    usage_classification TEXT,
+    package_form TEXT,
     yj_unit_name TEXT,
     yj_pack_unit_qty REAL,
     flag_poison INTEGER,
@@ -30,6 +31,7 @@ CREATE TABLE IF NOT EXISTS product_master (
     purchase_price REAL,
     supplier_wholesale TEXT
 );
+
 CREATE TABLE IF NOT EXISTS transaction_records (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   transaction_date TEXT,
@@ -70,6 +72,7 @@ CREATE TABLE IF NOT EXISTS transaction_records (
   flag_stimulant_raw INTEGER,
   process_flag_ma TEXT
 );
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_unique_slip
   ON transaction_records(transaction_date, client_code, receipt_number, line_number)
   WHERE receipt_number != '';
@@ -91,6 +94,7 @@ CREATE TABLE IF NOT EXISTS jcshms (
   JC120 TEXT, JC121 TEXT, JC122 TEXT, JC123 TEXT, JC124 TEXT,
   PRIMARY KEY(JC000)
 );
+
 -- JANCODEマスタ
 CREATE TABLE IF NOT EXISTS jancode (
   JA000 TEXT, JA001 TEXT, JA002 TEXT, JA003 TEXT, JA004 TEXT, JA005 TEXT, JA006 REAL, JA007 TEXT, JA008 REAL, JA009 TEXT,
@@ -98,6 +102,7 @@ CREATE TABLE IF NOT EXISTS jancode (
   JA020 TEXT, JA021 TEXT, JA022 TEXT, JA023 TEXT, JA024 TEXT, JA025 TEXT, JA026 TEXT, JA027 TEXT, JA028 TEXT, JA029 TEXT,
   PRIMARY KEY(JA001)
 );
+
 -- 自動採番シーケンス
 CREATE TABLE IF NOT EXISTS code_sequences (
   name TEXT PRIMARY KEY,
@@ -105,11 +110,13 @@ CREATE TABLE IF NOT EXISTS code_sequences (
 );
 INSERT OR IGNORE INTO code_sequences(name, last_no) VALUES ('MA2Y', 0);
 INSERT OR IGNORE INTO code_sequences(name, last_no) VALUES ('CL', 0);
+
 -- 検索を高速化するためのインデックスを追加
 CREATE INDEX IF NOT EXISTS idx_transactions_jan_code ON transaction_records (jan_code);
 CREATE INDEX IF NOT EXISTS idx_transactions_date ON transaction_records (transaction_date);
 CREATE INDEX IF NOT EXISTS idx_transactions_flag ON transaction_records (flag);
 CREATE INDEX IF NOT EXISTS idx_product_master_kana_name ON product_master (kana_name);
+
 -- デッドストックリストテーブル
 CREATE TABLE IF NOT EXISTS dead_stock_list (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -124,6 +131,7 @@ CREATE TABLE IF NOT EXISTS dead_stock_list (
   created_at TEXT NOT NULL,
   UNIQUE(product_code, expiry_date, lot_number)
 );
+
 CREATE INDEX IF NOT EXISTS idx_tx_jan_date
   ON transaction_records(jan_code, transaction_date);
 
@@ -161,6 +169,7 @@ CREATE TABLE IF NOT EXISTS wholesalers (
   wholesaler_code TEXT PRIMARY KEY,
   wholesaler_name TEXT NOT NULL
 );
+
 -- 発注残管理テーブル (改善版)
 CREATE TABLE IF NOT EXISTS backorders (
   -- ▼ 複合主キー ▼
@@ -176,3 +185,9 @@ CREATE TABLE IF NOT EXISTS backorders (
 
   PRIMARY KEY (yj_code, package_form, jan_pack_inner_qty, yj_unit_name)
 );
+
+-- ▼▼▼ [追加] パフォーマンス改善のためのインデックス ▼▼▼
+CREATE INDEX IF NOT EXISTS idx_transactions_receipt_number ON transaction_records (receipt_number);
+CREATE INDEX IF NOT EXISTS idx_transactions_process_flag_ma ON transaction_records (process_flag_ma);
+CREATE INDEX IF NOT EXISTS idx_transactions_flag_date ON transaction_records (flag, transaction_date);
+-- ▲▲▲ [追加ここまで] ▲▲▲

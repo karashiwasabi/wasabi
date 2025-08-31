@@ -1,4 +1,4 @@
-// C:\Dev\WASABI\db\transaction_records.go
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\transaction_records.go
 
 package db
 
@@ -11,6 +11,7 @@ import (
 	"wasabi/model"
 )
 
+// TransactionColumns は transaction_records テーブルからレコードを取得する際の標準的なカラムリストです。
 const TransactionColumns = `
     id, transaction_date, client_code, receipt_number, line_number, flag,
     jan_code, yj_code, product_name, kana_name, usage_classification, package_form, package_spec, maker_name,
@@ -20,6 +21,12 @@ const TransactionColumns = `
     flag_deleterious, flag_narcotic, flag_psychotropic, flag_stimulant,
     flag_stimulant_raw, process_flag_ma`
 
+/**
+ * @brief データベースの行データから model.TransactionRecord 構造体に値をスキャンします。
+ * @param row スキャン対象の行 (*sql.Row または *sql.Rows)
+ * @return *model.TransactionRecord スキャン結果のポインタ
+ * @return error スキャン中にエラーが発生した場合
+ */
 func ScanTransactionRecord(row interface{ Scan(...interface{}) error }) (*model.TransactionRecord, error) {
 	var r model.TransactionRecord
 	err := row.Scan(
@@ -37,6 +44,12 @@ func ScanTransactionRecord(row interface{ Scan(...interface{}) error }) (*model.
 	return &r, nil
 }
 
+/**
+ * @brief 複数の取引レコードをトランザクション内で永続化（挿入または置換）します。
+ * @param tx SQLトランザクションオブジェクト
+ * @param records 保存する取引レコードのスライス
+ * @return error 処理中にエラーが発生した場合
+ */
 func PersistTransactionRecordsInTx(tx *sql.Tx, records []model.TransactionRecord) error {
 	const q = `
 INSERT OR REPLACE INTO transaction_records (
@@ -75,6 +88,14 @@ INSERT OR REPLACE INTO transaction_records (
 	return nil
 }
 
+/**
+ * @brief 複数の取引レコードにマスター情報をマッピングしてから永続化します。
+ * @param tx SQLトランザクションオブジェクト
+ * @param records 保存する取引レコードのスライス
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * レコードを保存する前に、JANコードを基に製品マスターから最新の情報を取得し、レコードに反映（エンリッチ）します。
+ */
 func PersistTransactionRecordsWithMasterMappingInTx(tx *sql.Tx, records []model.TransactionRecord) error {
 	var productCodes []string
 	codeMap := make(map[string]struct{})
@@ -131,10 +152,16 @@ INSERT OR REPLACE INTO transaction_records (
 	return nil
 }
 
-// ▼▼▼ [修正点] GetReceiptNumbersByDateのSQLクエリを修正 ▼▼▼
-// GetReceiptNumbersByDate returns a list of unique receipt numbers for a given date.
+/**
+ * @brief 指定された日付の入出庫伝票番号のリストを取得します。
+ * @param conn データベース接続
+ * @param date 検索対象の日付 (YYYYMMDD)
+ * @return []string 伝票番号のスライス
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * 伝票番号が 'io' で始まるレコードのみを対象とします。
+ */
 func GetReceiptNumbersByDate(conn *sql.DB, date string) ([]string, error) {
-	// 入出庫伝票（'io'で始まるもの）のみを対象とするように修正
 	const q = `SELECT DISTINCT receipt_number FROM transaction_records 
 	           WHERE transaction_date = ? AND receipt_number LIKE 'io%' 
 			   ORDER BY receipt_number`
@@ -155,8 +182,13 @@ func GetReceiptNumbersByDate(conn *sql.DB, date string) ([]string, error) {
 	return numbers, nil
 }
 
-// ▲▲▲ 修正ここまで ▲▲▲
-
+/**
+ * @brief 指定された伝票番号に紐づく全ての取引明細を取得します。
+ * @param conn データベース接続
+ * @param receiptNumber 検索対象の伝票番号
+ * @return []model.TransactionRecord 取引明細のスライス
+ * @return error 処理中にエラーが発生した場合
+ */
 func GetTransactionsByReceiptNumber(conn *sql.DB, receiptNumber string) ([]model.TransactionRecord, error) {
 	q := `SELECT ` + TransactionColumns + ` FROM transaction_records WHERE receipt_number = ? ORDER BY line_number`
 	rows, err := conn.Query(q, receiptNumber)
@@ -176,6 +208,12 @@ func GetTransactionsByReceiptNumber(conn *sql.DB, receiptNumber string) ([]model
 	return records, nil
 }
 
+/**
+ * @brief マスター情報が未確定の仮取引レコードを取得します。
+ * @param tx SQLトランザクションオブジェクト
+ * @return []model.TransactionRecord 仮取引レコードのスライス
+ * @return error 処理中にエラーが発生した場合
+ */
 func GetProvisionalTransactions(tx *sql.Tx) ([]model.TransactionRecord, error) {
 	q := `SELECT ` + TransactionColumns + ` FROM transaction_records WHERE process_flag_ma = 'PROVISIONAL'`
 	rows, err := tx.Query(q)
@@ -195,6 +233,14 @@ func GetProvisionalTransactions(tx *sql.Tx) ([]model.TransactionRecord, error) {
 	return records, nil
 }
 
+/**
+ * @brief 単一の取引レコードの全情報をトランザクション内で更新します。
+ * @param tx SQLトランザクションオブジェクト
+ * @param record 更新する取引レコード
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * 「再計算」機能で、古い取引レコードを最新のマスター情報で上書きする際に使用されます。
+ */
 func UpdateFullTransactionInTx(tx *sql.Tx, record *model.TransactionRecord) error {
 	const q = `
 		UPDATE transaction_records SET
@@ -223,6 +269,12 @@ func UpdateFullTransactionInTx(tx *sql.Tx, record *model.TransactionRecord) erro
 	return nil
 }
 
+/**
+ * @brief 指定された伝票番号に紐づく全ての取引明細をトランザクション内で削除します。
+ * @param tx SQLトランザクションオブジェクト
+ * @param receiptNumber 削除対象の伝票番号
+ * @return error 処理中にエラーが発生した場合
+ */
 func DeleteTransactionsByReceiptNumberInTx(tx *sql.Tx, receiptNumber string) error {
 	const q = `DELETE FROM transaction_records WHERE receipt_number = ?`
 	_, err := tx.Exec(q, receiptNumber)
@@ -232,6 +284,13 @@ func DeleteTransactionsByReceiptNumberInTx(tx *sql.Tx, receiptNumber string) err
 	return nil
 }
 
+/**
+ * @brief 指定された日付と種別フラグに一致する取引レコードを削除します。
+ * @param tx SQLトランザクションオブジェクト
+ * @param flag 削除対象の種別フラグ (例: 0=棚卸)
+ * @param date 削除対象の日付 (YYYYMMDD)
+ * @return error 処理中にエラーが発生した場合
+ */
 func DeleteTransactionsByFlagAndDate(tx *sql.Tx, flag int, date string) error {
 	const q = `DELETE FROM transaction_records WHERE flag = ? AND transaction_date = ?`
 	_, err := tx.Exec(q, flag, date)
@@ -241,6 +300,16 @@ func DeleteTransactionsByFlagAndDate(tx *sql.Tx, flag int, date string) error {
 	return nil
 }
 
+/**
+ * @brief 指定された日付、種別フラグ、製品コード群に一致する取引レコードを削除します。
+ * @param tx SQLトランザクションオブジェクト
+ * @param flag 削除対象の種別フラグ
+ * @param date 削除対象の日付 (YYYYMMDD)
+ * @param productCodes 削除対象の製品コードのスライス
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * 「棚卸入力」画面などで、入力があった品目の古い棚卸データのみを削除する際に使用されます。
+ */
 func DeleteTransactionsByFlagAndDateAndCodes(tx *sql.Tx, flag int, date string, productCodes []string) error {
 	if len(productCodes) == 0 {
 		return nil
@@ -262,6 +331,15 @@ func DeleteTransactionsByFlagAndDateAndCodes(tx *sql.Tx, flag int, date string, 
 	return nil
 }
 
+/**
+ * @brief 指定された期間内の処方レコード(flag=3)を全て削除します。
+ * @param tx SQLトランザクションオブジェクト
+ * @param minDate 期間開始日 (YYYYMMDD)
+ * @param maxDate 期間終了日 (YYYYMMDD)
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * 処方データを再インポートする前に、既存のデータをクリアするために使用されます。
+ */
 func DeleteUsageTransactionsInDateRange(tx *sql.Tx, minDate, maxDate string) error {
 	const q = `DELETE FROM transaction_records WHERE flag = 3 AND transaction_date BETWEEN ? AND ?`
 	_, err := tx.Exec(q, minDate, maxDate)
@@ -271,6 +349,16 @@ func DeleteUsageTransactionsInDateRange(tx *sql.Tx, minDate, maxDate string) err
 	return nil
 }
 
+/**
+ * @brief 棚卸ファイル取込時に生成されたゼロ埋め用の棚卸レコードを削除します。
+ * @param tx SQLトランザクションオブジェクト
+ * @param date 対象の日付 (YYYYMMDD)
+ * @param janCodes 対象のJANコードのスライス
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * 棚卸ファイル取込処理では、まず全品目の在庫を0で登録し、その後ファイルに存在する品目のゼロ埋めレコードのみを
+ * この関数で削除してから、実際の在庫数を登録します。
+ */
 func DeleteZeroFillInventoryTransactions(tx *sql.Tx, date string, janCodes []string) error {
 	if len(janCodes) == 0 {
 		return nil
@@ -297,6 +385,13 @@ func DeleteZeroFillInventoryTransactions(tx *sql.Tx, date string, janCodes []str
 	return nil
 }
 
+/**
+ * @brief 全ての取引レコードを削除します。
+ * @param conn データベース接続
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * 「設定」画面のメンテナンス機能で使用されます。
+ */
 func ClearAllTransactions(conn *sql.DB) error {
 	tx, err := conn.Begin()
 	if err != nil {
@@ -315,6 +410,12 @@ func ClearAllTransactions(conn *sql.DB) error {
 	return tx.Commit()
 }
 
+/**
+ * @brief 全製品の最終棚卸日をマップ形式で取得します。
+ * @param conn データベース接続
+ * @return map[string]string JANコードをキー、最終棚卸日(YYYYMMDD)を値とするマップ
+ * @return error 処理中にエラーが発生した場合
+ */
 func GetLastInventoryDateMap(conn *sql.DB) (map[string]string, error) {
 	rows, err := conn.Query(`
 		SELECT jan_code, MAX(transaction_date) 

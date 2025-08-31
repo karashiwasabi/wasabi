@@ -42,6 +42,10 @@ func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 			chromedp.UserAgent(`Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36`),
 		)
 
+		if edgePath := findEdgePath(); edgePath != "" {
+			opts = append(opts, chromedp.ExecPath(edgePath))
+		}
+
 		allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
 		defer cancel()
 
@@ -87,6 +91,8 @@ func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 			chromedp.Text(`table.result-list-table tbody tr:first-child td.col-transceiving-date`, &initialLatestTimestamp),
 			// ボタンをクリックしてデータ受信を実行
 			chromedp.Click(`input[value="未受信データ全件受信"]`),
+			// クリック後に意図的に待機
+			chromedp.Sleep(3*time.Second),
 		)
 
 		if err != nil {
@@ -96,8 +102,8 @@ func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 		}
 
 		var noDataFound bool
-		timeout := time.After(30 * time.Second)
-		ticker := time.NewTicker(500 * time.Millisecond) // 500ミリ秒ごとにチェック
+		timeout := time.After(90 * time.Second) // タイムアウトを90秒に延長
+		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
 
 	Loop:
@@ -108,7 +114,7 @@ func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 				log.Printf("Download completed: %s", guid)
 				break Loop
 			case <-timeout:
-				err = fmt.Errorf("operation timed out after 30 seconds")
+				err = fmt.Errorf("operation timed out after 90 seconds")
 				break Loop
 			case <-ticker.C:
 				checkCtx, cancelCheck := context.WithTimeout(ctx, 2*time.Second)
@@ -160,7 +166,7 @@ func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 
 		log.Printf("File temporarily downloaded to %s", downloadedFilePath)
 
-		// ▼▼▼ [修正点] ここからファイル名変換ロジックを追加 ▼▼▼
+		// ファイル名変換ロジック
 		tempFile, err := os.Open(downloadedFilePath)
 		if err != nil {
 			http.Error(w, "ダウンロードしたファイルを開けませんでした: "+err.Error(), http.StatusInternalServerError)
@@ -213,7 +219,6 @@ func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 		} else {
 			log.Printf("File successfully renamed to %s", finalPath)
 		}
-		// ▲▲▲ [修正点] ここまで ▲▲▲
 
 		processedRecords, err := dat.ProcessDatFile(conn, finalPath)
 		if err != nil {
@@ -227,4 +232,20 @@ func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 			"message": fmt.Sprintf("e-mednetから%d件の納品データをダウンロードし、システムに登録しました。", len(processedRecords)),
 		})
 	}
+}
+
+// findEdgePath は一般的なインストール場所からMicrosoft Edgeの実行ファイルを探します。
+func findEdgePath() string {
+	// Program FilesとProgram Files (x86)の両方を検索
+	lookIn := []string{
+		os.Getenv("ProgramFiles"),
+		os.Getenv("ProgramFiles(x86)"),
+	}
+	for _, dir := range lookIn {
+		path := filepath.Join(dir, "Microsoft", "Edge", "Application", "msedge.exe")
+		if _, err := os.Stat(path); err == nil {
+			return path // 見つかったらすぐにパスを返す
+		}
+	}
+	return "" // 見つからなければ空文字を返す
 }

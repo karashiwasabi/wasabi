@@ -1,4 +1,4 @@
-// C:\Dev\WASABI\dat\handler.go
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\dat\handler.go
 
 package dat
 
@@ -21,6 +21,7 @@ import (
 	"wasabi/parsers"
 )
 
+// insertTransactionQuery は取引レコードをデータベースに挿入または置換するためのSQLクエリです。
 const insertTransactionQuery = `
 INSERT OR REPLACE INTO transaction_records (
     transaction_date, client_code, receipt_number, line_number, flag,
@@ -32,10 +33,21 @@ INSERT OR REPLACE INTO transaction_records (
     flag_stimulant_raw, process_flag_ma
 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 
-// UploadDatHandler はDATファイルのアップロードを処理します。
+/**
+ * @brief 卸業者から提供されるDATファイルのアップロードを処理するHTTPハンドラです。
+ * @param conn データベース接続
+ * @return http.HandlerFunc HTTPリクエストを処理するハンドラ関数
+ * @details
+ * このハンドラは複数のDATファイルを同時に受け付け、以下の処理を行います。
+ * 1. パフォーマンス向上のため、一時的にSQLiteの動作モードを変更します。
+ * 2. アップロードされた各ファイルを読み込み、ファイル内のタイムスタンプを基に整理されたファイル名（例: 20250831_200519.DAT）を生成します。
+ * 3. 生成されたファイル名で `download/DAT` ディレクトリにファイルを保存します。
+ * 4. 保存された各ファイルに対して `ProcessDatFile` を呼び出し、データベースへの登録処理を実行します。
+ * 5. 全ての処理結果をまとめてブラウザにJSON形式で返却します。
+ */
 func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// (データベース設定の変更・復元ロジックは変更なし)
+		// 大量のDB書き込みを高速化するため、一時的にDB設定を変更
 		var originalJournalMode string
 		conn.QueryRow("PRAGMA journal_mode").Scan(&originalJournalMode)
 		conn.Exec("PRAGMA journal_mode = MEMORY;")
@@ -55,7 +67,7 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 		var allProcessedRecords []model.TransactionRecord
 		var allFilePaths []string
 
-		// ▼▼▼ [修正点] まず全てのファイルをディスクに保存する処理に専念させる ▼▼▼
+		// アップロードされた全ファイルをループ処理
 		for _, fileHeader := range r.MultipartForm.File["file"] {
 			file, err := fileHeader.Open()
 			if err != nil {
@@ -63,7 +75,7 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 				continue
 			}
 
-			// (一時ファイルへの保存、ファイル名の解析・整理ロジックは変更なし)
+			// DATファイルをタイムスタンプに基づいたファイル名で `download/DAT` に整理・保存する
 			tempFile, err := os.CreateTemp("", "dat-*.tmp")
 			if err != nil {
 				log.Printf("Failed to create temp file: %v", err)
@@ -113,25 +125,46 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 			}
 			tempFile.Close()
 
-			// ▼▼▼ [修正点] ファイルハンドル解放のために短い待機時間を追加 ▼▼▼
-			time.Sleep(200 * time.Millisecond)
-			// ▲▲▲ 修正ここまで ▲▲▲
-
-			if err := os.Rename(tempFile.Name(), destPath); err != nil {
-				log.Printf("Failed to move temp file to %s: %v", destPath, err)
+			// 一時ファイルを最終的な保存先にコピー
+			sourceFile, err := os.Open(tempFile.Name())
+			if err != nil {
+				log.Printf("Failed to re-open temp file for copying: %v", err)
 				os.Remove(tempFile.Name())
 				continue
 			}
+
+			destinationFile, err := os.Create(destPath)
+			if err != nil {
+				sourceFile.Close()
+				log.Printf("Failed to create destination file for copying: %v", err)
+				os.Remove(tempFile.Name())
+				continue
+			}
+
+			_, copyErr := io.Copy(destinationFile, sourceFile)
+
+			sourceFile.Close()
+			destinationFile.Close()
+
+			if copyErr != nil {
+				log.Printf("Failed to copy temp file to destination: %v", copyErr)
+				os.Remove(tempFile.Name())
+				os.Remove(destPath)
+				continue
+			}
+
+			if err := os.Remove(tempFile.Name()); err != nil {
+				log.Printf("WARN: Failed to remove temporary file %s: %v", tempFile.Name(), err)
+			}
+
 			log.Printf("Successfully saved and organized file to: %s", destPath)
 			allFilePaths = append(allFilePaths, destPath)
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
 
-		// ▼▼▼ [修正点] 保存したファイルパスをループし、新しい共通関数で処理する ▼▼▼
+		// 保存された全ファイルをループ処理し、DBに登録
 		for _, path := range allFilePaths {
 			processed, err := ProcessDatFile(conn, path)
 			if err != nil {
-				// 1つのファイル処理でエラーが発生した場合でも、他のファイルは処理を試みる
 				log.Printf("Failed to process DAT file %s: %v", path, err)
 				continue
 			}
@@ -146,7 +179,6 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 			})
 			return
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -156,8 +188,23 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// ▼▼▼ [修正点] DATファイルの処理ロジックをこの新しい関数に集約 ▼▼▼
-// ProcessDatFile は指定されたパスのDATファイルを解析し、DBに登録します。
+/**
+ * @brief 単一のDATファイルを解析し、内容をデータベースに登録します。
+ * @param conn データベース接続
+ * @param filePath 処理対象のDATファイルのパス
+ * @return []model.TransactionRecord 登録された取引レコードのスライス
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * 1. DATファイルをパースし、取引レコードのリストに変換します。
+ * 2. 重複レコードを除外します。
+ * 3. 効率化のため、必要な製品マスターとJCSHMSマスターを事前に一括で取得します。
+ * 4. トランザクション内で、各レコードをループ処理します。
+ * - `mastermanager` を通じて製品マスターを特定、または必要に応じて仮マスターを新規作成します。
+ * - 数量を計算し、マスター情報を取引レコードにマッピングします。
+ * - データベースに取引レコードを挿入します。
+ * - 大量データの場合は500件ごとにトランザクションをコミットします（バッチ処理）。
+ * 5. 納品データ（flag=1）があれば、発注残の消込処理を呼び出します。
+ */
 func ProcessDatFile(conn *sql.DB, filePath string) ([]model.TransactionRecord, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -172,7 +219,7 @@ func ProcessDatFile(conn *sql.DB, filePath string) ([]model.TransactionRecord, e
 
 	filteredRecords := removeDatDuplicates(parsed)
 	if len(filteredRecords) == 0 {
-		return []model.TransactionRecord{}, nil // 新規レコードがない場合は空スライスとnilエラーを返す
+		return []model.TransactionRecord{}, nil
 	}
 
 	tx, err := conn.Begin()
@@ -181,7 +228,7 @@ func ProcessDatFile(conn *sql.DB, filePath string) ([]model.TransactionRecord, e
 	}
 	defer tx.Rollback()
 
-	// (マスターデータ取得、DBへのバッチインサート、発注残の消込処理は、元のハンドラからそのまま移動)
+	// 効率化のため、必要なマスターコードを先に全て収集
 	var keyList, janList []string
 	keySet, janSet := make(map[string]struct{}), make(map[string]struct{})
 	for _, rec := range filteredRecords {
@@ -201,6 +248,7 @@ func ProcessDatFile(conn *sql.DB, filePath string) ([]model.TransactionRecord, e
 		}
 	}
 
+	// N+1問題を避けるため、マスターデータを一括で事前取得
 	mastersMap, err := db.GetProductMastersByCodesMap(tx, keyList)
 	if err != nil {
 		return nil, fmt.Errorf("failed to pre-fetch product masters: %w", err)
@@ -219,6 +267,7 @@ func ProcessDatFile(conn *sql.DB, filePath string) ([]model.TransactionRecord, e
 	const batchSize = 500
 	var finalRecords []model.TransactionRecord
 
+	// 各レコードをDBに登録
 	for i, rec := range filteredRecords {
 		ar := model.TransactionRecord{
 			TransactionDate: rec.Date, ClientCode: rec.ClientCode, ReceiptNumber: rec.ReceiptNumber,
@@ -254,6 +303,7 @@ func ProcessDatFile(conn *sql.DB, filePath string) ([]model.TransactionRecord, e
 		}
 		finalRecords = append(finalRecords, ar)
 
+		// 大量データの場合、一定件数ごとにコミット
 		if (i+1)%batchSize == 0 && i < len(filteredRecords)-1 {
 			if err := tx.Commit(); err != nil {
 				return nil, fmt.Errorf("transaction commit error (batch): %w", err)
@@ -273,6 +323,7 @@ func ProcessDatFile(conn *sql.DB, filePath string) ([]model.TransactionRecord, e
 		return nil, fmt.Errorf("transaction commit error (final): %w", err)
 	}
 
+	// 納品データがあれば発注残の消込処理を行う
 	var deliveredItems []model.Backorder
 	for _, rec := range finalRecords {
 		if rec.Flag == 1 { // 納品フラグ
@@ -292,8 +343,8 @@ func ProcessDatFile(conn *sql.DB, filePath string) ([]model.TransactionRecord, e
 	return finalRecords, nil
 }
 
-// ▲▲▲ 修正ここまで ▲▲▲
-
+// removeDatDuplicates はDATレコードから重複を除外します。
+// 重複は日付、得意先コード、伝票番号、行番号の組み合わせで判断します。
 func removeDatDuplicates(records []model.UnifiedInputRecord) []model.UnifiedInputRecord {
 	seen := make(map[string]struct{})
 	var result []model.UnifiedInputRecord

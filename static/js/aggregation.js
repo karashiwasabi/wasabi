@@ -106,10 +106,12 @@ export function initAggregation() {
     reorderNeededCheckbox = document.getElementById('reorder-needed-filter');
     movementOnlyCheckbox = document.getElementById('movement-only-filter'); 
     
-    const today = new Date(); 
-    const threeMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 3, today.getDate());
+    // ▼▼▼ [ここから修正] ▼▼▼
+    const today = new Date();
+    const threeMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 3, 1); // 3ヶ月前の1日
     endDateInput.value = today.toISOString().slice(0, 10);
     startDateInput.value = threeMonthsAgo.toISOString().slice(0, 10);
+    // ▲▲▲ [修正ここまで] ▲▲▲
 
     printBtn.addEventListener('click', () => {
         if (lastData && lastData.length > 0) {

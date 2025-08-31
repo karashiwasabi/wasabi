@@ -1,4 +1,4 @@
-// C:\Dev\WASABI\static\js\medrec.js
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\medrec.js
 
 export function initMedrec() {
     const downloadBtn = document.getElementById('medrecDownloadBtn');
@@ -15,16 +15,21 @@ export function initMedrec() {
                 method: 'POST',
             });
             
-            const resData = await res.json();
+            // ▼▼▼ [ここから修正] エラーハンドリングを改善 ▼▼▼
             if (!res.ok) {
-                // res.json() failed or server returned an error message
-                throw new Error(resData.message || `ダウンロードに失敗しました (HTTP ${res.status})`);
+                const errorText = await res.text();
+                try {
+                    const resData = JSON.parse(errorText);
+                    throw new Error(resData.message || `ダウンロードに失敗しました (HTTP ${res.status})`);
+                } catch (e) {
+                    throw new Error(errorText || `ダウンロードに失敗しました (HTTP ${res.status})`);
+                }
             }
+            const resData = await res.json();
             window.showNotification(resData.message, 'success');
+            // ▲▲▲ [修正ここまで] ▲▲▲
         } catch (err) {
-            // This catches network errors or errors thrown from the !res.ok check
             console.error('Download failed:', err);
-            // Attempt to get a more specific error message if the response was text
             const errorMessage = err.message || 'サーバーとの通信に失敗しました。設定画面でID/パスワードが正しいか確認してください。';
             window.showNotification(errorMessage, 'error');
         } finally {

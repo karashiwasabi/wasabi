@@ -1,3 +1,5 @@
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\sequence.go
+
 package db
 
 import (
@@ -8,6 +10,19 @@ import (
 	"strings"
 )
 
+/**
+ * @brief 指定されたシーケンスの次の値を発行します。
+ * @param tx SQLトランザクションオブジェクト
+ * @param name シーケンス名 (例: "MA2Y", "CL")
+ * @param prefix 新しいコードに付与する接頭辞 (例: "MA2Y", "CL")
+ * @param padding ゼロ埋めする桁数
+ * @return string 生成された新しいコード (例: "CL0001")
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * code_sequencesテーブルから現在の最終番号を取得し、1加算して更新し、
+ * フォーマットされた新しいコード文字列を返します。
+ * この処理はアトミック性を保証するため、必ずトランザクション内で実行されます。
+ */
 func NextSequenceInTx(tx *sql.Tx, name, prefix string, padding int) (string, error) {
 	var lastNo int
 	err := tx.QueryRow("SELECT last_no FROM code_sequences WHERE name = ?", name).Scan(&lastNo)
@@ -28,7 +43,14 @@ func NextSequenceInTx(tx *sql.Tx, name, prefix string, padding int) (string, err
 	return fmt.Sprintf(format, newNo), nil
 }
 
-// InitializeSequenceFromMaxYjCode resets the MA2Y sequence based on the max yj_code in product_master.
+/**
+ * @brief 製品マスターのyj_codeからMA2Yシーケンスのカウンターを初期化（リセット）します。
+ * @param conn データベース接続
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * 製品マスターの一括インポート後などに呼び出され、既存のyj_codeの最大値を取得し、
+ * code_sequencesテーブルのカウンターをその値に設定することで、コードの重複を防ぎます。
+ */
 func InitializeSequenceFromMaxYjCode(conn *sql.DB) error {
 	var maxNo int64 = 0
 	prefix := "MA2Y"
@@ -62,7 +84,14 @@ func InitializeSequenceFromMaxYjCode(conn *sql.DB) error {
 	return nil
 }
 
-// InitializeSequenceFromMaxClientCode resets the CL sequence based on the max client_code in client_master.
+/**
+ * @brief 得意先マスターのclient_codeからCLシーケンスのカウンターを初期化（リセット）します。
+ * @param conn データベース接続
+ * @return error 処理中にエラーが発生した場合
+ * @details
+ * 得意先マスターの一括インポート後などに呼び出され、既存のclient_codeの最大値を取得し、
+ * code_sequencesテーブルのカウンターをその値に設定することで、コードの重複を防ぎます。
+ */
 func InitializeSequenceFromMaxClientCode(conn *sql.DB) error {
 	var maxNo int64 = 0
 	prefix := "CL"
