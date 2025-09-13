@@ -16,7 +16,7 @@ import (
  * @param date 棚卸日 (YYYYMMDD)
  * @param yjCode 対象のYJコード
  * @param allPackagings 対象YJコードに属する全包装のマスター情報
- * @param inventoryData JANコードをキー、YJ単位での在庫数量を値とするマップ
+ * @param inventoryData JANコードをキー、JAN単位での在庫数量を値とするマップ
  * @param deadstockData 保存するロット・期限情報のスライス
  * @return error 処理中にエラーが発生した場合
  * @details
@@ -33,8 +33,27 @@ func SaveGuidedInventoryData(tx *sql.Tx, date string, yjCode string, allPackagin
 		mastersMap[pkg.ProductCode] = &p
 	}
 
+	// ▼▼▼【ここに追加】▼▼▼
+	// 新しい棚卸日より過去の棚卸レコード(flag=0)を削除する
+	if len(allProductCodes) > 0 {
+		placeholders := strings.Repeat("?,", len(allProductCodes)-1) + "?"
+		pastDeleteQuery := fmt.Sprintf(`DELETE FROM transaction_records WHERE flag = 0 AND transaction_date < ? AND jan_code IN (%s)`, placeholders)
+
+		args := make([]interface{}, 0, len(allProductCodes)+1)
+		args = append(args, date)
+		for _, code := range allProductCodes {
+			args = append(args, code)
+		}
+
+		if _, err := tx.Exec(pastDeleteQuery, args...); err != nil {
+			return fmt.Errorf("failed to delete past inventory records: %w", err)
+		}
+	}
+	// ▲▲▲【追加ここまで】▲▲▲
+
+	// 同日の古い棚卸レコードを削除する（これは既存の処理）
 	if err := DeleteTransactionsByFlagAndDateAndCodes(tx, 0, date, allProductCodes); err != nil {
-		return fmt.Errorf("failed to delete old inventory records: %w", err)
+		return fmt.Errorf("failed to delete old inventory records for the same day: %w", err)
 	}
 
 	const q = `
@@ -54,7 +73,6 @@ INSERT INTO transaction_records (
 	}
 	defer stmt.Close()
 
-	// 伝票番号にYJコードを含めることで、一意性を保証する
 	receiptNumber := fmt.Sprintf("ADJ-%s-%s", date, yjCode)
 	var productCodesWithInventory []string
 
@@ -64,9 +82,9 @@ INSERT INTO transaction_records (
 			continue
 		}
 
-		yjQty := inventoryData[productCode] // マップにキーがなくても0が返る
+		janQty := inventoryData[productCode]
 
-		if yjQty > 0 {
+		if janQty > 0 {
 			productCodesWithInventory = append(productCodesWithInventory, productCode)
 		}
 
@@ -74,19 +92,16 @@ INSERT INTO transaction_records (
 			TransactionDate: date,
 			Flag:            0,
 			ReceiptNumber:   receiptNumber,
-			LineNumber:      fmt.Sprintf("%d", i+1), // 行番号はYJグループ内での連番とする
-			YjQuantity:      yjQty,
+			LineNumber:      fmt.Sprintf("%d", i+1),
+			JanQuantity:     janQty,
 			ProcessFlagMA:   "COMPLETE",
 		}
 
+		tr.YjQuantity = janQty * master.JanPackInnerQty
 		mappers.MapProductMasterToTransaction(&tr, master)
 		tr.ClientCode = ""
 		tr.SupplierWholesale = ""
 		tr.Subtotal = 0
-
-		if master.JanPackInnerQty > 0 {
-			tr.JanQuantity = yjQty / master.JanPackInnerQty
-		}
 
 		_, err := stmt.Exec(
 			tr.TransactionDate, tr.ClientCode, tr.ReceiptNumber, tr.LineNumber, tr.Flag,
@@ -102,7 +117,6 @@ INSERT INTO transaction_records (
 		}
 	}
 
-	// 在庫が1以上ある品目について、ロット・期限情報を更新する
 	if len(productCodesWithInventory) > 0 {
 		var relevantDeadstockData []model.DeadStockRecord
 		for _, ds := range deadstockData {

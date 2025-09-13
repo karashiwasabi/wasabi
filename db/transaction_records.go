@@ -30,7 +30,8 @@ const TransactionColumns = `
 func ScanTransactionRecord(row interface{ Scan(...interface{}) error }) (*model.TransactionRecord, error) {
 	var r model.TransactionRecord
 	err := row.Scan(
-		&r.ID, &r.TransactionDate, &r.ClientCode, &r.ReceiptNumber, &r.LineNumber, &r.Flag,
+		&r.ID,
+		&r.TransactionDate, &r.ClientCode, &r.ReceiptNumber, &r.LineNumber, &r.Flag,
 		&r.JanCode, &r.YjCode, &r.ProductName, &r.KanaName, &r.UsageClassification, &r.PackageForm, &r.PackageSpec, &r.MakerName,
 		&r.DatQuantity, &r.JanPackInnerQty, &r.JanQuantity, &r.JanPackUnitQty, &r.JanUnitName, &r.JanUnitCode,
 		&r.YjQuantity, &r.YjPackUnitQty, &r.YjUnitName, &r.UnitPrice, &r.PurchasePrice, &r.SupplierWholesale,
@@ -56,7 +57,8 @@ INSERT OR REPLACE INTO transaction_records (
     transaction_date, client_code, receipt_number, line_number, flag,
     jan_code, yj_code, product_name, kana_name, usage_classification, package_form, package_spec, maker_name,
     dat_quantity, jan_pack_inner_qty, jan_quantity, jan_pack_unit_qty, jan_unit_name, jan_unit_code,
-    yj_quantity, yj_pack_unit_qty, yj_unit_name, unit_price, purchase_price, supplier_wholesale,
+    
+ yj_quantity, yj_pack_unit_qty, yj_unit_name, unit_price, purchase_price, supplier_wholesale,
 	subtotal, tax_amount, tax_rate, expiry_date, lot_number, flag_poison,
     flag_deleterious, flag_narcotic, flag_psychotropic, flag_stimulant,
     flag_stimulant_raw, process_flag_ma
@@ -82,7 +84,9 @@ INSERT OR REPLACE INTO transaction_records (
 		)
 		if err != nil {
 			log.Printf("FAILED to insert into transaction_records: JAN=%s, Error: %v", rec.JanCode, err)
+			// ▼▼▼【修正点1】文字列の閉じ忘れを修正 ▼▼▼
 			return fmt.Errorf("failed to exec statement for transaction_records (JAN: %s): %w", rec.JanCode, err)
+			// ▲▲▲【修正ここまで】▲▲▲
 		}
 	}
 	return nil
@@ -242,6 +246,8 @@ func GetProvisionalTransactions(tx *sql.Tx) ([]model.TransactionRecord, error) {
  * 「再計算」機能で、古い取引レコードを最新のマスター情報で上書きする際に使用されます。
  */
 func UpdateFullTransactionInTx(tx *sql.Tx, record *model.TransactionRecord) error {
+	// ▼▼▼【ここからが修正箇所です】▼▼▼
+	// yj_quantity と subtotal をSET句に追加
 	const q = `
 		UPDATE transaction_records SET
 			jan_code = ?, yj_code = ?, product_name = ?, kana_name = ?, usage_classification = ?, package_form = ?, 
@@ -250,6 +256,7 @@ func UpdateFullTransactionInTx(tx *sql.Tx, record *model.TransactionRecord) erro
 			unit_price = ?, purchase_price = ?, supplier_wholesale = ?,
 			flag_poison = ?, flag_deleterious = ?, flag_narcotic = ?, flag_psychotropic = ?,
 			flag_stimulant = ?, flag_stimulant_raw = ?,
+			yj_quantity = ?, subtotal = ?,
 			process_flag_ma = ?
 		WHERE id = ?`
 
@@ -260,9 +267,11 @@ func UpdateFullTransactionInTx(tx *sql.Tx, record *model.TransactionRecord) erro
 		record.UnitPrice, record.PurchasePrice, record.SupplierWholesale,
 		record.FlagPoison, record.FlagDeleterious, record.FlagNarcotic, record.FlagPsychotropic,
 		record.FlagStimulant, record.FlagStimulantRaw,
+		record.YjQuantity, record.Subtotal, // 引数を追加
 		record.ProcessFlagMA,
 		record.ID,
 	)
+	// ▲▲▲【修正ここまで】▲▲▲
 	if err != nil {
 		return fmt.Errorf("failed to update transaction ID %d: %w", record.ID, err)
 	}
@@ -395,7 +404,8 @@ func DeleteZeroFillInventoryTransactions(tx *sql.Tx, date string, janCodes []str
 func ClearAllTransactions(conn *sql.DB) error {
 	tx, err := conn.Begin()
 	if err != nil {
-		return fmt.Errorf("failed to start transaction for clearing transactions: %w", err)
+		return fmt.Errorf("failed to start transaction for clearing transactions: %w",
+			err)
 	}
 	defer tx.Rollback()
 
@@ -441,3 +451,55 @@ func GetLastInventoryDateMap(conn *sql.DB) (map[string]string, error) {
 	}
 	return dateMap, nil
 }
+
+// ▼▼▼【修正点2】前回追加した2つの関数をここに含める ▼▼▼
+
+/**
+ * @brief 指定された日付の棚卸レコード(flag=0)を全て取得します。
+ * @param conn データベース接続
+ * @param date 検索対象の日付 (YYYYMMDD)
+ * @return []model.TransactionRecord 棚卸レコードのスライス
+ * @return error 処理中にエラーが発生した場合
+ */
+func GetInventoryTransactionsByDate(conn *sql.DB, date string) ([]model.TransactionRecord, error) {
+	q := `SELECT ` + TransactionColumns + ` FROM transaction_records WHERE flag = 0 AND transaction_date = ? ORDER BY product_name`
+	rows, err := conn.Query(q, date)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get inventory transactions by date: %w", err)
+	}
+	defer rows.Close()
+
+	var records []model.TransactionRecord
+	for rows.Next() {
+		r, err := ScanTransactionRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, *r)
+	}
+	return records, nil
+}
+
+/**
+ * @brief IDを指定して単一の取引レコードをトランザクション内で削除します。
+ * @param tx SQLトランザクションオブジェクト
+ * @param id 削除対象のレコードID
+ * @return error 処理中にエラーが発生した場合
+ */
+func DeleteTransactionByIDInTx(tx *sql.Tx, id int) error {
+	const q = `DELETE FROM transaction_records WHERE id = ?`
+	res, err := tx.Exec(q, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete transaction with id %d: %w", id, err)
+	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to check rows affected for id %d: %w", id, err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("no transaction found to delete with id %d", id)
+	}
+	return nil
+}
+
+// ▲▲▲【追加ここまで】▲▲▲

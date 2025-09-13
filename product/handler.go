@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time" // time パッケージをインポート
+	"wasabi/config"
 	"wasabi/db"
 	"wasabi/model"
 	"wasabi/units"
@@ -38,97 +40,143 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 		q := r.URL.Query()
 		dosageForm := q.Get("dosageForm")
 		kanaInitial := q.Get("kanaInitial")
-		// ▼▼▼ [修正点] モーダル内からの検索キーワード(q)を取得する ▼▼▼
 		searchQuery := q.Get("q")
-		// ▲▲▲ 修正ここまで ▲▲▲
-
-		query := `SELECT ` + db.SelectColumns + ` FROM product_master WHERE yj_code != ''`
-		var args []interface{}
-
-		if dosageForm != "" {
-			query += " AND usage_classification LIKE ?"
-			args = append(args, "%"+dosageForm+"%")
-		}
-
-		if kanaInitial != "" {
-			if kanaChars, ok := kanaRowMap[toKatakana(kanaInitial)]; ok {
-				var conditions []string
-				for _, charStr := range kanaChars {
-					baseRunes := []rune(charStr)
-					if len(baseRunes) == 0 {
-						continue
-					}
-					baseRune := baseRunes[0]
-
-					charsToTest := []rune{baseRune}
-					if variants, found := kanaVariants[baseRune]; found {
-						charsToTest = append(charsToTest, variants...)
-					}
-
-					for _, char := range charsToTest {
-						kataChar := string(char)
-						hiraChar := toHiragana(kataChar)
-						conditions = append(conditions, "kana_name LIKE ? OR kana_name LIKE ?")
-						args = append(args, kataChar+"%", hiraChar+"%")
-					}
-				}
-				if len(conditions) > 0 {
-					query += " AND (" + strings.Join(conditions, " OR ") + ")"
-				}
-			}
-		}
-
-		// ▼▼▼ [修正点] モーダル内検索のキーワードがあれば、絞り込み条件を追加 ▼▼▼
-		if searchQuery != "" {
-			query += " AND (kana_name LIKE ? OR product_name LIKE ?)"
-			args = append(args, "%"+searchQuery+"%", "%"+searchQuery+"%")
-		}
-		// ▲▲▲ 修正ここまで ▲▲▲
-
-		query += " ORDER BY kana_name"
-
-		rows, err := conn.Query(query, args...)
-		if err != nil {
-			http.Error(w, "Failed to search products: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer rows.Close()
+		isDeadStockOnly := q.Get("deadStockOnly") == "true"
 
 		var results []model.ProductMasterView
-		seenYjCodes := make(map[string]bool)
-		for rows.Next() {
-			master, err := db.ScanProductMaster(rows)
+
+		if isDeadStockOnly {
+			// ▼▼▼【ここから修正】▼▼▼
+			// 設定ファイルから集計日数を読み込む
+			cfg, err := config.LoadConfig()
 			if err != nil {
-				http.Error(w, "Failed to scan product: "+err.Error(), http.StatusInternalServerError)
+				http.Error(w, "設定ファイルの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
 
-			if !seenYjCodes[master.YjCode] {
-				tempJcshms := model.JCShms{
-					JC037: master.PackageForm,
-					JC039: master.YjUnitName,
-					JC044: master.YjPackUnitQty,
-					JA006: sql.NullFloat64{Float64: master.JanPackInnerQty, Valid: true},
-					JA008: sql.NullFloat64{Float64: master.JanPackUnitQty, Valid: true},
-					JA007: sql.NullString{String: fmt.Sprintf("%d", master.JanUnitCode), Valid: true},
-				}
-				formattedSpec := units.FormatPackageSpec(&tempJcshms)
+			// 日数から期間を動的に計算
+			now := time.Now()
+			endDate := "99991231" // 終了日は無制限
+			startDate := now.AddDate(0, 0, -cfg.CalculationPeriodDays)
 
-				janUnitName := master.YjUnitName
-				if master.JanUnitCode != 0 {
-					resolved := units.ResolveName(fmt.Sprintf("%d", master.JanUnitCode))
-					if resolved != fmt.Sprintf("%d", master.JanUnitCode) {
-						janUnitName = resolved
+			filters := model.DeadStockFilters{
+				StartDate:        startDate.Format("20060102"),
+				EndDate:          endDate,
+				ExcludeZeroStock: true, // 在庫0は除外
+				KanaName:         kanaInitial,
+				DosageForm:       dosageForm,
+			}
+			// ▲▲▲【修正ここまで】▲▲▲
+
+			tx, txErr := conn.Begin()
+			if txErr != nil {
+				http.Error(w, "Failed to start transaction for dead stock search", http.StatusInternalServerError)
+				return
+			}
+			defer tx.Rollback()
+
+			deadStockGroups, dsErr := db.GetDeadStockList(tx, filters)
+			if dsErr != nil {
+				http.Error(w, "Failed to get dead stock list: "+dsErr.Error(), http.StatusInternalServerError)
+				return
+			}
+
+			seenYjCodes := make(map[string]bool)
+			for _, group := range deadStockGroups {
+				for _, pkg := range group.PackageGroups {
+					for _, prod := range pkg.Products {
+						if !seenYjCodes[prod.YjCode] {
+							master := prod.ProductMaster
+							tempJcshms := model.JCShms{
+								JC037: master.PackageForm, JC039: master.YjUnitName, JC044: master.YjPackUnitQty,
+								JA006: sql.NullFloat64{Float64: master.JanPackInnerQty, Valid: true},
+								JA008: sql.NullFloat64{Float64: master.JanPackUnitQty, Valid: true},
+								JA007: sql.NullString{String: fmt.Sprintf("%d", master.JanUnitCode), Valid: true},
+							}
+							view := model.ProductMasterView{
+								ProductMaster:        master,
+								FormattedPackageSpec: units.FormatPackageSpec(&tempJcshms),
+								JanUnitName:          units.ResolveName(fmt.Sprintf("%d", master.JanUnitCode)),
+							}
+							results = append(results, view)
+							seenYjCodes[master.YjCode] = true
+						}
 					}
 				}
+			}
 
-				view := model.ProductMasterView{
-					ProductMaster:        *master,
-					FormattedPackageSpec: formattedSpec,
-					JanUnitName:          janUnitName,
+		} else {
+			query := `SELECT ` + db.SelectColumns + ` FROM product_master WHERE yj_code != ''`
+			var args []interface{}
+
+			if dosageForm != "" {
+				query += " AND usage_classification LIKE ?"
+				args = append(args, "%"+dosageForm+"%")
+			}
+
+			if kanaInitial != "" {
+				if kanaChars, ok := kanaRowMap[toKatakana(kanaInitial)]; ok {
+					var conditions []string
+					for _, charStr := range kanaChars {
+						baseRunes := []rune(charStr)
+						if len(baseRunes) == 0 {
+							continue
+						}
+						baseRune := baseRunes[0]
+						charsToTest := []rune{baseRune}
+						if variants, found := kanaVariants[baseRune]; found {
+							charsToTest = append(charsToTest, variants...)
+						}
+						for _, char := range charsToTest {
+							kataChar := string(char)
+							hiraChar := toHiragana(kataChar)
+							conditions = append(conditions, "kana_name LIKE ? OR kana_name LIKE ?")
+							args = append(args, kataChar+"%", hiraChar+"%")
+						}
+					}
+					if len(conditions) > 0 {
+						query += " AND (" + strings.Join(conditions, " OR ") + ")"
+					}
 				}
-				results = append(results, view)
-				seenYjCodes[master.YjCode] = true
+			}
+
+			if searchQuery != "" {
+				query += " AND (kana_name LIKE ? OR product_name LIKE ?)"
+				args = append(args, "%"+searchQuery+"%", "%"+searchQuery+"%")
+			}
+
+			query += " ORDER BY kana_name"
+
+			rows, queryErr := conn.Query(query, args...)
+			if queryErr != nil {
+				http.Error(w, "Failed to search products: "+queryErr.Error(), http.StatusInternalServerError)
+				return
+			}
+			defer rows.Close()
+
+			seenYjCodes := make(map[string]bool)
+			for rows.Next() {
+				master, scanErr := db.ScanProductMaster(rows)
+				if scanErr != nil {
+					http.Error(w, "Failed to scan product: "+scanErr.Error(), http.StatusInternalServerError)
+					return
+				}
+
+				if !seenYjCodes[master.YjCode] {
+					tempJcshms := model.JCShms{
+						JC037: master.PackageForm, JC039: master.YjUnitName, JC044: master.YjPackUnitQty,
+						JA006: sql.NullFloat64{Float64: master.JanPackInnerQty, Valid: true},
+						JA008: sql.NullFloat64{Float64: master.JanPackUnitQty, Valid: true},
+						JA007: sql.NullString{String: fmt.Sprintf("%d", master.JanUnitCode), Valid: true},
+					}
+					view := model.ProductMasterView{
+						ProductMaster:        *master,
+						FormattedPackageSpec: units.FormatPackageSpec(&tempJcshms),
+						JanUnitName:          units.ResolveName(fmt.Sprintf("%d", master.JanUnitCode)),
+					}
+					results = append(results, view)
+					seenYjCodes[master.YjCode] = true
+				}
 			}
 		}
 

@@ -4,50 +4,69 @@ import { showModal } from './inout_modal.js';
 import { transactionTypeMap, createUploadTableHTML } from './common_table.js';
 
 let tableBody, addRowBtn, tableContainer;
-
 // ▼▼▼ [修正点] 「個数」をINPUTから表示用のセルに変更 ▼▼▼
 function createInoutRowsHTML(record = {}) {
     const rowId = record.lineNumber || `new-${Date.now()}`;
     const janQuantity = record.janQuantity ?? 1;
-    const datQuantity = record.datQuantity ?? 1; // Default value, will be recalculated
+    const datQuantity = record.datQuantity ?? 1;
+    // Default value, will be recalculated
     const nhiPrice = record.nhiPrice || 0;
-    const janPackInnerQty = record.janPackInnerQty || 0;
+    const janPackInnerQty = record.janPackInnerQty ||
+    0;
     const yjQuantity = janQuantity * janPackInnerQty;
     const subtotal = yjQuantity * nhiPrice;
-    const transactionType = record.flag ? (transactionTypeMap[record.flag] || '') : '';
+    const transactionType = record.flag ?
+    (transactionTypeMap[record.flag] || '') : '';
 
     const upperRow = `
         <tr data-row-id="${rowId}">
             <td rowspan="2" class="center"><button class="delete-row-btn btn">削除</button></td>
-            <td>${record.transactionDate || ''}</td>
-            <td class="yj-jan-code display-yj-code">${record.yjCode || ''}</td>
-            <td colspan="2" class="product-name-cell left" style="cursor: pointer; text-decoration: underline; color: blue;">${record.productName || 'ここをクリックして製品を検索'}</td>
+            <td>${record.transactionDate ||
+            ''}</td>
+            <td class="yj-jan-code display-yj-code">${record.yjCode ||
+            ''}</td>
+            <td colspan="2" class="product-name-cell left" style="cursor: pointer; text-decoration: underline; color: blue;">${record.productName ||
+            'ここをクリックして製品を検索'}</td>
             <td class="right display-dat-quantity">${datQuantity.toFixed(2)}</td>
             <td class="right display-yj-quantity">${yjQuantity.toFixed(2)}</td>
-            <td class="right display-yj-pack-unit-qty">${record.yjPackUnitQty || ''}</td>
-            <td class="display-yj-unit-name">${record.yjUnitName || ''}</td>
+            <td class="right display-yj-pack-unit-qty">${record.yjPackUnitQty ||
+            ''}</td>
+            <td class="display-yj-unit-name">${record.yjUnitName ||
+            ''}</td>
             <td class="right display-unit-price">${nhiPrice.toFixed(4)}</td>
-            <td class="right">${record.taxAmount || ''}</td>
+            <td class="right">${record.taxAmount ||
+            ''}</td>
             <td><input type="text" name="expiryDate" value="${record.expiryDate || ''}" placeholder="YYYYMM"></td>
-            <td class="left">${record.clientCode || ''}</td>
-            <td class="right">${record.lineNumber || ''}</td>
+            <td class="left">${record.clientCode ||
+            ''}</td>
+            <td class="right">${record.lineNumber ||
+            ''}</td>
         </tr>`;
 
     const lowerRow = `
         <tr data-row-id-lower="${rowId}">
             <td>${transactionType}</td>
-            <td class="yj-jan-code display-jan-code">${record.productCode || record.janCode || ''}</td>
-            <td class="left display-package-spec">${record.formattedPackageSpec || record.packageSpec || ''}</td>
-            <td class="left display-maker-name">${record.makerName || ''}</td>
-            <td class="left display-usage-classification">${record.usageClassification || ''}</td>
+            <td class="yj-jan-code display-jan-code">${record.productCode ||
+            record.janCode || ''}</td>
+            <td class="left display-package-spec">${record.formattedPackageSpec || record.packageSpec ||
+            ''}</td>
+            <td class="left display-maker-name">${record.makerName ||
+            ''}</td>
+            <td class="left display-usage-classification">${record.usageClassification ||
+            ''}</td>
             <td class="right"><input type="number" name="janQuantity" value="${janQuantity}" step="any"></td>
-            <td class="right display-jan-pack-unit-qty">${record.janPackUnitQty || ''}</td>
-            <td class="display-jan-unit-name">${record.janUnitName || ''}</td>
+            <td class="right display-jan-pack-unit-qty">${record.janPackUnitQty ||
+            ''}</td>
+            <td class="display-jan-unit-name">${record.janUnitName ||
+            ''}</td>
             <td class="right display-subtotal">${subtotal.toFixed(2)}</td>
-            <td class="right">${record.taxRate != null ? (record.taxRate * 100).toFixed(0) + "%" : ""}</td>
+            <td class="right">${record.taxRate != null ?
+            (record.taxRate * 100).toFixed(0) + "%" : ""}</td>
             <td class="left"><input type="text" name="lotNumber" value="${record.lotNumber || ''}"></td>
-            <td class="left">${record.receiptNumber || ''}</td>
-            <td class="left">${record.processFlagMA || ''}</td>
+            <td class="left">${record.receiptNumber ||
+            ''}</td>
+            <td class="left">${record.processFlagMA ||
+            ''}</td>
         </tr>`;
 
     return upperRow + lowerRow;
@@ -67,6 +86,7 @@ export function populateDetailsTable(records) {
             delete masterData.runningBalance;
             row.dataset.product = JSON.stringify(masterData);
             recalculateRow(row); // Recalculate to set the initial datQuantity correctly
+  
         }
     });
 }
@@ -77,34 +97,61 @@ export function clearDetailsTable() {
     }
 }
 
+/**
+ * @brief 保存する全ての明細データをテーブルから収集します。
+ * @details
+ * 画面に表示されている全ての行（既存・新規問わず）を走査し、
+ * 製品データが設定されている有効な行のみを抽出して配列にまとめます。
+ * これにより、追記保存時に既存のデータが欠落することを防ぎます。
+ * デバッグ用に、どの行が処理されたかをコンソールに出力します。
+ * @returns {Array} 保存用の明細レコードの配列
+ */
 export function getDetailsData() {
+    console.log("Collecting details data for saving...");
     const records = [];
-    const rows = tableBody.querySelectorAll('tr[data-row-id]');
-    rows.forEach(row => {
-        const productDataString = row.dataset.product;
-        if (!productDataString || productDataString === '{}') return;
+    const allUpperRows = tableBody.querySelectorAll('tr[data-row-id]');
+    console.log(`Found ${allUpperRows.length} item rows in the table.`);
+    allUpperRows.forEach((upperRow, index) => {
+        const productDataString = upperRow.dataset.product;
+
+        // 製品情報が設定されていない行（空の行など）は保存対象外とします
+        if (!productDataString || productDataString === '{}') {
+            console.log(`Row ${index + 1} skipped: No product data found.`);
+            return; // continue
+        }
+
+        const lowerRow = upperRow.nextElementSibling;
+        if (!lowerRow) 
+        {
+            console.error(`Row ${index + 1} is missing its corresponding lower row.`);
+            return; // continue
+        }
+
         const productData = JSON.parse(productDataString);
-        const lowerRow = row.nextElementSibling;
-        
         const janQuantity = parseFloat(lowerRow.querySelector('input[name="janQuantity"]').value) || 0;
         let datQuantity = 0;
-        if(productData.janPackUnitQty > 0) {
-            datQuantity = janQuantity / productData.janPackUnitQty;
+        if (productData.janPackUnitQty > 0) {
+  
+           
+           datQuantity = janQuantity / productData.janPackUnitQty;
         }
 
         const record = {
-            productCode: productData.productCode,
+            productCode: productData.janCode,
             productName: productData.productName,
-            datQuantity: datQuantity,
-            expiryDate: row.querySelector('input[name="expiryDate"]').value,
             janQuantity: janQuantity,
-            lotNumber: lowerRow.querySelector('input[name="lotNumber"]').value,
+            datQuantity: datQuantity,
+      
+            expiryDate: upperRow.querySelector('input[name="expiryDate"]').value,
+          
+           lotNumber: lowerRow.querySelector('input[name="lotNumber"]').value,
         };
+        console.log(`Row ${index + 1} processed:`, record);
         records.push(record);
     });
+    console.log(`Total records to be saved: ${records.length}`, records);
     return records;
 }
-
 function recalculateRow(upperRow) {
     const productDataString = upperRow.dataset.product;
     if (!productDataString) return;
@@ -137,14 +184,12 @@ export function initDetailsTable() {
     
     tableContainer.innerHTML = createUploadTableHTML('inout-details-table');
     tableBody = document.querySelector('#inout-details-table tbody');
-    
     addRowBtn.addEventListener('click', () => {
         if (tableBody.querySelector('td[colspan="14"]')) {
             tableBody.innerHTML = '';
         }
         tableBody.insertAdjacentHTML('beforeend', createInoutRowsHTML());
     });
-
     tableBody.addEventListener('click', (e) => {
         if (e.target.classList.contains('delete-row-btn')) {
             const upperRow = e.target.closest('tr');
@@ -152,14 +197,23 @@ export function initDetailsTable() {
             if(lowerRow) lowerRow.remove();
             upperRow.remove();
             if (tableBody.children.length === 0) {
-                 clearDetailsTable();
+                
+                clearDetailsTable();
             }
         }
-        // ▼▼▼ [修正点] モーダル呼び出し時に、実行したい処理（コールバック）を直接渡す ▼▼▼
         if (e.target.classList.contains('product-name-cell')) {
             const activeRow = e.target.closest('tr');
             showModal(activeRow, (selectedProduct, targetRow) => {
-                targetRow.dataset.product = JSON.stringify(selectedProduct);
+                // ▼▼▼【ここからが修正箇所です】▼▼▼
+                // 選択された製品データ(productCodeを持つ)を、
+                // 既存の取引データ(janCodeを持つ)と構造を合わせるために正規化します。
+                const productToStore = { ...selectedProduct };
+                productToStore.janCode = productToStore.productCode; // janCodeプロパティを追加
+
+                // 正規化したオブジェクトをデータとして保存します。
+                targetRow.dataset.product = JSON.stringify(productToStore);
+                // ▲▲▲【修正ここまで】▲▲▲
+         
                 const lowerRow = targetRow.nextElementSibling;
                 
                 targetRow.querySelector('.display-yj-code').textContent = selectedProduct.yjCode;
@@ -181,9 +235,7 @@ export function initDetailsTable() {
                 recalculateRow(targetRow);
             });
         }
-        // ▲▲▲ 修正ここまで ▲▲▲
     });
-
     tableBody.addEventListener('input', (e) => {
         const upperRow = e.target.closest('tr[data-row-id]') || e.target.closest('tr[data-row-id-lower]')?.previousElementSibling;
         if(upperRow) {

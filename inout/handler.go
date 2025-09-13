@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings" // stringsパッケージを追加
 	"time"
 	"wasabi/db"
 	"wasabi/mappers"
@@ -80,12 +81,42 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 		if dateStr == "" {
 			dateStr = time.Now().Format("20060102")
 		}
+
+		// ▼▼▼【ここからが修正箇所です】▼▼▼
 		if payload.OriginalReceiptNumber != "" {
 			receiptNumber = payload.OriginalReceiptNumber
-			if err := db.DeleteTransactionsByReceiptNumberInTx(tx, receiptNumber); err != nil {
-				http.Error(w, "Failed to delete original slip for update", http.StatusInternalServerError)
-				return
+
+			// 画面から送られてきたレコードの製品コードリストを作成
+			payloadProductCodes := make(map[string]bool)
+			for _, rec := range payload.Records {
+				if rec.ProductCode != "" {
+					payloadProductCodes[rec.ProductCode] = true
+				}
 			}
+
+			// payloadに含まれていない製品コードの明細のみをDBから削除する
+			if len(payloadProductCodes) > 0 {
+				var codesToDelete []interface{}
+				var placeholders []string
+				codesToDelete = append(codesToDelete, receiptNumber)
+				for code := range payloadProductCodes {
+					codesToDelete = append(codesToDelete, code)
+					placeholders = append(placeholders, "?")
+				}
+
+				deleteQuery := fmt.Sprintf("DELETE FROM transaction_records WHERE receipt_number = ? AND jan_code NOT IN (%s)", strings.Join(placeholders, ","))
+				if _, err := tx.Exec(deleteQuery, codesToDelete...); err != nil {
+					http.Error(w, "Failed to delete removed items from slip", http.StatusInternalServerError)
+					return
+				}
+			} else {
+				// payloadが空の場合、それは伝票の全明細を削除することを意味する
+				if err := db.DeleteTransactionsByReceiptNumberInTx(tx, receiptNumber); err != nil {
+					http.Error(w, "Failed to delete all items from slip", http.StatusInternalServerError)
+					return
+				}
+			}
+
 		} else {
 			var lastSeq int
 			q := `SELECT CAST(SUBSTR(receipt_number, 11) AS INTEGER) FROM transaction_records 
@@ -98,6 +129,7 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 			newSeq := lastSeq + 1
 			receiptNumber = fmt.Sprintf("io%s%03d", dateStr, newSeq)
 		}
+		// ▲▲▲【修正ここまで】▲▲▲
 
 		var finalRecords []model.TransactionRecord
 		flagMap := map[string]int{"入庫": 11, "出庫": 12}
@@ -161,13 +193,11 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 				LotNumber:       rec.LotNumber,
 			}
 
-			// ▼▼▼ [修正点] ProcessingStatusの設定を削除 ▼▼▼
 			if master.Origin == "JCSHMS" {
 				tr.ProcessFlagMA = "COMPLETE"
 			} else {
 				tr.ProcessFlagMA = "PROVISIONAL"
 			}
-			// ▲▲▲ 修正ここまで ▲▲▲
 
 			mappers.MapProductMasterToTransaction(&tr, master)
 			finalRecords = append(finalRecords, tr)

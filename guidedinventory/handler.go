@@ -8,12 +8,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 	"wasabi/db"
 	"wasabi/model"
 	"wasabi/units"
 )
 
-// ▼▼▼ [修正点] 画面表示専用のデータ構造を定義 ▼▼▼
 type StockLedgerPackageGroupView struct {
 	model.StockLedgerPackageGroup
 	Masters []model.ProductMasterView `json:"masters"`
@@ -24,82 +24,73 @@ type StockLedgerYJGroupView struct {
 	PackageLedgers []StockLedgerPackageGroupView `json:"packageLedgers"`
 }
 
-// ▼▼▼ [修正箇所] ResponseDataView構造体にDeadStockDetailsを追加 ▼▼▼
 type ResponseDataView struct {
-	StockLedger      []StockLedgerYJGroupView  `json:"stockLedger"`
-	PrecompDetails   []model.TransactionRecord `json:"precompDetails"`
-	DeadStockDetails []model.DeadStockRecord   `json:"deadStockDetails"`
+	TransactionLedger []StockLedgerYJGroupView  `json:"transactionLedger"`
+	YesterdaysStock   *StockLedgerYJGroupView   `json:"yesterdaysStock"`
+	PrecompDetails    []model.TransactionRecord `json:"precompDetails"`
+	DeadStockDetails  []model.DeadStockRecord   `json:"deadStockDetails"`
 }
-
-// ▲▲▲ 修正ここまで ▲▲▲
 
 func GetInventoryDataHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		filters := model.AggregationFilters{
-			StartDate: q.Get("startDate"),
-			EndDate:   q.Get("endDate"),
-			YjCode:    q.Get("yjCode"),
-		}
+		yjCode := q.Get("yjCode")
 
-		if filters.YjCode == "" || filters.StartDate == "" || filters.EndDate == "" {
-			http.Error(w, "yjCode, startDate, and endDate are required parameters", http.StatusBadRequest)
+		if yjCode == "" {
+			http.Error(w, "yjCode is a required parameter", http.StatusBadRequest)
 			return
 		}
 
-		stockLedger, err := db.GetStockLedger(conn, filters)
+		// ▼▼▼【ここから修正】▼▼▼
+		// 設定ファイルに依存せず、期間を「本日より30日前まで」に固定する
+		now := time.Now()
+		endDate := now
+		startDate := now.AddDate(0, 0, -30) // 30日前に固定
+		yesterdayDate := now.AddDate(0, 0, -1)
+
+		// 1. 本日までの取引履歴を含む元帳を取得
+		filtersToday := model.AggregationFilters{
+			StartDate: startDate.Format("20060102"),
+			EndDate:   endDate.Format("20060102"),
+			YjCode:    yjCode,
+		}
+		ledgerToday, err := db.GetStockLedger(conn, filtersToday)
 		if err != nil {
-			http.Error(w, "Failed to get stock ledger: "+err.Error(), http.StatusInternalServerError)
+			http.Error(w, "Failed to get today's stock ledger: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		// ▼▼▼ [修正点] 取得したデータを画面表示用の構造に変換する処理を追加 ▼▼▼
-		stockLedgerView := make([]StockLedgerYJGroupView, 0, len(stockLedger))
-		var productCodes []string
-
-		for _, yjGroup := range stockLedger {
-			newYjGroupView := StockLedgerYJGroupView{
-				StockLedgerYJGroup: yjGroup,
-				PackageLedgers:     make([]StockLedgerPackageGroupView, 0, len(yjGroup.PackageLedgers)),
-			}
-
-			for _, pkgLedger := range yjGroup.PackageLedgers {
-				newPkgLedgerView := StockLedgerPackageGroupView{
-					StockLedgerPackageGroup: pkgLedger,
-					Masters:                 make([]model.ProductMasterView, 0, len(pkgLedger.Masters)),
-				}
-
-				for _, master := range pkgLedger.Masters {
-					productCodes = append(productCodes, master.ProductCode)
-
-					tempJcshms := model.JCShms{
-						JC037: master.PackageForm,
-						JC039: master.YjUnitName,
-						JC044: master.YjPackUnitQty,
-						JA006: sql.NullFloat64{Float64: master.JanPackInnerQty, Valid: true},
-						JA008: sql.NullFloat64{Float64: master.JanPackUnitQty, Valid: true},
-						JA007: sql.NullString{String: fmt.Sprintf("%d", master.JanUnitCode), Valid: true},
-					}
-
-					var janUnitName string
-					if master.JanUnitCode == 0 {
-						janUnitName = units.ResolveName(master.YjUnitName)
-					} else {
-						janUnitName = units.ResolveName(fmt.Sprintf("%d", master.JanUnitCode))
-					}
-
-					masterView := model.ProductMasterView{
-						ProductMaster:        *master, // <- master.ProductMaster から *master に修正
-						FormattedPackageSpec: units.FormatPackageSpec(&tempJcshms),
-						JanUnitName:          janUnitName,
-					}
-					newPkgLedgerView.Masters = append(newPkgLedgerView.Masters, masterView)
-				}
-				newYjGroupView.PackageLedgers = append(newYjGroupView.PackageLedgers, newPkgLedgerView)
-			}
-			stockLedgerView = append(stockLedgerView, newYjGroupView)
+		// 2. 前日時点の理論在庫を計算するための元帳を取得
+		filtersYesterday := model.AggregationFilters{
+			StartDate: startDate.Format("20060102"),
+			EndDate:   yesterdayDate.Format("20060102"),
+			YjCode:    yjCode,
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
+		// ▲▲▲【修正ここまで】▲▲▲
+
+		ledgerYesterday, err := db.GetStockLedger(conn, filtersYesterday)
+		if err != nil {
+			http.Error(w, "Failed to get yesterday's stock ledger: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		transactionLedgerView := convertToView(ledgerToday)
+		var yesterdaysStockView *StockLedgerYJGroupView
+		if len(ledgerYesterday) > 0 {
+			view := convertToView(ledgerYesterday)
+			if len(view) > 0 {
+				yesterdaysStockView = &view[0]
+			}
+		}
+
+		var productCodes []string
+		if len(ledgerToday) > 0 {
+			for _, pkg := range ledgerToday[0].PackageLedgers {
+				for _, master := range pkg.Masters {
+					productCodes = append(productCodes, master.ProductCode)
+				}
+			}
+		}
 
 		precompDetails, err := db.GetPreCompoundingDetailsByProductCodes(conn, productCodes)
 		if err != nil {
@@ -107,26 +98,57 @@ func GetInventoryDataHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// ▼▼▼ [修正箇所] DeadStockDetailsを取得し、レスポンスに含める ▼▼▼
 		deadStockDetails, err := db.GetDeadStockByProductCodes(conn, productCodes)
 		if err != nil {
-			// エラーでも処理は続行するがログには残す
 			log.Printf("WARN: Failed to get dead stock details for inventory adjustment: %v", err)
 		}
 
 		response := ResponseDataView{
-			StockLedger:      stockLedgerView,
-			PrecompDetails:   precompDetails,
-			DeadStockDetails: deadStockDetails, // 取得したデータをセット
+			TransactionLedger: transactionLedgerView,
+			YesterdaysStock:   yesterdaysStockView,
+			PrecompDetails:    precompDetails,
+			DeadStockDetails:  deadStockDetails,
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)
 	}
 }
 
-// ▼▼▼ [修正点] 削除されていた以下のコードを復元 ▼▼▼
+// (これ以降の convertToView, SaveInventoryDataHandler などの関数は変更ありません)
+func convertToView(ledgerData []model.StockLedgerYJGroup) []StockLedgerYJGroupView {
+	view := make([]StockLedgerYJGroupView, 0, len(ledgerData))
+	for _, yjGroup := range ledgerData {
+		newYjGroupView := StockLedgerYJGroupView{
+			StockLedgerYJGroup: yjGroup,
+			PackageLedgers:     make([]StockLedgerPackageGroupView, 0, len(yjGroup.PackageLedgers)),
+		}
+		for _, pkgLedger := range yjGroup.PackageLedgers {
+			newPkgLedgerView := StockLedgerPackageGroupView{
+				StockLedgerPackageGroup: pkgLedger,
+				Masters:                 make([]model.ProductMasterView, 0, len(pkgLedger.Masters)),
+			}
+			for _, master := range pkgLedger.Masters {
+				tempJcshms := model.JCShms{
+					JC037: master.PackageForm, JC039: master.YjUnitName, JC044: master.YjPackUnitQty,
+					JA006: sql.NullFloat64{Float64: master.JanPackInnerQty, Valid: true},
+					JA008: sql.NullFloat64{Float64: master.JanPackUnitQty, Valid: true},
+					JA007: sql.NullString{String: fmt.Sprintf("%d", master.JanUnitCode), Valid: true},
+				}
+				masterView := model.ProductMasterView{
+					ProductMaster:        *master,
+					FormattedPackageSpec: units.FormatPackageSpec(&tempJcshms),
+					JanUnitName:          units.ResolveName(fmt.Sprintf("%d", master.JanUnitCode)),
+				}
+				newPkgLedgerView.Masters = append(newPkgLedgerView.Masters, masterView)
+			}
+			newYjGroupView.PackageLedgers = append(newYjGroupView.PackageLedgers, newPkgLedgerView)
+		}
+		view = append(view, newYjGroupView)
+	}
+	return view
+}
+
 type SavePayload struct {
 	Date          string                  `json:"date"`
 	YjCode        string                  `json:"yjCode"`
@@ -156,7 +178,7 @@ func SaveInventoryDataHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer tx.Rollback()
 
-		allPackagings, err := db.GetProductMastersByYjCode(tx, payload.YjCode)
+		allPackagingsViews, err := db.GetProductMastersByYjCode(tx, payload.YjCode)
 		if err != nil {
 			log.Printf("ERROR: Failed to get product masters for yj_code %s: %v", payload.YjCode, err)
 			http.Error(w, "Failed to get product masters for yj_code: "+err.Error(), http.StatusInternalServerError)
@@ -164,7 +186,7 @@ func SaveInventoryDataHandler(conn *sql.DB) http.HandlerFunc {
 		}
 
 		var masterPackagings []model.ProductMaster
-		for _, p := range allPackagings {
+		for _, p := range allPackagingsViews {
 			masterPackagings = append(masterPackagings, p.ProductMaster)
 		}
 
@@ -184,5 +206,3 @@ func SaveInventoryDataHandler(conn *sql.DB) http.HandlerFunc {
 		json.NewEncoder(w).Encode(map[string]string{"message": "棚卸データを保存しました。"})
 	}
 }
-
-// ▲▲▲ 復元ここまで ▲▲▲

@@ -168,9 +168,10 @@ th { text-align: center; background-color: #f0f0f0; }
   }
   
   /* 印刷時に不要な要素（ヘッダーや操作ボタンなど）を非表示 */
+  #search-modal, #loading-overlay, #notification-box,
   header, .btn, input, select, .filter-container, .inout-header-controls, .inout-details-header,
   .controls-grid, .settings-form-container, .entry-controls, .product-header .btn, .buttons-group,
-  #valuation-print-controls { /* 在庫評価画面の印刷ボタンコンテナも非表示 */
+  #valuation-print-controls {
     display: none !important;
   }
   
@@ -185,6 +186,16 @@ th { text-align: center; background-color: #f0f0f0; }
     border: none !important;
     padding: 0 !important;
   }
+
+  /* ▼▼▼ [修正点] 印刷対象エリア内の不要な要素を非表示にする設定を追加 ▼▼▼ */
+  .print-this-view #deadstock-output-container {
+    display: none !important;
+  }
+  .print-this-view #deadstock-print-area {
+    display: block !important;
+  }
+  /* ▲▲▲ 修正ここまで ▲▲▲ */
+
 
   /* 印刷するビュー内の要素のスタイルを統一 */
   .print-this-view, .print-this-view * {

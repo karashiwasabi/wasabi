@@ -1,19 +1,25 @@
 // C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\deadstock.js
 
-import { hiraganaToKatakana } from './utils.js';
-import { showModal } from './inout_modal.js';
-// ▼▼▼【修正点】'./common_table.js'からのインポートを完全に削除 ▼▼▼
-// import { createUploadTableHTML } from './common_table.js'; 
-import { clientMap, wholesalerMap } from './master_data.js';
+// ▼▼▼ [修正点] getLocalDateString をインポート ▼▼▼
+import { hiraganaToKatakana, getLocalDateString } from './utils.js';
 // ▲▲▲ 修正ここまで ▲▲▲
+import { showModal } from './inout_modal.js';
+import { clientMap, wholesalerMap } from './master_data.js';
 
 let view, outputContainer, startDateInput, endDateInput, excludeZeroStockCheckbox, createCsvBtn, kanaNameInput, dosageFormInput, importBtn, importInput;
+let unitMap = {}; // 単位マスタをキャッシュするためのオブジェクト
 
-// =================================================================
-// ▼▼▼【ここからが修正箇所です】▼▼▼
-// =================================================================
+async function fetchUnitMap() {
+    if (Object.keys(unitMap).length > 0) return;
+    try {
+        const res = await fetch('/api/units/map');
+        if (!res.ok) throw new Error('単位マスタの取得に失敗');
+        unitMap = await res.json();
+    } catch (err) {
+        console.error(err);
+    }
+}
 
-// ▼▼▼【修正点】'common_table.js'から'createUploadTableHTML'関数をここに移動 ▼▼▼
 function createUploadTableHTML(tableId) { 
   const colgroup = `
     <colgroup>
@@ -37,10 +43,8 @@ function createUploadTableHTML(tableId) {
       </tr>
     </thead>
   `;
-  // テーブルの骨格と空のtbodyを返すように変更
   return `<table id="${tableId}" class="data-table">${colgroup}${header}<tbody></tbody></table>`;
 }
-// ▲▲▲ 修正ここまで ▲▲▲
 
 const transactionTypeMap = { 
     0: "棚卸", 1: "納品", 2: "返品", 3: "処方", 4: "棚卸増", 
@@ -104,9 +108,8 @@ function createRowHTML(record = {}, unitName = '単位', isFirstRow = false) {
     const expiry = record.expiryDate || '';
     const lot = record.lotNumber || '';
     const recordId = record.id || `new-${Date.now()}`;
-    // ▼▼▼ [修正箇所] isFirstRowによる分岐をなくし、常に「－」ボタンを表示する ▼▼▼
     const buttonHTML = `<button class="btn delete-ds-row-btn">－</button>`;
-    // ▲▲▲ 修正ここまで ▲▲▲
+    
     return `
         <tr data-record-id="${recordId}">
             <td>
@@ -123,14 +126,17 @@ function createRowHTML(record = {}, unitName = '単位', isFirstRow = false) {
 }
 
 function createProductHTML(product) {
-    const janUnit = product.yjUnitName || '単位';
+    // ▼▼▼ [修正点] JAN単位名を正しく解決するロジックを追加 ▼▼▼
+    const janUnitName = (product.janUnitCode === 0 || !unitMap[product.janUnitCode]) 
+        ? product.yjUnitName 
+        : (unitMap[product.janUnitCode] || product.yjUnitName);
+    // ▲▲▲ 修正ここまで ▲▲▲
+
     let rowsHTML = '';
     if (product.savedRecords && product.savedRecords.length > 0) {
-        // isFirstRowを常にfalseにすることで、全行に「－」ボタンが付くようになります
-        rowsHTML = product.savedRecords.map((rec, index) => createRowHTML(rec, janUnit, false)).join('');
+        rowsHTML = product.savedRecords.map((rec) => createRowHTML(rec, janUnitName, false)).join('');
     } else {
-        // 既存レコードがない場合は、空の入力行を1つ用意します
-        rowsHTML = createRowHTML({ stockQuantityJan: product.currentStock }, janUnit, false);
+        rowsHTML = createRowHTML({ stockQuantityJan: product.currentStock }, janUnitName, false);
     }
 
     return `
@@ -140,14 +146,15 @@ function createProductHTML(product) {
              data-product-name="${product.productName}"
              data-package-form="${product.packageForm}"
              data-jan-pack-inner-qty="${product.janPackInnerQty}"
-             data-yj-unit-name="${product.yjUnitName}">
+             data-yj-unit-name="${product.yjUnitName}"
+             data-maker-name="${product.makerName || ''}">
       
             <div class="product-header" style="padding: 4px 8px; background-color: #f0f0f0; border-top: 1px solid #ccc; display: flex; justify-content: space-between;">
                 <span>
                     <strong>JAN: ${product.productCode}</strong>
                     <span style="margin-left: 10px;">${product.productName}</span>
                 </span>
-                <span>在庫: ${product.currentStock.toFixed(2)} ${janUnit}</span>
+                <span>在庫: ${product.currentStock.toFixed(2)} ${janUnitName}</span>
             </div>
             <div class="dead-stock-entry-container">
                 <table class="dead-stock-entry-table">
@@ -161,7 +168,6 @@ function createProductHTML(product) {
                     </thead>
                     <tbody>${rowsHTML}</tbody>
                 </table>
- 
                 <div class="entry-controls" style="text-align: right; padding: 4px; display: flex; justify-content: space-between; align-items: center;">
                     <button class="btn add-ds-row-btn">＋ロット情報を追加</button>
                     <button class="btn save-ds-btn" style="background-color: #0d6efd; color: white;">このJANの期限・ロットを保存</button>
@@ -178,7 +184,7 @@ function createPackageGroupHTML(pkgGroup) {
     let historyHtml = '';
     if (pkgGroup.recentTransactions && pkgGroup.recentTransactions.length > 0) {
         const historyTableId = `history-table-${pkgGroup.packageKey.replace(/[^a-zA-Z0-9]/g, '')}`;
-        const tableShell = createUploadTableHTML(historyTableId); // ローカル関数を呼び出し
+        const tableShell = createUploadTableHTML(historyTableId);
         const tableRows = renderTransactionHistoryRows(pkgGroup.recentTransactions);
         const fullTableHtml = tableShell.replace('<tbody></tbody>', `<tbody>${tableRows}</tbody>`);
         
@@ -206,7 +212,7 @@ function createPackageGroupHTML(pkgGroup) {
 
 function renderDeadStockList(data) {
     if (!data || data.length === 0) {
-       outputContainer.innerHTML = "<p>対象データが見つかりませんでした。</p>";
+        outputContainer.innerHTML = "<p>対象データが見つかりませんでした。</p>";
         return;
     }
 
@@ -234,45 +240,89 @@ function renderDeadStockList(data) {
     outputContainer.innerHTML = html;
 }
 
-// =================================================================
-// ▲▲▲【修正ここまで】▲▲▲
-// =================================================================
 
-
-export function initDeadStock() {
+export async function initDeadStock() {
+    await fetchUnitMap();
     view = document.getElementById('deadstock-view');
     if (!view) return;
 
     outputContainer = document.getElementById('deadstock-output-container');
-    startDateInput = document.getElementById('ds-startDate');
-    endDateInput = document.getElementById('ds-endDate');
+    // ▼▼▼【修正】startDateInput, endDateInput の取得を削除 ▼▼▼
     excludeZeroStockCheckbox = document.getElementById('ds-exclude-zero-stock');
     createCsvBtn = document.getElementById('create-deadstock-csv-btn');
     kanaNameInput = document.getElementById('ds-kanaName');
     dosageFormInput = document.getElementById('ds-dosageForm');
     importBtn = document.getElementById('import-deadstock-btn');
     importInput = document.getElementById('importDeadstockInput');
-
-    const today = new Date();
-    const threeMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 3, 1);
-    endDateInput.value = today.toISOString().slice(0, 10);
-    startDateInput.value = threeMonthsAgo.toISOString().slice(0, 10);
     
-    // ▼▼▼ [修正箇所] イベントリスナーを view から outputContainer に変更し、その中に全てのクリック処理をまとめます ▼▼▼
+    const printBtn = document.getElementById('print-deadstock-btn');
+    const printArea = document.getElementById('deadstock-print-area');
+
+    // ▼▼▼【修正】日付のデフォルト値設定ロジックを削除 ▼▼▼
+
+    if (printBtn) {
+        printBtn.addEventListener('click', () => {
+            const originalContent = outputContainer.querySelector('.yj-group-wrapper');
+            if (!originalContent) {
+                window.showNotification('印刷するデータがありません。先にリストを作成してください。', 'error');
+                return;
+            }
+
+            const contentToPrint = outputContainer.cloneNode(true);
+
+            contentToPrint.querySelectorAll('input, select').forEach(input => {
+                const text = document.createTextNode(input.value);
+                input.parentNode.replaceChild(text, input);
+            });
+            contentToPrint.querySelectorAll('button').forEach(btn => btn.remove());
+            contentToPrint.querySelectorAll('details').forEach(details => {
+                details.setAttribute('open', true);
+            });
+
+            printArea.innerHTML = `
+                <h2 style="text-align: center; margin-bottom: 20px;">不動在庫リスト</h2>
+                <p style="text-align: right; margin-bottom: 10px;">印刷日: ${new Date().toLocaleDateString()}</p>
+                ${contentToPrint.innerHTML}
+            `;
+
+            view.classList.add('print-this-view');
+            outputContainer.classList.add('hidden');
+            printArea.classList.remove('hidden');
+
+            window.print();
+        });
+    }
+
+    window.addEventListener('afterprint', () => {
+        if (view.classList.contains('print-this-view')) {
+            outputContainer.classList.remove('hidden');
+            printArea.classList.add('hidden');
+            view.classList.remove('print-this-view');
+        }
+    });
+    
     if (outputContainer) {
         outputContainer.addEventListener('click', async (e) => {
             const target = e.target;
 
-            // 「ロット情報を追加」ボタンの処理
             if (target.classList.contains('add-ds-row-btn')) {
                 const productContainer = target.closest('.dead-stock-product-container');
-                const unitNameSpan = productContainer.querySelector('.ds-unit-name');
-                const unitName = unitNameSpan ? unitNameSpan.textContent : '単位';
+                const productDataString = productContainer.dataset.product;
+                let unitName = '単位'; 
+                try {
+                    const productData = JSON.parse(productDataString);
+                    unitName = (productData.janUnitCode === 0 || !unitMap[productData.janUnitCode]) 
+                        ? productData.yjUnitName 
+                        : (unitMap[productData.janUnitCode] || productData.yjUnitName);
+                } catch(e) {
+                    const unitNameSpan = productContainer.querySelector('.ds-unit-name');
+                    if (unitNameSpan) unitName = unitNameSpan.textContent;
+                }
+
                 const tbody = productContainer.querySelector('tbody');
                 tbody.insertAdjacentHTML('beforeend', createRowHTML({}, unitName, false));
             }
 
-            // 「－」(削除)ボタンの処理
             if (target.classList.contains('delete-ds-row-btn')) {
                 const row = target.closest('tr');
                 if (row) {
@@ -280,7 +330,6 @@ export function initDeadStock() {
                 }
             }
             
-            // 「このJANの期限・ロットを保存」ボタンの処理
             if (target.classList.contains('save-ds-btn')) {
                 const productContainer = target.closest('.dead-stock-product-container');
                 const productCode = productContainer.dataset.productCode;
@@ -319,7 +368,6 @@ export function initDeadStock() {
                 }
             }
             
-            // 「JAN品目追加」ボタンの処理
             if (target.classList.contains('add-jan-btn')) {
                 const yjCode = target.dataset.yjCode;
                 window.showLoading();
@@ -368,6 +416,7 @@ export function initDeadStock() {
                             } else {
                                 targetPackageContainer.insertAdjacentHTML('beforeend', newProductHTML);
                             }
+
                         } catch (err) {
                             window.showNotification(err.message, 'error');
                         } finally {
@@ -383,15 +432,13 @@ export function initDeadStock() {
         });
     }
 
-    // 「リスト作成」ボタンのイベントリスナーは静的なので、viewに設定したままでOK
     if (view) {
         const runBtn = view.querySelector('#run-dead-stock-btn');
         if (runBtn) {
             runBtn.addEventListener('click', () => {
                 window.showLoading();
+                // ▼▼▼【修正】URLSearchParamsからstartDateとendDateを削除 ▼▼▼
                 const params = new URLSearchParams({
-                    startDate: startDateInput.value.replace(/-/g, ''),
-                    endDate: endDateInput.value.replace(/-/g, ''),
                     excludeZeroStock: excludeZeroStockCheckbox.checked,
                     kanaName: hiraganaToKatakana(kanaNameInput.value),
                     dosageForm: dosageFormInput.value,
@@ -456,7 +503,9 @@ export function initDeadStock() {
 
             const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
             const link = document.createElement("a");
-            const dateStr = endDateInput.value.replace(/-/g, '');
+            
+            // ▼▼▼【修正】ファイル名の日付取得元を削除されたendDateInputからgetLocalDateStringに変更 ▼▼▼
+            const dateStr = getLocalDateString().replace(/-/g, '');
             const fileName = `デッドストック_${dateStr}.csv`;
 
             link.setAttribute("href", URL.createObjectURL(blob));
@@ -512,50 +561,20 @@ export function initDeadStock() {
     if(view) {
         view.addEventListener('click', async (e) => {
             const target = e.target;
-
-            if (target.id === 'run-dead-stock-btn') {
-                window.showLoading();
-                const params = new URLSearchParams({
-                    startDate: startDateInput.value.replace(/-/g, ''),
-                    endDate: endDateInput.value.replace(/-/g, ''),
-                    excludeZeroStock: excludeZeroStockCheckbox.checked,
-                    kanaName: hiraganaToKatakana(kanaNameInput.value),
-                    dosageForm: dosageFormInput.value,
-                });
-
-                try {
-                    const res = await fetch(`/api/deadstock/list?${params.toString()}`);
-                    if (!res.ok) {
-                        const errText = await res.text();
-                        throw new Error(errText || 'Failed to generate dead stock list');
-                    }
-                    const data = await res.json();
-                    renderDeadStockList(data);
-                } catch (err) {
-                    outputContainer.innerHTML = `<p style="color:red;">エラー: ${err.message}</p>`;
-                } finally {
-                    window.hideLoading();
-                }
-            }
-            
             if (target.classList.contains('add-ds-row-btn')) {
-                // ▼▼▼ [修正箇所] closestで探す対象を .dead-stock-product-container に変更 ▼▼▼
                 const productContainer = target.closest('.dead-stock-product-container');
-                // ▲▲▲ 修正ここまで ▲▲▲
                 const unitNameSpan = productContainer.querySelector('.ds-unit-name');
                 const unitName = unitNameSpan ? unitNameSpan.textContent : '単位';
                 const tbody = productContainer.querySelector('tbody');
                 tbody.insertAdjacentHTML('beforeend', createRowHTML({}, unitName, false));
             }
 
-            // ▼▼▼ [修正点3] 存在しなかった削除ボタンの処理をここに追加 ▼▼▼
             if (target.classList.contains('delete-ds-row-btn')) {
                 const row = target.closest('tr');
                 if (row) {
                     row.remove();
                 }
             }
-            // ▲▲▲ 修正ここまで ▲▲▲
 
             if (target.classList.contains('save-ds-btn')) {
                 const productContainer = target.closest('.dead-stock-product-container');
@@ -567,7 +586,6 @@ export function initDeadStock() {
                 const pkgContainer = productContainer.closest('.dead-stock-package-container');
                 const pkgHeaderText = pkgContainer.querySelector('.agg-pkg-header span:first-child').textContent;
                 const pkgInfo = pkgHeaderText.replace('包装: ', '').split('|');
-
                 rows.forEach(row => {
                     payload.push({
                         productCode: productCode,

@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time" // time パッケージをインポート
+	"wasabi/config"
 	"wasabi/db"
 	"wasabi/model"
 )
@@ -21,14 +23,29 @@ func GetDeadStockHandler(conn *sql.DB) http.HandlerFunc {
 			coefficient = 1.5
 		}
 
+		// ▼▼▼【ここから修正】▼▼▼
+		// 設定ファイルから集計日数を読み込む
+		cfg, err := config.LoadConfig()
+		if err != nil {
+			http.Error(w, "設定ファイルの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// 日数から期間を動的に計算
+		now := time.Now()
+		endDate := "99991231" // 終了日は無制限
+		startDate := now.AddDate(0, 0, -cfg.CalculationPeriodDays)
+
+		// フィルタ構造体に計算した値を使用する
 		filters := model.DeadStockFilters{
-			StartDate:        q.Get("startDate"),
-			EndDate:          q.Get("endDate"),
+			StartDate:        startDate.Format("20060102"),
+			EndDate:          endDate,
 			ExcludeZeroStock: q.Get("excludeZeroStock") == "true",
 			Coefficient:      coefficient,
 			KanaName:         q.Get("kanaName"),
 			DosageForm:       q.Get("dosageForm"),
 		}
+		// ▲▲▲【修正ここまで】▲▲▲
 
 		tx, err := conn.Begin()
 		if err != nil {
@@ -88,11 +105,7 @@ func ImportDeadStockHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer file.Close()
 
-		// ▼▼▼【ここが修正箇所です】▼▼▼
-		// ファイルはUTF-8であることを前提とし、Shift_JISからの文字コード変換処理を削除します。
 		csvReader := csv.NewReader(file)
-		// ▲▲▲【修正ここまで】▲▲▲
-
 		csvReader.LazyQuotes = true
 		records, err := csvReader.ReadAll()
 		if err != nil {

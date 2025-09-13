@@ -18,6 +18,9 @@ import (
 	"wasabi/dat"
 
 	"github.com/chromedp/cdproto/browser"
+	// ▼▼▼ [修正点] "page" パッケージをインポート ▼▼▼
+	"github.com/chromedp/cdproto/page"
+	// ▲▲▲ 修正ここまで ▲▲▲
 	"github.com/chromedp/chromedp"
 )
 
@@ -39,6 +42,9 @@ func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 			chromedp.Flag("no-sandbox", true),
 			chromedp.Flag("no-first-run", true),
 			chromedp.Flag("no-default-browser-check", true),
+			// ▼▼▼ [この行を追加] ▼▼▼
+			chromedp.Flag("disable-features", "RendererCodeIntegrity"),
+			// ▲▲▲ [追加ここまで] ▲▲▲
 			chromedp.UserAgent(`Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36`),
 		)
 
@@ -64,13 +70,23 @@ func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 
 		var downloadedFilePath string
 		done := make(chan string, 1)
+		// ▼▼▼ [修正点] 自動でダイアログを処理するリスナーを追加 ▼▼▼
 		chromedp.ListenTarget(ctx, func(ev interface{}) {
 			if e, ok := ev.(*browser.EventDownloadProgress); ok {
 				if e.State == browser.DownloadProgressStateCompleted {
 					done <- e.GUID
 				}
 			}
+			// JavaScriptの確認ダイアログ（alert, confirmなど）が開いた場合に自動でOKを押す
+			if _, ok := ev.(*page.EventJavascriptDialogOpening); ok {
+				go func() {
+					if err := chromedp.Run(ctx, page.HandleJavaScriptDialog(true)); err != nil {
+						log.Printf("could not handle javascript dialog: %v", err)
+					}
+				}()
+			}
 		})
+		// ▲▲▲ 修正ここまで ▲▲▲
 
 		var initialLatestTimestamp string
 		err = chromedp.Run(ctx,
@@ -86,7 +102,9 @@ func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 			chromedp.Click(`//a[contains(@href, "busi_id=11")]`),
 			chromedp.WaitVisible(`//a[contains(text(), "納品受信(JAN)")]`),
 			chromedp.Click(`//a[contains(text(), "納品受信(JAN)")]`),
-			chromedp.WaitVisible(`input[value="未受信データ全件受信"]`),
+			// ▼▼▼ [修正点] WaitVisible から WaitReady に変更 ▼▼▼
+			chromedp.WaitReady(`input[value="未受信データ全件受信"]`),
+			// ▲▲▲ 修正ここまで ▲▲▲
 			// クリック前に、現在の最新履歴のタイムスタンプを取得しておく
 			chromedp.Text(`table.result-list-table tbody tr:first-child td.col-transceiving-date`, &initialLatestTimestamp),
 			// ボタンをクリックしてデータ受信を実行

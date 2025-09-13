@@ -1,6 +1,8 @@
 // C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\orders.js
 
-import { hiraganaToKatakana } from './utils.js';
+// ▼▼▼ [修正点] getLocalDateString をインポート ▼▼▼
+import { hiraganaToKatakana, getLocalDateString } from './utils.js';
+// ▲▲▲ 修正ここまで ▲▲▲
 
 function formatBalance(balance) {
     if (typeof balance === 'number') {
@@ -103,22 +105,18 @@ export function initOrders() {
 
     const runBtn = document.getElementById('generate-order-candidates-btn');
     const outputContainer = document.getElementById('order-candidates-output');
-    const startDateInput = document.getElementById('order-startDate');
-    const endDateInput = document.getElementById('order-endDate');
+    // ▼▼▼【修正】startDateInput, endDateInput の取得を削除 ▼▼▼
     const kanaNameInput = document.getElementById('order-kanaName');
     const dosageFormInput = document.getElementById('order-dosageForm');
     const coefficientInput = document.getElementById('order-reorder-coefficient');
     const createCsvBtn = document.getElementById('createOrderCsvBtn');
-    const today = new Date();
-    const threeMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 3, 1);
-    endDateInput.value = today.toISOString().slice(0, 10);
-    startDateInput.value = threeMonthsAgo.toISOString().slice(0, 10);
+
+    // ▼▼▼【修正】日付のデフォルト値設定ロジックを削除 ▼▼▼
 
     runBtn.addEventListener('click', async () => {
         window.showLoading();
+        // ▼▼▼【修正】URLSearchParamsからstartDateとendDateを削除 ▼▼▼
         const params = new URLSearchParams({
-            startDate: startDateInput.value.replace(/-/g, ''),
-            endDate: endDateInput.value.replace(/-/g, ''),
             kanaName: hiraganaToKatakana(kanaNameInput.value),
             dosageForm: dosageFormInput.value,
             coefficient: coefficientInput.value,
@@ -128,7 +126,7 @@ export function initOrders() {
             const res = await fetch(`/api/orders/candidates?${params.toString()}`);
             if (!res.ok) {
                 const errText = await res.text();
-                 throw new Error(errText || 'List generation failed');
+                throw new Error(errText || 'List generation failed');
             }
             const data = await res.json();
             
@@ -153,11 +151,9 @@ export function initOrders() {
         let hasItemsToOrder = false;
 
         rows.forEach(row => {
-            // ▼▼▼ [ここから修正] 発注不可の行をスキップする処理を追加 ▼▼▼
             if (row.classList.contains('provisional-order-item')) {
-                return; // この行はスキップ
+                return; 
             }
-            // ▲▲▲ [修正ここまで] ▲▲▲
 
             const quantityInput = row.querySelector('.order-quantity-input');
             const quantity = parseInt(quantityInput.value, 10);

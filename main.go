@@ -136,6 +136,10 @@ func main() {
 	mux.HandleFunc("/api/products/search_filtered", product.SearchProductsHandler(conn))
 	mux.HandleFunc("/api/inventory/adjust/data", guidedinventory.GetInventoryDataHandler(conn))
 	mux.HandleFunc("/api/inventory/adjust/save", guidedinventory.SaveInventoryDataHandler(conn))
+	// ▼▼▼【ここから追加】▼▼▼
+	mux.HandleFunc("/api/inventory/by_date", transaction.GetInventoryByDateHandler(conn))
+	mux.HandleFunc("/api/transaction/delete_by_id/", transaction.DeleteTransactionByIDHandler(conn))
+	// ▲▲▲【追加ここまで】▲▲▲
 
 	// Serve Frontend
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))

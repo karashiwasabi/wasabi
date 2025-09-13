@@ -1,8 +1,10 @@
-// C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\settings.js
-
-let view, userIDInput, passwordInput, saveBtn;
+// ▼▼▼【修正】変数を変更 ▼▼▼
+let view, userIDInput, passwordInput, saveBtn, usageFolderPathInput, calculationPeriodDaysInput;
 let wholesalerCodeInput, wholesalerNameInput, addWholesalerBtn, wholesalersTableBody;
 
+/**
+ * サーバーから設定を読み込み、画面の入力欄に反映させます。
+ */
 async function loadSettings() {
     try {
         const res = await fetch('/api/settings/get');
@@ -10,35 +12,50 @@ async function loadSettings() {
         const settings = await res.json();
         userIDInput.value = settings.emednetUserId || '';
         passwordInput.value = settings.emednetPassword || '';
+        if (usageFolderPathInput) {
+            usageFolderPathInput.value = settings.usageFolderPath || '';
+        }
+        // ▼▼▼【ここから修正】▼▼▼
+        // 新しい期間日数入力欄に値を設定 (デフォルト値は90)
+        if (calculationPeriodDaysInput) {
+            calculationPeriodDaysInput.value = settings.calculationPeriodDays || 90;
+        }
+        // ▲▲▲【修正ここまで】▲▲▲
     } catch (err) {
         console.error(err);
         window.showNotification(err.message, 'error');
     }
 }
 
-// ▼▼▼ [ここから修正] saveSettings関数を全面的に書き換え ▼▼▼
+
+/**
+ * 現在の画面の入力内容をサーバーに送信して保存します。
+ */
 async function saveSettings() {
     window.showLoading();
     try {
-        // ステップ1: まず現在の設定を全てサーバーから読み込む
         const currentSettingsRes = await fetch('/api/settings/get');
         if (!currentSettingsRes.ok) throw new Error('現在の設定の読み込みに失敗しました。');
         const currentSettings = await currentSettingsRes.json();
 
-        // ステップ2: 画面の入力値を取得
         const userId = userIDInput.value;
         const password = passwordInput.value;
+        const usagePath = usageFolderPathInput.value;
+        // ▼▼▼【ここから修正】▼▼▼
+        // 新しい期間日数入力欄から値を取得
+        const periodDays = parseInt(calculationPeriodDaysInput.value, 10);
 
-        // ステップ3: 読み込んだ現在の設定に、画面の入力値をマージ（上書き）する
         const newSettings = {
-            ...currentSettings, // 既存の設定を保持
+            ...currentSettings,
             emednetUserId: userId,
             emednetPassword: password,
-            edeUserId: userId,       // edeの設定も同じ値で上書き
-            edePassword: password,   // edeの設定も同じ値で上書き
+            edeUserId: userId,
+            edePassword: password,
+            usageFolderPath: usagePath,
+            calculationPeriodDays: periodDays, // ペイロードに追加
         };
+        // ▲▲▲【修正ここまで】▲▲▲
 
-        // ステップ4: 完成した設定オブジェクトをサーバーに送信して保存
         const res = await fetch('/api/settings/save', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -55,9 +72,11 @@ async function saveSettings() {
         window.hideLoading();
     }
 }
-// ▲▲▲ [修正ここまで] ▲▲▲
 
-// (これ以降の関数は変更ありません)
+/**
+ * 卸業者リストを描画します。 (変更なし)
+ * @param {Array} wholesalers - 卸業者の配列
+ */
 function renderWholesalers(wholesalers) {
     if (!wholesalers) {
         wholesalersTableBody.innerHTML = '<tr><td colspan="3">登録されている卸業者がありません。</td></tr>';
@@ -72,6 +91,9 @@ function renderWholesalers(wholesalers) {
     `).join('');
 }
 
+/**
+ * サーバーから卸業者リストを読み込みます。(変更なし)
+ */
 async function loadWholesalers() {
     try {
         const res = await fetch('/api/settings/wholesalers');
@@ -84,6 +106,9 @@ async function loadWholesalers() {
     }
 }
 
+/**
+ * 新しい卸業者を追加します。(変更なし)
+ */
 async function addWholesaler() {
     const code = wholesalerCodeInput.value.trim();
     const name = wholesalerNameInput.value.trim();
@@ -114,14 +139,23 @@ async function addWholesaler() {
     }
 }
 
+
+/**
+ * 設定画面の初期化処理
+ */
 export function initSettings() {
     view = document.getElementById('settings-view');
     if (!view) return;
 
+    // 各種DOM要素の取得
     userIDInput = document.getElementById('emednetUserID');
     passwordInput = document.getElementById('emednetPassword');
     saveBtn = document.getElementById('saveSettingsBtn');
-    
+    usageFolderPathInput = document.getElementById('usageFolderPath');
+    // ▼▼▼【ここから修正】▼▼▼
+    // 新しい期間日数入力欄の要素を取得
+    calculationPeriodDaysInput = document.getElementById('calculationPeriodDays');
+    // ▲▲▲【修正ここまで】▲▲▲
     wholesalerCodeInput = document.getElementById('wholesalerCode');
     wholesalerNameInput = document.getElementById('wholesalerName');
     addWholesalerBtn = document.getElementById('addWholesalerBtn');
@@ -129,19 +163,16 @@ export function initSettings() {
     const clearTransactionsBtn = document.getElementById('clearAllTransactionsBtn');
     const clearMastersBtn = document.getElementById('clearAllMastersBtn');
     
+    // イベントリスナーの設定
     clearMastersBtn.addEventListener('click', async () => {
         if (!confirm('本当に全ての製品マスターを削除しますか？\n\nJCSHMSマスターも削除されるため、再読み込みするまで品目情報が失われます。この操作は元に戻せません。')) {
             return;
         }
-
         window.showLoading();
         try {
-            const res = await fetch('/api/masters/clear_all', {
-                method: 'POST',
-            });
+            const res = await fetch('/api/masters/clear_all', { method: 'POST' });
             const resData = await res.json();
             if (!res.ok) throw new Error(resData.message || '製品マスターの削除に失敗しました。');
-            
             window.showNotification(resData.message, 'success');
         } catch (err) {
             console.error(err);
@@ -158,15 +189,11 @@ export function initSettings() {
         if (!confirm('本当にすべての取引履歴（入出庫、納品、処方、棚卸など）を削除しますか？\n\nこの操作は元に戻せません。')) {
             return;
         }
-
         window.showLoading();
         try {
-            const res = await fetch('/api/transactions/clear_all', {
-                method: 'POST',
-            });
+            const res = await fetch('/api/transactions/clear_all', { method: 'POST' });
             const resData = await res.json();
             if (!res.ok) throw new Error(resData.message || '取引データの削除に失敗しました。');
-            
             window.showNotification(resData.message, 'success');
         } catch (err) {
             console.error(err);
@@ -183,12 +210,9 @@ export function initSettings() {
             if (!confirm(`卸コード [${code}] を削除します。よろしいですか？`)) {
                 return;
             }
-
             window.showLoading();
             try {
-                const res = await fetch(`/api/settings/wholesalers/${code}`, {
-                    method: 'DELETE',
-                });
+                const res = await fetch(`/api/settings/wholesalers/${code}`, { method: 'DELETE' });
                 const resData = await res.json();
                 if (!res.ok) throw new Error(resData.message || '削除に失敗しました。');
                 window.showNotification(resData.message, 'success');
@@ -203,6 +227,9 @@ export function initSettings() {
     });
 }
 
+/**
+ * 設定画面が表示されたときに呼ばれる関数
+ */
 export function onViewShow() {
     loadSettings();
     loadWholesalers();

@@ -1,6 +1,8 @@
 // C:\Dev\WASABI\static\js\manual_inventory.js
 
-import { hiraganaToKatakana } from './utils.js';
+// ▼▼▼ [修正点] getLocalDateString をインポート ▼▼▼
+import { hiraganaToKatakana, getLocalDateString } from './utils.js';
+// ▲▲▲ 修正ここまで ▲▲▲
 
 export function initManualInventory() {
     const view = document.getElementById('manual-inventory-view');
@@ -14,8 +16,9 @@ export function initManualInventory() {
 
     // ▼▼▼ [修正点] 日付を自動設定する関数を追加 ▼▼▼
     async function setDefaultDate() {
-        // サーバーに問い合わせるのではなく、今日の日付をデフォルトにする
-        dateInput.value = new Date().toISOString().slice(0, 10);
+        // ▼▼▼ [修正点] 日付設定処理を新しい関数に置き換え ▼▼▼
+        dateInput.value = getLocalDateString();
+        // ▲▲▲ 修正ここまで ▲▲▲
     }
     // ▲▲▲ 修正ここまで ▲▲▲
 

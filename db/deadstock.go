@@ -12,6 +12,29 @@ import (
 	"wasabi/model"
 )
 
+// ▼▼▼ [修正] このヘルパー関数を GetDeadStockList の前に移動しました ▼▼▼
+// getSavedDeadStock は特定の製品コードに紐づくロット・期限情報をDBから取得するヘルパー関数です。
+func getSavedDeadStock(tx *sql.Tx, productCode string) ([]model.DeadStockRecord, error) {
+	const q = `SELECT id, stock_quantity_jan, expiry_date, lot_number FROM dead_stock_list WHERE product_code = ? ORDER BY id`
+	rows, err := tx.Query(q, productCode)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []model.DeadStockRecord
+	for rows.Next() {
+		var r model.DeadStockRecord
+		if err := rows.Scan(&r.ID, &r.StockQuantityJan, &r.ExpiryDate, &r.LotNumber); err != nil {
+			return nil, err
+		}
+		records = append(records, r)
+	}
+	return records, nil
+}
+
+// ▲▲▲ 移動ここまで ▲▲▲
+
 /**
  * @brief 不動在庫リストを生成します。
  * @param tx SQLトランザクションオブジェクト
@@ -20,24 +43,51 @@ import (
  * @return error 処理中にエラーが発生した場合
  * @details
  * 以下のステップで不動在庫リストを生成します。
- * 1. フィルタ条件に合致する製品マスターの候補を全て取得します。
- * 2. 指定された期間内に処方された（flag=3）製品のリストを取得します。
- * 3. 1の候補リストから2のリストに含まれる製品を除外し、「不動在庫」の製品リストを確定します。
- * 4. 不動在庫品目の現在庫と、保存済みのロット・期限情報を取得します。
- * 5. 最終的な表示形式（YJコード > 包装単位 > 個別JAN）に整形して返却します。
+ * 1. 【修正】指定された期間内に何らかの取引があった製品のみを候補とします。
+ * 2. フィルタ条件（カナ名、剤型）でさらに候補を絞り込みます。
+ * 3. 候補の中から、期間内に処方された（flag=3）製品を除外します。
+ * 4. 残った品目の現在庫とロット情報を取得し、最終的な表示形式に整形して返却します。
  */
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\deadstock.go
+
 func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadStockGroup, error) {
 	log.Println("--- Dead Stock List Generation Start ---")
 
-	// ステップ1: フィルターに合致する製品マスター候補を全て取得
-	masterQuery := `SELECT ` + SelectColumns + ` FROM product_master WHERE 1=1`
-	var masterArgs []interface{}
+	// ステップ1: まず指定された期間内に何らかの取引があった製品のJANコードを全て取得する
+	jcpQuery := `SELECT DISTINCT jan_code FROM transaction_records WHERE transaction_date BETWEEN ? AND ? AND jan_code != ''`
+	jcpRows, err := tx.Query(jcpQuery, filters.StartDate, filters.EndDate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get active jans in period: %w", err)
+	}
+	defer jcpRows.Close()
+
+	var jansInPeriod []string
+	for jcpRows.Next() {
+		var jan string
+		if err := jcpRows.Scan(&jan); err == nil {
+			jansInPeriod = append(jansInPeriod, jan)
+		}
+	}
+
+	if len(jansInPeriod) == 0 {
+		return []model.DeadStockGroup{}, nil
+	}
+
+	// ステップ2: 期間内に動きのあった製品マスターのみを候補として取得するクエリを生成
+	masterArgs := make([]interface{}, 0, len(jansInPeriod)+2)
+	placeholders := strings.Repeat("?,", len(jansInPeriod)-1) + "?"
+	masterQuery := fmt.Sprintf(`SELECT `+SelectColumns+` FROM product_master p WHERE p.product_code IN (%s)`, placeholders)
+
+	for _, jan := range jansInPeriod {
+		masterArgs = append(masterArgs, jan)
+	}
+
 	if filters.KanaName != "" {
-		masterQuery += " AND (kana_name LIKE ? OR product_name LIKE ?)"
+		masterQuery += " AND (p.kana_name LIKE ? OR p.product_name LIKE ?)"
 		masterArgs = append(masterArgs, "%"+filters.KanaName+"%", "%"+filters.KanaName+"%")
 	}
 	if filters.DosageForm != "" {
-		masterQuery += " AND usage_classification = ?"
+		masterQuery += " AND p.usage_classification = ?"
 		masterArgs = append(masterArgs, filters.DosageForm)
 	}
 
@@ -60,7 +110,7 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 		return []model.DeadStockGroup{}, nil
 	}
 
-	// ステップ2: "期間に処方無し"の製品を特定
+	// ステップ3: 期間内に処方された製品のJANコードをすべて取得
 	usedInPeriod := make(map[string]bool)
 	usageQuery := `SELECT DISTINCT jan_code FROM transaction_records WHERE flag = 3 AND transaction_date BETWEEN ? AND ?`
 	usageRows, err := tx.Query(usageQuery, filters.StartDate, filters.EndDate)
@@ -75,20 +125,46 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 		}
 	}
 
+	// ▼▼▼【ここからが修正箇所です】▼▼▼
+	// ステップ4: 「不動在庫」となるマスターを小グループ単位で判定
 	var deadStockMasters []*model.ProductMaster
-	var deadStockProductCodes []string
+
+	// まず、候補マスターを包装ごとの小グループにまとめる
+	// キーの定義を集計ロジック(aggregation.go)と完全に一致させる
+	packagesMap := make(map[string][]*model.ProductMaster)
 	for _, master := range candidateMasters {
-		if !usedInPeriod[master.ProductCode] {
-			deadStockMasters = append(deadStockMasters, master)
-			deadStockProductCodes = append(deadStockProductCodes, master.ProductCode)
+		key := fmt.Sprintf("%s|%s|%g|%s", master.YjCode, master.PackageForm, master.JanPackInnerQty, master.YjUnitName)
+		packagesMap[key] = append(packagesMap[key], master)
+	}
+
+	// 各小グループごとに、処方実績がないかを確認
+	for _, mastersInGroup := range packagesMap {
+		isDeadStockGroup := true // グループ全体が不動在庫であると仮定
+		for _, master := range mastersInGroup {
+			if usedInPeriod[master.ProductCode] {
+				// グループ内の1つでも処方されていれば、このグループは不動在庫ではない
+				isDeadStockGroup = false
+				break
+			}
+		}
+
+		if isDeadStockGroup {
+			// 不動在庫と判定されたグループの品目をすべて結果に追加
+			deadStockMasters = append(deadStockMasters, mastersInGroup...)
 		}
 	}
+	// ▲▲▲【修正ここまで】▲▲▲
 
 	if len(deadStockMasters) == 0 {
 		return []model.DeadStockGroup{}, nil
 	}
 
-	// ステップ3: 不動在庫品目の期間前取引履歴を取得
+	deadStockProductCodes := make([]string, len(deadStockMasters))
+	for i, master := range deadStockMasters {
+		deadStockProductCodes[i] = master.ProductCode
+	}
+
+	// ステップ5: 不動在庫品目の期間前取引履歴を取得
 	historyTxsByProductCode := make(map[string][]*model.TransactionRecord)
 	if len(deadStockProductCodes) > 0 && filters.StartDate != "" {
 		startDate, err := time.Parse("20060102", filters.StartDate)
@@ -121,31 +197,31 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 		}
 	}
 
-	// ステップ4: 最終整形
-	groups := make(map[string][]*model.ProductMaster)
+	// 最終整形 (不動在庫マスターのみを対象)
+	groupsByYjCode := make(map[string][]*model.ProductMaster)
 	for _, m := range deadStockMasters {
 		if m.YjCode != "" {
-			groups[m.YjCode] = append(groups[m.YjCode], m)
+			groupsByYjCode[m.YjCode] = append(groupsByYjCode[m.YjCode], m)
 		}
 	}
 
 	var result []model.DeadStockGroup
-	for yjCode, masterList := range groups {
+	for yjCode, masterList := range groupsByYjCode {
 		dsg := model.DeadStockGroup{
 			YjCode:      yjCode,
 			ProductName: masterList[0].ProductName,
 		}
 
-		packagesByMinorGroupKey := make(map[string][]*model.ProductMaster)
+		packagesByMinorGroupKey_final := make(map[string][]*model.ProductMaster)
 		for _, m := range masterList {
 			key := fmt.Sprintf("%s|%g|%s", m.PackageForm, m.JanPackInnerQty, m.YjUnitName)
-			packagesByMinorGroupKey[key] = append(packagesByMinorGroupKey[key], m)
+			packagesByMinorGroupKey_final[key] = append(packagesByMinorGroupKey_final[key], m)
 		}
 
 		var yjTotalStock float64
 		var finalPackageGroups []model.DeadStockPackageGroup
 
-		for key, mastersInMinorGroup := range packagesByMinorGroupKey {
+		for key, mastersInMinorGroup := range packagesByMinorGroupKey_final {
 			var packageGroupTotalStock float64
 			var productsInPackageGroup []model.DeadStockProduct
 			var recentTxsForPackage []model.TransactionRecord
@@ -160,7 +236,7 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 					continue
 				}
 
-				savedRecords, err := getSavedDeadStock(tx, master.ProductCode)
+				savedRecords, err := getSavedDeadStock(tx, master.ProductCode) // This call is now valid
 				if err != nil {
 					return nil, err
 				}
@@ -213,8 +289,8 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 			"4": 4, "注": 4, "5": 5, "機": 5, "6": 6, "他": 6,
 		}
 
-		masterI := groups[result[i].YjCode][0]
-		masterJ := groups[result[j].YjCode][0]
+		masterI := groupsByYjCode[result[i].YjCode][0]
+		masterJ := groupsByYjCode[result[j].YjCode][0]
 
 		prioI, okI := prio[strings.TrimSpace(masterI.UsageClassification)]
 		if !okI {
@@ -231,27 +307,8 @@ func GetDeadStockList(tx *sql.Tx, filters model.DeadStockFilters) ([]model.DeadS
 		return masterI.KanaName < masterJ.KanaName
 	})
 
+	log.Println("--- Dead Stock List Generation End ---")
 	return result, nil
-}
-
-// getSavedDeadStock は特定の製品コードに紐づくロット・期限情報をDBから取得するヘルパー関数です。
-func getSavedDeadStock(tx *sql.Tx, productCode string) ([]model.DeadStockRecord, error) {
-	const q = `SELECT id, stock_quantity_jan, expiry_date, lot_number FROM dead_stock_list WHERE product_code = ? ORDER BY id`
-	rows, err := tx.Query(q, productCode)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var records []model.DeadStockRecord
-	for rows.Next() {
-		var r model.DeadStockRecord
-		if err := rows.Scan(&r.ID, &r.StockQuantityJan, &r.ExpiryDate, &r.LotNumber); err != nil {
-			return nil, err
-		}
-		records = append(records, r)
-	}
-	return records, nil
 }
 
 /**

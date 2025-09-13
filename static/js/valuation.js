@@ -1,5 +1,7 @@
 // C:\Dev\WASABI\static\js\valuation.js
-import { hiraganaToKatakana } from './utils.js';
+// ▼▼▼ [修正点] getLocalDateString をインポート ▼▼▼
+import { hiraganaToKatakana, getLocalDateString } from './utils.js';
+// ▲▲▲ 修正ここまで ▲▲▲
 import { showModal } from './inout_modal.js';
 let view, dateInput, runBtn, outputContainer, kanaNameInput, dosageFormInput, exportBtn;
 let reportDataCache = null;
@@ -183,7 +185,9 @@ export function initValuationView() {
     dosageFormInput = document.getElementById('val-dosageForm');
     exportBtn = document.getElementById('export-valuation-btn');
 
-    dateInput.value = new Date().toISOString().slice(0, 10);
+    // ▼▼▼ [修正点] 日付設定処理を新しい関数に置き換え ▼▼▼
+    dateInput.value = getLocalDateString();
+    // ▲▲▲ 修正ここまで ▲▲▲
     runBtn.addEventListener('click', runCalculation);
     exportBtn.addEventListener('click', handleExport);
 

@@ -1,4 +1,4 @@
-// C:\Dev\WASABI\reprocess\handler.go
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\reprocess\handler.go
 
 package reprocess
 
@@ -13,8 +13,6 @@ import (
 	"wasabi/model"
 )
 
-// ▼▼▼ [修正点] ファイル全体を、新しい ProcessTransactionsHandler のみに修正 ▼▼▼
-
 // ProcessTransactionsHandler は全ての取引データを最新のマスター情報で更新します。
 func ProcessTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -26,12 +24,7 @@ func ProcessTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		mastersMap := make(map[string]*model.ProductMaster)
 		for _, m := range allMasters {
-			// 仮マスター用の合成キーもマップに追加
-			key := m.ProductCode
-			if m.Origin == "PROVISIONAL" {
-				key = fmt.Sprintf("9999999999999%s", m.ProductName)
-			}
-			mastersMap[key] = m
+			mastersMap[m.ProductCode] = m
 		}
 
 		// 全ての取引レコードを取得
@@ -44,12 +37,12 @@ func ProcessTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 
 		var allRecords []model.TransactionRecord
 		for rows.Next() {
-			r, err := db.ScanTransactionRecord(rows)
+			rec, err := db.ScanTransactionRecord(rows)
 			if err != nil {
 				http.Error(w, "Failed to scan transaction record: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
-			allRecords = append(allRecords, *r)
+			allRecords = append(allRecords, *rec)
 		}
 
 		if len(allRecords) == 0 {
@@ -75,27 +68,39 @@ func ProcessTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 			}
 
 			for _, rec := range batch {
-				key := rec.JanCode
-				if key == "" || key == "0000000000000" {
-					key = fmt.Sprintf("9999999999999%s", rec.ProductName)
-				}
-				master, ok := mastersMap[key]
+				// ▼▼▼【ここからが修正箇所です】▼▼▼
+				master, ok := mastersMap[rec.JanCode]
 				if !ok {
+					// 対応するマスターが見つからない場合はスキップ
 					continue
 				}
 
+				// 1. 最新のマスター情報をレコードにマッピング
 				mappers.MapProductMasterToTransaction(&rec, master)
-				// JCSHMSマスターが見つかったPROVISIONALレコードはCOMPLETEに更新
+
+				// 2. 数量と金額を再計算
+				// YJ数量は「JAN数量 × 最新マスターの内包装数量」で再計算
+				if rec.JanQuantity > 0 && master.JanPackInnerQty > 0 {
+					rec.YjQuantity = rec.JanQuantity * master.JanPackInnerQty
+				}
+				// 金額は「新しいYJ数量 × 最新マスターの薬価」で再計算
+				if rec.Flag == 3 { // 処方の場合
+					rec.Subtotal = rec.YjQuantity * master.NhiPrice
+				}
+
+				// 3. 処理ステータスを更新
 				if rec.ProcessFlagMA == "PROVISIONAL" && master.Origin == "JCSHMS" {
 					rec.ProcessFlagMA = "COMPLETE"
 				}
 
+				// 4. データベースを更新
 				if err := db.UpdateFullTransactionInTx(tx, &rec); err != nil {
 					tx.Rollback()
 					http.Error(w, fmt.Sprintf("Failed to update record ID %d: %v", rec.ID, err), http.StatusInternalServerError)
 					return
 				}
 				updatedCount++
+				// ▲▲▲【修正ここまで】▲▲▲
 			}
 
 			if err := tx.Commit(); err != nil {
@@ -112,5 +117,3 @@ func ProcessTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 		})
 	}
 }
-
-// ▲▲▲ 修正ここまで ▲▲▲

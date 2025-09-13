@@ -1,3 +1,5 @@
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\utils.js
+
 /**
  * 文字列内のひらがなをカタカナに変換します。
  * @param {string} str 変換する文字列
@@ -10,3 +12,17 @@ export function hiraganaToKatakana(str) {
         return String.fromCharCode(charCode);
     }); 
 }
+
+// ▼▼▼ [ここから追加] ▼▼▼
+/**
+ * 現在のPCのローカル日付を 'YYYY-MM-DD' 形式の文字列で返します。
+ * @returns {string} 'YYYY-MM-DD' 形式の文字列
+ */
+export function getLocalDateString() {
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+}
+// ▲▲▲ [追加ここまで] ▲▲▲

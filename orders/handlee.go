@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+	"wasabi/config"
 	"wasabi/db"
 	"wasabi/model"
 	"wasabi/units"
@@ -33,8 +34,7 @@ type OrderCandidatePackageGroup struct {
 // GenerateOrderCandidatesHandler は発注候補を生成して返します。
 func GenerateOrderCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		startDate := r.URL.Query().Get("startDate")
-		endDate := r.URL.Query().Get("endDate")
+		// ▼▼▼【ここから修正】▼▼▼
 		kanaName := r.URL.Query().Get("kanaName")
 		dosageForm := r.URL.Query().Get("dosageForm")
 		coefficientStr := r.URL.Query().Get("coefficient")
@@ -43,10 +43,21 @@ func GenerateOrderCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 			coefficient = 1.3
 		}
 
-		// ▼▼▼ 修正箇所 ▼▼▼
+		// 設定ファイルから集計日数を読み込む
+		cfg, err := config.LoadConfig()
+		if err != nil {
+			http.Error(w, "設定ファイルの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// 日数から期間を動的に計算
+		now := time.Now()
+		endDate := "99991231" // 終了日は無制限
+		startDate := now.AddDate(0, 0, -cfg.CalculationPeriodDays)
+
 		// パラメータをフィルタ用の構造体にまとめる
 		filters := model.AggregationFilters{
-			StartDate:   startDate,
+			StartDate:   startDate.Format("20060102"),
 			EndDate:     endDate,
 			KanaName:    kanaName,
 			DosageForm:  dosageForm,
@@ -59,7 +70,7 @@ func GenerateOrderCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
+		// ▲▲▲【修正ここまで】▲▲▲
 
 		var candidates []OrderCandidateYJGroup
 		for _, group := range yjGroups {
@@ -75,7 +86,6 @@ func GenerateOrderCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 						Masters:                 []model.ProductMasterView{},
 					}
 					for _, master := range pkg.Masters {
-						// ▼▼▼ [修正点] 組み立て包装の生成に必要なデータを全て渡すように修正 ▼▼▼
 						tempJcshms := model.JCShms{
 							JC037: master.PackageForm,
 							JC039: master.YjUnitName,
@@ -84,7 +94,6 @@ func GenerateOrderCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 							JA008: sql.NullFloat64{Float64: master.JanPackUnitQty, Valid: true},
 							JA007: sql.NullString{String: fmt.Sprintf("%d", master.JanUnitCode), Valid: true},
 						}
-						// ▲▲▲ 修正ここまで ▲▲▲
 						formattedSpec := units.FormatPackageSpec(&tempJcshms)
 
 						newPkgGroup.Masters = append(newPkgGroup.Masters, model.ProductMasterView{
@@ -116,7 +125,6 @@ func GenerateOrderCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// ▼▼▼ [修正点] PlaceOrderHandlerを新しいテーブル構造に合わせて修正 ▼▼▼
 // PlaceOrderHandler は発注内容を受け取り、発注残テーブルに登録します。
 func PlaceOrderHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

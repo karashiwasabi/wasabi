@@ -15,6 +15,11 @@ type Config struct {
 	EmednetPassword string `json:"emednetPassword"`
 	EdeUserID       string `json:"edeUserId"`
 	EdePassword     string `json:"edePassword"`
+	UsageFolderPath string `json:"usageFolderPath"`
+	// ▼▼▼【ここから修正】▼▼▼
+	// 2つの日付フィールドを削除し、集計日数を保持するフィールドを1つ追加
+	CalculationPeriodDays int `json:"calculationPeriodDays"`
+	// ▲▲▲【修正ここまで】▲▲▲
 }
 
 var (
@@ -43,7 +48,10 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			// ファイルが存在しないのは初回起動時などの正常なケースなのでエラーとはしない
-			return Config{}, nil
+			return Config{
+				// ▼▼▼【修正】日数のデフォルト値を設定 ▼▼▼
+				CalculationPeriodDays: 90,
+			}, nil
 		}
 		return Config{}, err
 	}

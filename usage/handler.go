@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os" // osパッケージをインポート
 	"wasabi/db"
 	"wasabi/mappers"
 	"wasabi/mastermanager"
@@ -15,7 +16,6 @@ import (
 	"wasabi/parsers"
 )
 
-// ▼▼▼ [修正点] INSERT文から processing_status と対応するプレースホルダを削除 ▼▼▼
 const insertTransactionQuery = `
 INSERT OR REPLACE INTO transaction_records (
     transaction_date, client_code, receipt_number, line_number, flag,
@@ -27,46 +27,43 @@ INSERT OR REPLACE INTO transaction_records (
     flag_stimulant_raw, process_flag_ma
 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 
-// ▲▲▲ 修正ここまで ▲▲▲
-
-// UploadUsageHandler handles the USAGE file upload process.
+// UploadUsageHandler は指定された固定パスからUSAGEファイルを読み込み処理します。
 func UploadUsageHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// ▼▼▼【ここからが修正箇所です】▼▼▼
+
+		// Step 1: ユーザーに指示された固定ファイルパスを定義
+		const targetFile = `C:\Users\wasab\OneDrive\デスクトップ\WASABI\download\USAGE\usage.csv`
+
+		log.Printf("Processing fixed USAGE file: %s", targetFile)
+		file, err := os.Open(targetFile)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("指定されたUSAGEファイルのオープンに失敗しました: %s。パスを確認してください。", targetFile), http.StatusInternalServerError)
+			return
+		}
+		defer file.Close()
+
+		// Step 2: ファイルをパースする
+		parsed, err := parsers.ParseUsage(file)
+		if err != nil {
+			http.Error(w, "USAGEファイルの解析に失敗しました: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		// ▲▲▲【修正ここまで】▲▲▲
+
+		// Step 3: これ以降は既存のDB登録ロジックを流用
 		var originalJournalMode string
 		conn.QueryRow("PRAGMA journal_mode").Scan(&originalJournalMode)
-
 		conn.Exec("PRAGMA journal_mode = MEMORY;")
 		conn.Exec("PRAGMA synchronous = OFF;")
-
 		defer func() {
 			conn.Exec("PRAGMA synchronous = FULL;")
 			conn.Exec(fmt.Sprintf("PRAGMA journal_mode = %s;", originalJournalMode))
 			log.Println("Database settings restored for USAGE handler.")
 		}()
 
-		if err := r.ParseMultipartForm(32 << 20); err != nil {
-			http.Error(w, "File upload error: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-		defer r.MultipartForm.RemoveAll()
-
-		var allParsed []model.UnifiedInputRecord
-		for _, fh := range r.MultipartForm.File["file"] {
-			f, err := fh.Open()
-			if err != nil {
-				log.Printf("Failed to open file %s: %v", fh.Filename, err)
-				continue
-			}
-			defer f.Close()
-			recs, err := parsers.ParseUsage(f)
-			if err != nil {
-				log.Printf("Failed to parse file %s: %v", fh.Filename, err)
-				continue
-			}
-			allParsed = append(allParsed, recs...)
-		}
-
-		filtered := removeUsageDuplicates(allParsed)
+		filtered := removeUsageDuplicates(parsed)
 
 		if len(filtered) == 0 {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -80,6 +77,7 @@ func UploadUsageHandler(conn *sql.DB) http.HandlerFunc {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
+		defer tx.Rollback()
 
 		minDate, maxDate := "99999999", "00000000"
 		for _, rec := range filtered {
@@ -142,8 +140,13 @@ func UploadUsageHandler(conn *sql.DB) http.HandlerFunc {
 
 		for i, rec := range filtered {
 			ar := model.TransactionRecord{
-				TransactionDate: rec.Date, Flag: 3, JanCode: rec.JanCode, YjCode: rec.YjCode,
-				ProductName: rec.ProductName, YjQuantity: rec.YjQuantity, YjUnitName: rec.YjUnitName,
+				TransactionDate: rec.Date,
+				Flag:            3,
+				JanCode:         rec.JanCode,
+				YjCode:          rec.YjCode,
+				ProductName:     rec.ProductName,
+				YjQuantity:      rec.YjQuantity,
+				YjUnitName:      rec.YjUnitName,
 			}
 
 			master, err := mastermanager.FindOrCreate(tx, rec.JanCode, rec.ProductName, mastersMap, jcshmsMap)
@@ -154,15 +157,12 @@ func UploadUsageHandler(conn *sql.DB) http.HandlerFunc {
 			}
 
 			mappers.MapProductMasterToTransaction(&ar, master)
-			// ▼▼▼ [修正点] ProcessingStatusの設定を削除 ▼▼▼
 			if master.Origin == "JCSHMS" {
 				ar.ProcessFlagMA = "COMPLETE"
 			} else {
 				ar.ProcessFlagMA = "PROVISIONAL"
 			}
-			// ▲▲▲ 修正ここまで ▲▲▲
 
-			// ▼▼▼ [修正点] Execの引数から ar.ProcessingStatus を削除 ▼▼▼
 			_, err = stmt.Exec(
 				ar.TransactionDate, ar.ClientCode, ar.ReceiptNumber, ar.LineNumber, ar.Flag,
 				ar.JanCode, ar.YjCode, ar.ProductName, ar.KanaName, ar.UsageClassification, ar.PackageForm, ar.PackageSpec, ar.MakerName,
@@ -172,7 +172,6 @@ func UploadUsageHandler(conn *sql.DB) http.HandlerFunc {
 				ar.FlagDeleterious, ar.FlagNarcotic, ar.FlagPsychotropic, ar.FlagStimulant,
 				ar.FlagStimulantRaw, ar.ProcessFlagMA,
 			)
-			// ▲▲▲ 修正ここまで ▲▲▲
 			if err != nil {
 				tx.Rollback()
 				http.Error(w, fmt.Sprintf("Failed to insert record for JAN %s: %v", ar.JanCode, err), http.StatusInternalServerError)

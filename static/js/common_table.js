@@ -1,4 +1,7 @@
 import { clientMap, wholesalerMap } from './master_data.js';
+// ▼▼▼ [修正点] getLocalDateString をインポート ▼▼▼
+import { getLocalDateString } from './utils.js';
+// ▲▲▲ 修正ここまで ▲▲▲
 
 export const transactionTypeMap = { 
     0: "棚卸", 1: "納品", 2: "返品", 3: "処方", 4: "棚卸増", 
@@ -117,6 +120,7 @@ export function setupDateDropdown(inputEl) {
 }
 
 export async function setupClientDropdown(selectEl) { 
+  // ▼▼▼ [修正点] 関数内の変数がすべて正しい `selectEl` を参照していることを確認 ▼▼▼
   if (!selectEl) return; 
   const preservedOptions = Array.from(selectEl.querySelectorAll('option[value=""]')); 
   selectEl.innerHTML = ''; 
@@ -136,4 +140,5 @@ export async function setupClientDropdown(selectEl) {
   } catch (err) { 
     console.error("得意先リストの取得に失敗:", err);
   }
+  // ▲▲▲ 修正ここまで ▲▲▲
 }

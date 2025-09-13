@@ -5,10 +5,12 @@ package returns
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt" // fmtパッケージをインポート
+	"fmt"
 	"net/http"
 	"strconv"
-	"strings" // stringsパッケージをインポート
+	"strings"
+	"time" // time パッケージをインポート
+	"wasabi/config"
 	"wasabi/db"
 	"wasabi/model"
 )
@@ -23,15 +25,28 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 			coefficient = 1.5
 		}
 
+		// ▼▼▼【ここから修正】▼▼▼
+		// 設定ファイルから集計日数を読み込む
+		cfg, err := config.LoadConfig()
+		if err != nil {
+			http.Error(w, "設定ファイルの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// 日数から期間を動的に計算
+		now := time.Now()
+		endDate := "99991231" // 終了日は無制限
+		startDate := now.AddDate(0, 0, -cfg.CalculationPeriodDays)
+		startDateStr := startDate.Format("20060102")
+
+		// フィルタ構造体に計算した値を使用する
 		filters := model.AggregationFilters{
-			StartDate:   q.Get("startDate"),
-			EndDate:     q.Get("endDate"),
+			StartDate:   startDateStr,
+			EndDate:     endDate,
 			KanaName:    q.Get("kanaName"),
 			DosageForm:  q.Get("dosageForm"),
 			Coefficient: coefficient,
 		}
-
-		// ▼▼▼ [修正点] ロジックを全面的に書き換え ▼▼▼
 
 		// ステップ1: 過去のデータから使用量を分析し、発注点を計算する
 		yjGroups, err := db.GetStockLedger(conn, filters)
@@ -39,6 +54,7 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 			http.Error(w, "Failed to get stock ledger: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		// ▲▲▲【修正ここまで】▲▲▲
 
 		// ステップ2: 「今現在」のリアルタイム在庫と発注残を別途取得する
 		currentStockMap, err := db.GetAllCurrentStockMap(conn)
@@ -80,14 +96,15 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 
 						// ▼▼▼ [追加ロジック] 納品履歴を取得する ▼▼▼
 						if len(productCodesInPackage) > 0 {
-							deliveryHistory, err := getDeliveryHistory(conn, productCodesInPackage, filters.StartDate, filters.EndDate)
+							// ▼▼▼【修正】getDeliveryHistoryに渡す期間を動的に計算した値に変更 ▼▼▼
+							deliveryHistory, err := getDeliveryHistory(conn, productCodesInPackage, startDateStr, endDate)
 							if err != nil {
 								// エラーが発生しても処理は続行するが、ログには残す
 								fmt.Printf("WARN: Failed to get delivery history for package %s: %v\n", pkg.PackageKey, err)
 							}
 							pkg.DeliveryHistory = deliveryHistory
 						}
-						// ▲▲▲ 追加ロジックここまで ▲▲▲
+						// ▲▲▲【修正ここまで】▲▲▲
 
 						returnablePackages = append(returnablePackages, pkg)
 						isGroupAdded = true
@@ -101,7 +118,6 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 				returnCandidates = append(returnCandidates, newGroup)
 			}
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(returnCandidates)
@@ -137,5 +153,3 @@ func getDeliveryHistory(conn *sql.DB, productCodes []string, startDate, endDate 
 	}
 	return records, nil
 }
-
-// ▲▲▲ 追加関数ここまで ▲▲▲

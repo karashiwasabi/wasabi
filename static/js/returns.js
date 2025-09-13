@@ -1,7 +1,10 @@
 // C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\returns.js
 
 import { createUploadTableHTML, renderUploadTableRows } from './common_table.js';
-import { hiraganaToKatakana } from './utils.js';
+// ▼▼▼ [修正点] getLocalDateString をインポート ▼▼▼
+import { hiraganaToKatakana, getLocalDateString } from './utils.js';
+// ▲▲▲ 修正ここまで ▲▲▲
+
 
 function formatBalance(balance) {
     if (typeof balance === 'number') {
@@ -73,28 +76,20 @@ function renderReturnCandidates(data, container) {
 export function initReturnsView() {
     const view = document.getElementById('returns-view');
     if (!view) return;
-
     const runBtn = document.getElementById('run-returns-list-btn');
     const outputContainer = document.getElementById('returns-list-output-container');
-    const startDateInput = document.getElementById('ret-startDate');
-    const endDateInput = document.getElementById('ret-endDate');
+    // ▼▼▼【修正】startDateInput, endDateInput の取得を削除 ▼▼▼
     const kanaNameInput = document.getElementById('ret-kanaName');
     const dosageFormInput = document.getElementById('ret-dosageForm');
     const coefficientInput = document.getElementById('ret-coefficient');
     const printBtn = document.getElementById('print-returns-list-btn');
 
-    // ▼▼▼ [ここから修正] ▼▼▼
-    const today = new Date();
-    const threeMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 3, 1); // 3ヶ月前の1日
-    endDateInput.value = new Date().toISOString().slice(0, 10);
-    startDateInput.value = threeMonthsAgo.toISOString().slice(0, 10);
-    // ▲▲▲ [修正ここまで] ▲▲▲
+    // ▼▼▼【修正】日付のデフォルト値設定ロジックを削除 ▼▼▼
 
     runBtn.addEventListener('click', async () => {
         window.showLoading();
+        // ▼▼▼【修正】URLSearchParamsからstartDateとendDateを削除 ▼▼▼
         const params = new URLSearchParams({
-            startDate: startDateInput.value.replace(/-/g, ''),
-            endDate: endDateInput.value.replace(/-/g, ''),
             kanaName: hiraganaToKatakana(kanaNameInput.value),
             dosageForm: dosageFormInput.value,
             coefficient: coefficientInput.value,

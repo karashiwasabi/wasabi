@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>WASABI</title>
-    <script src="https://cdn.jsdelivr.net/npm/encoding-japanese@2.1.0/encoding.min.js"></script>
+    <script src="/static/js/encoding.min.js"></script>
     <link rel="stylesheet" href="/static/css/styles.css">
     <link rel="stylesheet" href="/static/css/inout.css">
 </head>
@@ -19,6 +19,7 @@
     <button id="inventoryBtn" class="btn btn-green">棚卸読込</button>
     <button id="manualInventoryBtn" class="btn btn-green">棚卸入力</button>
     <button id="inventoryAdjustmentBtn" class="btn btn-green">棚卸調整</button>
+    <button id="inventoryHistoryBtn" class="btn btn-green">棚卸履歴</button>
     <button id="aggregationBtn" class="btn btn-spring-green">集計</button>
     <button id="valuationBtn" class="btn btn-spring-green">在庫評価</button>
     <button id="orderBtn" class="btn btn-orange">発注</button>
@@ -95,54 +96,49 @@
     </div>
 </div>
 
-    <div id="inventory-adjustment-view" class="hidden inout-view-container">
+<div id="inventory-adjustment-view" class="hidden inout-view-container">
     <p class="view-title">棚卸調整</p>
-        <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
-            <div class="field-group">
-                <label for="ia-dosageForm">1. 剤型で絞り込み</label>
-                <select id="ia-dosageForm">
-                    <option value="">すべて</option>
-                    <option value="内">内</option>
-                    <option value="外">外</option>
-                    <option value="歯">歯</option>
-                    <option value="注">注</option>
-                    <option value="機">機</option>
-                    <option value="他">他</option>
-                </select>
-            </div>
-            <div class="field-group">
-                <label for="ia-kanaInitial">2. カナ名 (頭文字)</label>
-                <select id="ia-kanaInitial">
-                    <option value="">すべて</option>
-                    <option value="ア">ア行</option>
-                    <option value="カ">カ行</option>
-                    <option value="サ">サ行</option>
-                    <option value="タ">タ行</option>
-                    <option value="ナ">ナ行</option>
-                    <option value="ハ">ハ行</option>
-                    <option value="マ">マ行</option>
-                    <option value="ヤ">ヤ行</option>
-                    <option value="ラ">ラ行</option>
-                    <option value="ワ">ワ行</option>
-                </select>
-            </div>
-            <div class="field-group">
-                 <label>3. 品目を選択</label>
-                <button id="ia-select-product-btn" class="btn">品目を選択...</button>
-            </div>
-            <div class="field-group" style="margin-left: auto;">
-                <label for="ia-startDate">期間 開始</label>
-                <input type="date" id="ia-startDate">
-            </div>
-            <div class="field-group">
-                <label for="ia-endDate">期間 終了</label>
-                <input type="date" id="ia-endDate">
-            </div>
+    <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
+        <div class="field-group">
+            <label for="ia-dosageForm">1. 剤型で絞り込み</label>
+            <select id="ia-dosageForm">
+                <option value="">すべて</option>
+                <option value="内">内</option>
+                <option value="外">外</option>
+                <option value="歯">歯</option>
+                <option value="注">注</option>
+                <option value="機">機</option>
+                <option value="他">他</option>
+            </select>
         </div>
-        <div id="inventory-adjustment-output">
-            <p>フィルターで品目を選択してください。</p>
+        <div class="field-group">
+            <label for="ia-kanaInitial">2. カナ名 (頭文字)</label>
+            <select id="ia-kanaInitial">
+                <option value="">すべて</option>
+                <option value="ア">ア行</option>
+                <option value="カ">カ行</option>
+                <option value="サ">サ行</option>
+                <option value="タ">タ行</option>
+                <option value="ナ">ナ行</option>
+                <option value="ハ">ハ行</option>
+                <option value="マ">マ行</option>
+                <option value="ヤ">ヤ行</option>
+                <option value="ラ">ラ行</option>
+                <option value="ワ">ワ行</option>
+            </select>
+        </div>
+        <div class="field-group">
+            <label><input type="checkbox" id="ia-dead-stock-only"> デッドリストのみ</label>
+        </div>
+        <div class="field-group">
+            <label>3. 品目を選択</label>
+            <button id="ia-select-product-btn" class="btn">品目を選択...</button>
         </div>
     </div>
+    <div id="inventory-adjustment-output">
+        <p>フィルターで品目を選択してください。</p>
+    </div>
+</div>
 
 <div id="search-modal" class="modal-overlay hidden">
     <div class="modal-content">
@@ -274,6 +270,30 @@
             </p>
         </fieldset>
 
+<fieldset style="margin-top: 20px;">
+            <legend>集計期間設定</legend>
+            <p style="font-size: 11px; margin-bottom: 10px;">
+                各機能で参照する期間を、本日を基準とした日数で指定します。<br>
+                <b>開始日</b>は「本日 - 指定日数」、<b>終了日</b>は「無制限（最新データまで）」として自動計算されます。
+            </p>
+            <div class="field-group">
+                <label for="calculationPeriodDays">集計期間日数（例: 90日）</label>
+                <input type="number" id="calculationPeriodDays" style="width: 150px;">
+            </div>
+        </fieldset>
+
+
+        <fieldset style="margin-top: 20px;">
+    <legend>ファイルパス設定</legend>
+    <div class="field-group">
+        <label for="usageFolderPath">USAGEファイル取込パス</label>
+        <input type="text" id="usageFolderPath" style="width: 500px;" placeholder="例: C:\medicom\USAGE_FILES">
+    </div>
+    <p style="font-size: 11px; margin-top: 5px;">
+        処方データを自動で取り込むためのフォルダパスを指定します。指定されたフォルダ内で最も新しいファイルが読み込まれます。
+    </p>
+</fieldset>
+
         <div class="buttons-group" style="margin-top: 20px;">
             <button id="saveSettingsBtn" class="btn" style="background-color: #0d6efd; color: white;">設定を保存</button>
         </div>
@@ -281,14 +301,6 @@
 </div>
 <div id="deadstock-view" class="hidden">
     <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
-        <div class="field-group">
-            <label for="ds-startDate">期間 開始</label>
-            <input type="date" id="ds-startDate">
-        </div>
-        <div class="field-group">
-            <label for="ds-endDate">期間 終了</label>
-            <input type="date" id="ds-endDate">
-        </div>
         <div class="field-group">
             <label for="ds-kanaName">製品名/カナ名</label>
             <input type="text" id="ds-kanaName" placeholder="（部分一致）">
@@ -312,21 +324,15 @@
             <button id="run-dead-stock-btn" class="btn">リスト作成</button>
             <button id="import-deadstock-btn" class="btn">CSV読込</button>
             <button id="create-deadstock-csv-btn" class="btn">CSV作成</button>
+            <button id="print-deadstock-btn" class="btn">印刷</button>
         </div>
     </div>
     <div id="deadstock-output-container"></div>
+    <div id="deadstock-print-area" class="hidden"></div>
 </div>
 
 <div id="order-view" class="hidden">
     <div class="controls-grid" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
-        <div class="field-group">
-            <label for="order-startDate">期間 開始</label>
-            <input type="date" id="order-startDate">
-        </div>
-        <div class="field-group">
-            <label for="order-endDate">期間 終了</label>
-            <input type="date" id="order-endDate">
-        </div>
         <div class="field-group">
             <label for="order-kanaName">薬品名カナ</label>
             <input type="text" id="order-kanaName" placeholder="（前方一致）">
@@ -414,8 +420,6 @@
 
 <div id="aggregation-view" class="hidden">
     <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
-            <div class="field-group"><label for="startDate">開始日</label><input type="date" id="startDate"></div>
-            <div class="field-group"><label for="endDate">終了日</label><input type="date" id="endDate"></div>
             
             <div class="field-group">
                 <label for="agg-kanaName">製品名/カナ名</label>
@@ -497,14 +501,6 @@
 <div id="returns-view" class="hidden">
         <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
             <div class="field-group">
-                <label for="ret-startDate">期間 開始</label>
-                <input type="date" id="ret-startDate">
-            </div>
-            <div class="field-group">
-                <label for="ret-endDate">期間 終了</label>
-                <input type="date" id="ret-endDate">
-            </div>
-            <div class="field-group">
                 <label for="ret-kanaName">薬品名カナ</label>
                 <input type="text" id="ret-kanaName" placeholder="（前方一致）">
             </div>
@@ -534,6 +530,20 @@
         </div>
 </div>
 
+    <div id="inventory-history-view" class="hidden">
+        <p class="view-title">棚卸履歴の修正・削除</p>
+        <div class="filter-container" style="display: flex; gap: 10px; align-items: flex-end; border: 1px solid #ccc; padding: 10px; margin-bottom: 15px;">
+            <div class="field-group">
+                <label for="history-inv-date">日付</label>
+                <input type="date" id="history-inv-date">
+            </div>
+            <button id="history-inv-show-btn" class="btn">表示</button>
+        </div>
+        <div id="inventory-history-output">
+            <p>日付を選択して「表示」ボタンを押してください。</p>
+        </div>
+    </div>
+
 <input type="file" id="importClientsInput" style="display:none;" accept=".csv">
 <input type="file" id="importDeadstockInput" style="display:none;" accept=".csv">
 <input type="file" id="importProductsInput" style="display:none;" accept=".csv">
@@ -542,7 +552,10 @@
 
 </main>
 
-<div id="loading-overlay" class="hidden"><div class="spinner"></div><p>Processing...</p></div>
+<div id="loading-overlay" class="hidden">
+    <div class="spinner"></div>
+    <p id="loading-message">Processing...</p>
+</div>
 <div id="notification-box" class="notification-box"></div>
 
 <script type="module" src="/static/js/app.js"></script>

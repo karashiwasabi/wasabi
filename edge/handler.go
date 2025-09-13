@@ -1,5 +1,7 @@
 // C:\Users\wasab\OneDrive\デスクトップ\WASABI\edge\handler.go
 
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\edge\handler.go
+
 package edge
 
 import (
@@ -19,6 +21,8 @@ import (
 	"wasabi/dat"
 
 	"github.com/chromedp/cdproto/browser"
+	// [修正] JavaScriptダイアログを扱うために "page" パッケージをインポートします
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
 
@@ -49,6 +53,8 @@ func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 			chromedp.Flag("no-sandbox", true),
 			chromedp.Flag("no-first-run", true),
 			chromedp.Flag("no-default-browser-check", true),
+			// [修正] ブラウザのセキュリティ機能を無効化し、安定性を向上させます
+			chromedp.Flag("disable-features", "RendererCodeIntegrity"),
 			chromedp.UserAgent(`Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36`),
 		)
 
@@ -74,11 +80,20 @@ func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 
 		var downloadedFilePath string
 		done := make(chan string, 1)
+		// [修正] 自動でダイアログを処理するリスナーを追加します
 		chromedp.ListenTarget(ctx, func(ev interface{}) {
 			if e, ok := ev.(*browser.EventDownloadProgress); ok {
 				if e.State == browser.DownloadProgressStateCompleted {
 					done <- e.GUID
 				}
+			}
+			// JavaScriptの確認ダイアログが開いた場合に自動でOKを押します
+			if _, ok := ev.(*page.EventJavascriptDialogOpening); ok {
+				go func() {
+					if err := chromedp.Run(ctx, page.HandleJavaScriptDialog(true)); err != nil {
+						log.Printf("could not handle javascript dialog: %v", err)
+					}
+				}()
 			}
 		})
 
@@ -96,9 +111,12 @@ func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 			chromedp.Click(`//a[contains(@href, "busi_id=11")]`),
 			chromedp.WaitVisible(`//a[contains(text(), "納品受信(JAN)")]`),
 			chromedp.Click(`//a[contains(text(), "納品受信(JAN)")]`),
-			chromedp.WaitVisible(`input[value="未受信データ全件受信"]`),
+			// ▼▼▼【ここからが修正箇所です】▼▼▼
+			// [修正] ボタンの特定方法を、表示テキスト(value)からより確実なname属性に変更します
+			chromedp.WaitReady(`input[name="unreceive_button"]`),
 			chromedp.Text(`table.result-list-table tbody tr:first-child td.col-transceiving-date`, &initialLatestTimestamp),
-			chromedp.Click(`input[value="未受信データ全件受信"]`),
+			chromedp.Click(`input[name="unreceive_button"]`),
+			// ▲▲▲【修正ここまで】▲▲▲
 			chromedp.Sleep(3*time.Second),
 		)
 
@@ -184,6 +202,8 @@ func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 		})
 	}
 }
+
+// ... (renameDownloadedFile and findEdgePath functions remain unchanged) ...
 
 func renameDownloadedFile(originalPath string) (string, error) {
 	file, err := os.Open(originalPath)
