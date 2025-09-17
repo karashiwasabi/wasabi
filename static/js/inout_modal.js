@@ -33,10 +33,15 @@ async function performSearch() {
   // ▼▼▼ [修正点] 検索実行時にカナ変換 ▼▼▼
   const query = hiraganaToKatakana(searchInput.value.trim());
   // ▲▲▲ 修正ここまで ▲▲▲
-  if (query.length < 2 && query.length > 0) { // 1文字での検索は許可しないが、空欄での検索は（全件表示として）許可する場合
-    alert('2文字以上入力してください。');
+   // ▼▼▼【ここから修正】▼▼▼
+  // 検索文字が2文字未満の場合はAPIを呼び出さずに処理を中断する
+  if (query.length < 2) {
+    alert('検索キーワードを2文字以上入力してください。');
+    // 検索結果をクリアしてメッセージを表示
+    searchResultsBody.innerHTML = '<tr><td colspan="6" class="center">2文字以上入力して検索してください。</td></tr>';
     return;
   }
+  // ▲▲▲【修正ここまで】▲▲▲
   const searchApi = modal.dataset.searchApi || DEFAULT_SEARCH_API;
   searchResultsBody.innerHTML = '<tr><td colspan="6" class="center">検索中...</td></tr>';
   

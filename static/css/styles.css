@@ -228,5 +228,11 @@ th { text-align: center; background-color: #f0f0f0; }
   .print-this-view tr {
     page-break-inside: avoid;
   }
+    /* ▼▼▼【ここに追加】▼▼▼ */
+  /* デッドストックリストの印刷時に、期間前取引履歴を非表示にする */
+  .print-this-view .recent-history-container {
+    display: none !important;
+  }
+  /* ▲▲▲【追加ここまで】▲▲▲ */
 }
 /* ▲▲▲ 修正ここまで ▲▲▲ */

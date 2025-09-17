@@ -503,3 +503,87 @@ func DeleteTransactionByIDInTx(tx *sql.Tx, id int) error {
 }
 
 // ▲▲▲【追加ここまで】▲▲▲
+
+/**
+ * @brief 指定された製品の最新の棚卸レコードを取得します。
+ * @param conn データベース接続
+ * @param janCode 検索対象のJANコード
+ * @return *model.TransactionRecord 見つかった最新の棚卸レコード。存在しない場合はnil。
+ * @return error 処理中にエラーが発生した場合
+ */
+func GetLatestInventoryRecord(conn *sql.DB, janCode string) (*model.TransactionRecord, error) {
+	q := `SELECT ` + TransactionColumns + ` FROM transaction_records 
+		  WHERE jan_code = ? AND flag = 0 
+		  ORDER BY transaction_date DESC, id DESC LIMIT 1`
+
+	row := conn.QueryRow(q, janCode)
+	rec, err := ScanTransactionRecord(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // 棚卸履歴がない場合はエラーとしない
+		}
+		return nil, fmt.Errorf("failed to get latest inventory for %s: %w", janCode, err)
+	}
+	return rec, nil
+}
+
+/**
+ * @brief 指定された製品の、特定の日付以降の全取引レコードを取得します。
+ * @param conn データベース接続
+ * @param janCode 検索対象のJANコード
+ * @param date 開始日 (この日付は含まない YYYYMMDD)
+ * @return []model.TransactionRecord 取引レコードのスライス
+ * @return error 処理中にエラーが発生した場合
+ */
+func GetAllTransactionsForProductAfterDate(conn *sql.DB, janCode string, date string) ([]model.TransactionRecord, error) {
+	q := `SELECT ` + TransactionColumns + ` FROM transaction_records 
+		  WHERE jan_code = ? AND transaction_date > ? AND flag != 0
+		  ORDER BY transaction_date, id`
+
+	rows, err := conn.Query(q, janCode, date)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get transactions after date for %s: %w", janCode, err)
+	}
+	defer rows.Close()
+
+	var records []model.TransactionRecord
+	for rows.Next() {
+		r, err := ScanTransactionRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, *r)
+	}
+	return records, nil
+}
+
+/**
+ * @brief 指定された製品の、特定期間内の全取引レコードを日付の降順で取得します。
+ * @param conn データベース接続
+ * @param janCode 検索対象のJANコード
+ * @param startDate 開始日 (YYYYMMDD)
+ * @param endDate 終了日 (YYYYMMDD)
+ * @return []model.TransactionRecord 取引レコードのスライス
+ * @return error 処理中にエラーが発生した場合
+ */
+func GetTransactionsForProductInDateRange(conn *sql.DB, janCode string, startDate string, endDate string) ([]model.TransactionRecord, error) {
+	q := `SELECT ` + TransactionColumns + ` FROM transaction_records 
+		  WHERE jan_code = ? AND transaction_date BETWEEN ? AND ?
+		  ORDER BY transaction_date DESC, id DESC`
+
+	rows, err := conn.Query(q, janCode, startDate, endDate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get transactions in date range for %s: %w", janCode, err)
+	}
+	defer rows.Close()
+
+	var records []model.TransactionRecord
+	for rows.Next() {
+		r, err := ScanTransactionRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, *r)
+	}
+	return records, nil
+}

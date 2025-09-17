@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time" // time パッケージをインポート
+	"time"
 	"wasabi/config"
 	"wasabi/db"
 	"wasabi/model"
@@ -42,31 +42,28 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 		kanaInitial := q.Get("kanaInitial")
 		searchQuery := q.Get("q")
 		isDeadStockOnly := q.Get("deadStockOnly") == "true"
+		drugTypesParam := q.Get("drugTypes")
 
 		var results []model.ProductMasterView
 
 		if isDeadStockOnly {
-			// ▼▼▼【ここから修正】▼▼▼
-			// 設定ファイルから集計日数を読み込む
 			cfg, err := config.LoadConfig()
 			if err != nil {
 				http.Error(w, "設定ファイルの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
 
-			// 日数から期間を動的に計算
 			now := time.Now()
-			endDate := "99991231" // 終了日は無制限
+			endDate := "99991231"
 			startDate := now.AddDate(0, 0, -cfg.CalculationPeriodDays)
 
 			filters := model.DeadStockFilters{
 				StartDate:        startDate.Format("20060102"),
 				EndDate:          endDate,
-				ExcludeZeroStock: true, // 在庫0は除外
+				ExcludeZeroStock: true,
 				KanaName:         kanaInitial,
 				DosageForm:       dosageForm,
 			}
-			// ▲▲▲【修正ここまで】▲▲▲
 
 			tx, txErr := conn.Begin()
 			if txErr != nil {
@@ -106,11 +103,11 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 			}
 
 		} else {
-			query := `SELECT ` + db.SelectColumns + ` FROM product_master WHERE yj_code != ''`
+			query := `SELECT ` + db.SelectColumns + ` FROM product_master p WHERE p.yj_code != '' AND p.origin != 'PROVISIONAL'`
 			var args []interface{}
 
 			if dosageForm != "" {
-				query += " AND usage_classification LIKE ?"
+				query += " AND p.usage_classification LIKE ?"
 				args = append(args, "%"+dosageForm+"%")
 			}
 
@@ -130,7 +127,7 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 						for _, char := range charsToTest {
 							kataChar := string(char)
 							hiraChar := toHiragana(kataChar)
-							conditions = append(conditions, "kana_name LIKE ? OR kana_name LIKE ?")
+							conditions = append(conditions, "p.kana_name LIKE ? OR p.kana_name LIKE ?")
 							args = append(args, kataChar+"%", hiraChar+"%")
 						}
 					}
@@ -140,12 +137,35 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 				}
 			}
 
+			if drugTypesParam != "" {
+				drugTypes := strings.Split(drugTypesParam, ",")
+				if len(drugTypes) > 0 && drugTypes[0] != "" {
+					var conditions []string
+					flagMap := map[string]string{
+						"poison":        "p.flag_poison = 1",
+						"deleterious":   "p.flag_deleterious = 1",
+						"narcotic":      "p.flag_narcotic = 1",
+						"psychotropic1": "p.flag_psychotropic = 1",
+						"psychotropic2": "p.flag_psychotropic = 2",
+						"psychotropic3": "p.flag_psychotropic = 3",
+					}
+					for _, dt := range drugTypes {
+						if cond, ok := flagMap[dt]; ok {
+							conditions = append(conditions, cond)
+						}
+					}
+					if len(conditions) > 0 {
+						query += " AND (" + strings.Join(conditions, " OR ") + ")"
+					}
+				}
+			}
+
 			if searchQuery != "" {
-				query += " AND (kana_name LIKE ? OR product_name LIKE ?)"
+				query += " AND (p.kana_name LIKE ? OR p.product_name LIKE ?)"
 				args = append(args, "%"+searchQuery+"%", "%"+searchQuery+"%")
 			}
 
-			query += " ORDER BY kana_name"
+			query += " ORDER BY p.kana_name"
 
 			rows, queryErr := conn.Query(query, args...)
 			if queryErr != nil {
@@ -204,3 +224,105 @@ func toKatakana(s string) string {
 	}
 	return string(r)
 }
+
+// ▼▼▼【ここを修正】▼▼▼
+// LedgerEntry 構造体から TransactionType を削除
+type LedgerEntry struct {
+	Date       string  `json:"Date"`
+	Receipt    float64 `json:"Receipt"`
+	Dispense   float64 `json:"Dispense"`
+	Stock      float64 `json:"Stock"`
+	Wholesaler string  `json:"Wholesaler"`
+	LotNumber  string  `json:"LotNumber"`
+	ExpiryDate string  `json:"ExpiryDate"`
+}
+
+// GetProductLedgerHandler を「取引があった日のみ表示」するロジックに全面的に書き換え
+func GetProductLedgerHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		productCode := strings.TrimPrefix(r.URL.Path, "/api/ledger/product/")
+		if productCode == "" {
+			http.Error(w, "Product code is required", http.StatusBadRequest)
+			return
+		}
+
+		// 1. 本日時点の理論在庫を計算
+		endingBalance, err := db.CalculateCurrentStockForProduct(conn, productCode)
+		if err != nil {
+			http.Error(w, "Failed to calculate current stock: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// 2. 過去7日間のトランザクションを取得
+		endDate := time.Now()
+		startDate := endDate.AddDate(0, 0, -7)
+		transactions, err := db.GetTransactionsForProductInDateRange(conn, productCode, startDate.Format("20060102"), endDate.Format("20060102"))
+		if err != nil {
+			http.Error(w, "Failed to get recent transactions: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// 取引がなければ空の結果を返す
+		if len(transactions) == 0 {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode([]LedgerEntry{})
+			return
+		}
+
+		// 3. トランザクションを日付ごとにグループ化
+		txsByDate := make(map[string][]model.TransactionRecord)
+		uniqueDates := []string{}
+		seenDates := make(map[string]bool)
+
+		for _, tx := range transactions {
+			dateStr := tx.TransactionDate[0:4] + "-" + tx.TransactionDate[4:6] + "-" + tx.TransactionDate[6:8]
+			txsByDate[dateStr] = append(txsByDate[dateStr], tx)
+			if !seenDates[dateStr] {
+				uniqueDates = append(uniqueDates, dateStr)
+				seenDates[dateStr] = true
+			}
+		}
+
+		// 4. 取引があった日のみを対象に逆算
+		var reversedLedgerEntries []LedgerEntry
+		runningBalance := endingBalance
+
+		// 日付の降順で処理するため、uniqueDatesは既に降順（DBクエリがDESC）のはず
+		for _, dateStr := range uniqueDates {
+			dailyEntry := LedgerEntry{
+				Date:  dateStr,
+				Stock: runningBalance, // この日の「最終」在庫
+			}
+
+			var netChangeToday float64
+			dayTxs := txsByDate[dateStr]
+
+			for _, tx := range dayTxs {
+				signedQty := tx.SignedYjQty()
+				netChangeToday += signedQty
+
+				if signedQty > 0 {
+					dailyEntry.Receipt += signedQty
+				} else {
+					dailyEntry.Dispense += -signedQty
+				}
+				dailyEntry.Wholesaler = tx.ClientCode
+				dailyEntry.LotNumber = tx.LotNumber
+				dailyEntry.ExpiryDate = tx.ExpiryDate
+			}
+			reversedLedgerEntries = append(reversedLedgerEntries, dailyEntry)
+			runningBalance -= netChangeToday // 前の取引日の在庫を計算
+		}
+
+		// 5. 結果を時系列（古い順）に並び替え
+		finalLedgerEntries := make([]LedgerEntry, len(reversedLedgerEntries))
+		for i := 0; i < len(reversedLedgerEntries); i++ {
+			finalLedgerEntries[i] = reversedLedgerEntries[len(reversedLedgerEntries)-1-i]
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(finalLedgerEntries)
+	}
+}
+
+// ▲▲▲【修正ここまで】▲▲▲

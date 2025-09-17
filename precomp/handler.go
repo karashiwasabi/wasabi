@@ -2,26 +2,34 @@ package precomp
 
 import (
 	"database/sql"
-	"encoding/csv" // encoding/csvを追加
+	"encoding/csv"
 	"encoding/json"
-	"fmt" // fmtを追加
+	"fmt"
 	"log"
 	"net/http"
-	"strconv" // strconvを追加
-	"wasabi/db"
-
 	"os"
 	"path/filepath"
+	"strconv"
+	"wasabi/db"
+	"wasabi/model"
 
-	"golang.org/x/text/encoding/japanese" // transformを追加
+	"golang.org/x/text/encoding/japanese"
 	"golang.org/x/text/transform"
 )
 
+// PrecompPayload は保存・更新時にフロントエンドから受け取るデータ構造です
 type PrecompPayload struct {
 	PatientNumber string                  `json:"patientNumber"`
 	Records       []db.PrecompRecordInput `json:"records"`
 }
 
+// LoadResponse は呼び出し時にフロントエンドへ返すデータ構造です
+type LoadResponse struct {
+	Status  string                    `json:"status"`
+	Records []model.TransactionRecord `json:"records"`
+}
+
+// SavePrecompHandler は予製データを保存・更新します
 func SavePrecompHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var payload PrecompPayload
@@ -43,7 +51,7 @@ func SavePrecompHandler(conn *sql.DB) http.HandlerFunc {
 		defer tx.Rollback()
 
 		if err := db.UpsertPreCompoundingRecordsInTx(tx, payload.PatientNumber, payload.Records); err != nil {
-			log.Printf("ERROR: Failed to save pre-compounding records for patient %s: %v", payload.PatientNumber, err) // この行を追加
+			log.Printf("ERROR: Failed to save pre-compounding records for patient %s: %v", payload.PatientNumber, err)
 			http.Error(w, "Failed to save pre-compounding records: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -58,6 +66,7 @@ func SavePrecompHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
+// LoadPrecompHandler は患者の予製データと現在のステータスを返します
 func LoadPrecompHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		patientNumber := r.URL.Query().Get("patientNumber")
@@ -66,18 +75,27 @@ func LoadPrecompHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
+		status, err := db.GetPreCompoundingStatusByPatient(conn, patientNumber)
+		if err != nil {
+			http.Error(w, "Failed to get pre-compounding status: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 		records, err := db.GetPreCompoundingRecordsByPatient(conn, patientNumber)
 		if err != nil {
 			http.Error(w, "Failed to load pre-compounding records: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		// The simple list view does not require a complex view model, so we return the records directly.
+		response := LoadResponse{
+			Status:  status,
+			Records: records,
+		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(records)
+		json.NewEncoder(w).Encode(response)
 	}
 }
 
+// ClearPrecompHandler は予製データを完全に削除します
 func ClearPrecompHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		patientNumber := r.URL.Query().Get("patientNumber")
@@ -92,11 +110,93 @@ func ClearPrecompHandler(conn *sql.DB) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"message": "予製データを中断しました。"})
+		json.NewEncoder(w).Encode(map[string]string{"message": "予製データを完全に削除しました。"})
 	}
 }
 
-// ▼▼▼【ここから追加】▼▼▼
+// SuspendPrecompHandler は予製を中断状態にします
+func SuspendPrecompHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			PatientNumber string `json:"patientNumber"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		if payload.PatientNumber == "" {
+			http.Error(w, "Patient number is required", http.StatusBadRequest)
+			return
+		}
+		tx, err := conn.Begin()
+		if err != nil {
+			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback()
+		if err := db.SuspendPreCompoundingRecordsByPatient(tx, payload.PatientNumber); err != nil {
+			http.Error(w, "Failed to suspend pre-compounding records: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"message": "予製を中断しました。"})
+	}
+}
+
+// ResumePrecompHandler は予製を再開状態にします
+func ResumePrecompHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			PatientNumber string `json:"patientNumber"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		if payload.PatientNumber == "" {
+			http.Error(w, "Patient number is required", http.StatusBadRequest)
+			return
+		}
+		tx, err := conn.Begin()
+		if err != nil {
+			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback()
+		if err := db.ResumePreCompoundingRecordsByPatient(tx, payload.PatientNumber); err != nil {
+			http.Error(w, "Failed to resume pre-compounding records: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"message": "予製を再開しました。"})
+	}
+}
+
+// GetStatusPrecompHandler は予製の現在の状態を返します
+func GetStatusPrecompHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		patientNumber := r.URL.Query().Get("patientNumber")
+		if patientNumber == "" {
+			http.Error(w, "Patient number is required", http.StatusBadRequest)
+			return
+		}
+		status, err := db.GetPreCompoundingStatusByPatient(conn, patientNumber)
+		if err != nil {
+			http.Error(w, "Failed to get status: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": status})
+	}
+}
 
 func ExportPrecompHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -148,7 +248,6 @@ func ExportPrecompHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// ImportPrecompHandler はCSVから予製リストをインポートします。
 func ImportPrecompHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseMultipartForm(10 << 20); err != nil { // 10MB limit
@@ -169,7 +268,6 @@ func ImportPrecompHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer file.Close()
 
-		// Shift_JISからUTF-8への変換
 		reader := transform.NewReader(file, japanese.ShiftJIS.NewDecoder())
 		csvReader := csv.NewReader(reader)
 		csvReader.LazyQuotes = true
@@ -181,7 +279,6 @@ func ImportPrecompHandler(conn *sql.DB) http.HandlerFunc {
 		}
 
 		var precompRecords []db.PrecompRecordInput
-		// ヘッダー行をスキップ (i=1から開始)
 		for i, row := range records {
 			if i == 0 || len(row) < 3 {
 				continue
@@ -221,9 +318,6 @@ func ImportPrecompHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// ▲▲▲【追加ここまで】▲▲▲
-// ▼▼▼ [修正点] 以下の関数をファイル末尾に追加 ▼▼▼
-// ExportAllPrecompHandler は全患者の予製リストをCSVとしてエクスポートします。
 func ExportAllPrecompHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		records, err := db.GetAllPreCompoundingRecords(conn)
@@ -240,14 +334,12 @@ func ExportAllPrecompHandler(conn *sql.DB) http.HandlerFunc {
 		csvWriter := csv.NewWriter(w)
 		defer csvWriter.Flush()
 
-		// ヘッダーに「患者番号」を追加
 		header := []string{"patient_number", "product_code", "product_name", "quantity_jan", "unit_name"}
 		if err := csvWriter.Write(header); err != nil {
 			log.Printf("Failed to write CSV header for all precomp export: %v", err)
 			return
 		}
 
-		// データに患者番号(ClientCode)を追加して書き込み
 		for _, rec := range records {
 			row := []string{
 				rec.ClientCode,
@@ -264,9 +356,6 @@ func ExportAllPrecompHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// ▲▲▲ 修正ここまで ▲▲▲
-// ▼▼▼【ここから追加】▼▼▼
-// BulkImportPrecompHandler は複数患者の予製リストをCSVから一括でインポートします。
 func BulkImportPrecompHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		file, _, err := r.FormFile("file")
@@ -276,7 +365,6 @@ func BulkImportPrecompHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer file.Close()
 
-		// Shift_JISからUTF-8への変換
 		reader := transform.NewReader(file, japanese.ShiftJIS.NewDecoder())
 		csvReader := csv.NewReader(reader)
 		csvReader.LazyQuotes = true
@@ -287,10 +375,8 @@ func BulkImportPrecompHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// 患者番号ごとにレコードをグループ化
 		recordsByPatient := make(map[string][]db.PrecompRecordInput)
 		var importedCount int
-		// ヘッダー行をスキップ (i=1から開始)
 		for i, row := range records {
 			if i == 0 || len(row) < 4 {
 				continue
@@ -320,7 +406,6 @@ func BulkImportPrecompHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer tx.Rollback()
 
-		// 患者ごとにUpsert処理を実行
 		for patientNumber, precompRecords := range recordsByPatient {
 			if err := db.UpsertPreCompoundingRecordsInTx(tx, patientNumber, precompRecords); err != nil {
 				http.Error(w, fmt.Sprintf("Failed to save records for patient %s: %s", patientNumber, err.Error()), http.StatusInternalServerError)
@@ -339,5 +424,3 @@ func BulkImportPrecompHandler(conn *sql.DB) http.HandlerFunc {
 		})
 	}
 }
-
-// ▲▲▲【追加ここまで】▲▲▲

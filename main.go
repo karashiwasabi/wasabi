@@ -116,6 +116,11 @@ func main() {
 	mux.HandleFunc("/api/precomp/import", precomp.ImportPrecompHandler(conn))
 	mux.HandleFunc("/api/precomp/import_all", precomp.BulkImportPrecompHandler(conn))
 	mux.HandleFunc("/api/precomp/export_all", precomp.ExportAllPrecompHandler(conn))
+	// ▼▼▼【ここに追加】▼▼▼
+	mux.HandleFunc("/api/precomp/suspend", precomp.SuspendPrecompHandler(conn))
+	mux.HandleFunc("/api/precomp/resume", precomp.ResumePrecompHandler(conn))
+	mux.HandleFunc("/api/precomp/status", precomp.GetStatusPrecompHandler(conn))
+	// ▲▲▲【追加ここまで】▲▲▲
 	mux.HandleFunc("/api/orders/candidates", orders.GenerateOrderCandidatesHandler(conn))
 	mux.HandleFunc("/api/orders/place", orders.PlaceOrderHandler(conn))
 	mux.HandleFunc("/api/returns/candidates", returns.GenerateReturnCandidatesHandler(conn))
@@ -140,7 +145,10 @@ func main() {
 	mux.HandleFunc("/api/inventory/by_date", transaction.GetInventoryByDateHandler(conn))
 	mux.HandleFunc("/api/transaction/delete_by_id/", transaction.DeleteTransactionByIDHandler(conn))
 	// ▲▲▲【追加ここまで】▲▲▲
-
+	// ▼▼▼【ここに追加】▼▼▼
+	mux.HandleFunc("/api/config/usage_path", settings.GetUsagePathHandler(conn))
+	// ▲▲▲【追加ここまで】▲▲▲
+	mux.HandleFunc("/api/ledger/product/", product.GetProductLedgerHandler(conn))
 	// Serve Frontend
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

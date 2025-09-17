@@ -1,14 +1,16 @@
-// C:\Dev\WASABI\usage\handler.go
-
 package usage
 
 import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
-	"os" // osパッケージをインポート
+	"os"
+	"strings"
+	"wasabi/config"
 	"wasabi/db"
 	"wasabi/mappers"
 	"wasabi/mastermanager"
@@ -27,190 +29,179 @@ INSERT OR REPLACE INTO transaction_records (
     flag_stimulant_raw, process_flag_ma
 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 
-// UploadUsageHandler は指定された固定パスからUSAGEファイルを読み込み処理します。
+// UploadUsageHandler は自動または手動でのUSAGEファイルアップロードを処理します。
 func UploadUsageHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// ▼▼▼【ここからが修正箇所です】▼▼▼
+		var file io.Reader
+		var err error
 
-		// Step 1: ユーザーに指示された固定ファイルパスを定義
-		const targetFile = `C:\Users\wasab\OneDrive\デスクトップ\WASABI\download\USAGE\usage.csv`
-
-		log.Printf("Processing fixed USAGE file: %s", targetFile)
-		file, err := os.Open(targetFile)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("指定されたUSAGEファイルのオープンに失敗しました: %s。パスを確認してください。", targetFile), http.StatusInternalServerError)
-			return
-		}
-		defer file.Close()
-
-		// Step 2: ファイルをパースする
-		parsed, err := parsers.ParseUsage(file)
-		if err != nil {
-			http.Error(w, "USAGEファイルの解析に失敗しました: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		// ▲▲▲【修正ここまで】▲▲▲
-
-		// Step 3: これ以降は既存のDB登録ロジックを流用
-		var originalJournalMode string
-		conn.QueryRow("PRAGMA journal_mode").Scan(&originalJournalMode)
-		conn.Exec("PRAGMA journal_mode = MEMORY;")
-		conn.Exec("PRAGMA synchronous = OFF;")
-		defer func() {
-			conn.Exec("PRAGMA synchronous = FULL;")
-			conn.Exec(fmt.Sprintf("PRAGMA journal_mode = %s;", originalJournalMode))
-			log.Println("Database settings restored for USAGE handler.")
-		}()
-
-		filtered := removeUsageDuplicates(parsed)
-
-		if len(filtered) == 0 {
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			json.NewEncoder(w).Encode(map[string]interface{}{"records": []model.TransactionRecord{}})
-			return
-		}
-
-		tx, err := conn.Begin()
-		if err != nil {
-			log.Printf("Failed to begin transaction for usage: %v", err)
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-		defer tx.Rollback()
-
-		minDate, maxDate := "99999999", "00000000"
-		for _, rec := range filtered {
-			if rec.Date < minDate {
-				minDate = rec.Date
-			}
-			if rec.Date > maxDate {
-				maxDate = rec.Date
-			}
-		}
-		if err := db.DeleteUsageTransactionsInDateRange(tx, minDate, maxDate); err != nil {
-			log.Printf("db.DeleteUsageTransactionsInDateRange error: %v", err)
-			tx.Rollback()
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		var keyList, janList []string
-		keySet, janSet := make(map[string]struct{}), make(map[string]struct{})
-		for _, rec := range filtered {
-			if rec.JanCode != "" && rec.JanCode != "0000000000000" {
-				if _, seen := janSet[rec.JanCode]; !seen {
-					janSet[rec.JanCode] = struct{}{}
-					janList = append(janList, rec.JanCode)
-				}
-			}
-			key := rec.JanCode
-			if key == "" || key == "0000000000000" {
-				key = fmt.Sprintf("9999999999999%s", rec.ProductName)
-			}
-			if _, seen := keySet[key]; !seen {
-				keySet[key] = struct{}{}
-				keyList = append(keyList, key)
-			}
-		}
-
-		mastersMap, err := db.GetProductMastersByCodesMap(tx, keyList)
-		if err != nil {
-			tx.Rollback()
-			http.Error(w, "Failed to pre-fetch product masters", http.StatusInternalServerError)
-			return
-		}
-		jcshmsMap, err := db.GetJcshmsByCodesMap(tx, janList)
-		if err != nil {
-			tx.Rollback()
-			http.Error(w, "Failed to pre-fetch JCSHMS data", http.StatusInternalServerError)
-			return
-		}
-
-		stmt, err := tx.Prepare(insertTransactionQuery)
-		if err != nil {
-			tx.Rollback()
-			http.Error(w, "Failed to prepare statement", http.StatusInternalServerError)
-			return
-		}
-		defer stmt.Close()
-
-		const batchSize = 500
-		var finalRecords []model.TransactionRecord
-
-		for i, rec := range filtered {
-			ar := model.TransactionRecord{
-				TransactionDate: rec.Date,
-				Flag:            3,
-				JanCode:         rec.JanCode,
-				YjCode:          rec.YjCode,
-				ProductName:     rec.ProductName,
-				YjQuantity:      rec.YjQuantity,
-				YjUnitName:      rec.YjUnitName,
-			}
-
-			master, err := mastermanager.FindOrCreate(tx, rec.JanCode, rec.ProductName, mastersMap, jcshmsMap)
+		if strings.Contains(r.Header.Get("Content-Type"), "multipart/form-data") {
+			log.Println("Processing manual USAGE file upload...")
+			var f multipart.File
+			f, _, err = r.FormFile("file")
 			if err != nil {
-				tx.Rollback()
-				http.Error(w, fmt.Sprintf("mastermanager failed for jan %s: %v", rec.JanCode, err), http.StatusInternalServerError)
+				http.Error(w, "ファイルの取得に失敗しました: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			defer f.Close()
+			file = f
+		} else {
+			log.Println("Processing automatic USAGE file import...")
+			cfg, cfgErr := config.LoadConfig()
+			if cfgErr != nil {
+				http.Error(w, "設定ファイルの読み込みに失敗: "+cfgErr.Error(), http.StatusInternalServerError)
+				return
+			}
+			if cfg.UsageFolderPath == "" {
+				http.Error(w, "USAGEファイル取込パスが設定されていません。", http.StatusBadRequest)
 				return
 			}
 
-			mappers.MapProductMasterToTransaction(&ar, master)
-			if master.Origin == "JCSHMS" {
-				ar.ProcessFlagMA = "COMPLETE"
-			} else {
-				ar.ProcessFlagMA = "PROVISIONAL"
-			}
+			rawPath := cfg.UsageFolderPath
+			// ▼▼▼【ここが修正箇所】パスの前後の空白と " を自動的に削除 ▼▼▼
+			unquotedPath := strings.Trim(strings.TrimSpace(rawPath), "\"")
+			// ▲▲▲【修正ここまで】▲▲▲
 
-			_, err = stmt.Exec(
-				ar.TransactionDate, ar.ClientCode, ar.ReceiptNumber, ar.LineNumber, ar.Flag,
-				ar.JanCode, ar.YjCode, ar.ProductName, ar.KanaName, ar.UsageClassification, ar.PackageForm, ar.PackageSpec, ar.MakerName,
-				ar.DatQuantity, ar.JanPackInnerQty, ar.JanQuantity, ar.JanPackUnitQty, ar.JanUnitName, ar.JanUnitCode,
-				ar.YjQuantity, ar.YjPackUnitQty, ar.YjUnitName, ar.UnitPrice, ar.PurchasePrice, ar.SupplierWholesale,
-				ar.Subtotal, ar.TaxAmount, ar.TaxRate, ar.ExpiryDate, ar.LotNumber, ar.FlagPoison,
-				ar.FlagDeleterious, ar.FlagNarcotic, ar.FlagPsychotropic, ar.FlagStimulant,
-				ar.FlagStimulantRaw, ar.ProcessFlagMA,
-			)
-			if err != nil {
-				tx.Rollback()
-				http.Error(w, fmt.Sprintf("Failed to insert record for JAN %s: %v", ar.JanCode, err), http.StatusInternalServerError)
+			filePath := strings.ReplaceAll(unquotedPath, "\\", "/")
+
+			log.Printf("Opening specified USAGE file: %s", filePath)
+			f, fErr := os.Open(filePath)
+			if fErr != nil {
+				displayError := fmt.Sprintf("設定されたパスのファイルを開けませんでした。\nパス: %s\nエラー: %v", filePath, fErr)
+				http.Error(w, displayError, http.StatusInternalServerError)
 				return
 			}
-
-			finalRecords = append(finalRecords, ar)
-
-			if (i+1)%batchSize == 0 && i < len(filtered)-1 {
-				if err := tx.Commit(); err != nil {
-					log.Printf("transaction commit error (batch): %v", err)
-					http.Error(w, "internal server error", http.StatusInternalServerError)
-					return
-				}
-				tx, err = conn.Begin()
-				if err != nil {
-					http.Error(w, "Failed to begin next transaction", http.StatusInternalServerError)
-					return
-				}
-				stmt, err = tx.Prepare(insertTransactionQuery)
-				if err != nil {
-					tx.Rollback()
-					http.Error(w, "Failed to re-prepare statement", http.StatusInternalServerError)
-					return
-				}
-			}
+			defer f.Close()
+			file = f
 		}
 
-		if err := tx.Commit(); err != nil {
-			log.Printf("transaction commit error (final): %v", err)
-			http.Error(w, "internal server error", http.StatusInternalServerError)
+		processedRecords, procErr := processUsageFile(conn, file)
+		if procErr != nil {
+			http.Error(w, procErr.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"records": finalRecords,
+			"records": processedRecords,
 		})
 	}
+}
+
+// processUsageFile はファイルストリームから処方データを解析しDBに登録する共通関数です。
+func processUsageFile(conn *sql.DB, file io.Reader) ([]model.TransactionRecord, error) {
+	parsed, err := parsers.ParseUsage(file)
+	if err != nil {
+		return nil, fmt.Errorf("USAGEファイルの解析に失敗しました: %w", err)
+	}
+
+	var originalJournalMode string
+	conn.QueryRow("PRAGMA journal_mode").Scan(&originalJournalMode)
+	conn.Exec("PRAGMA journal_mode = MEMORY;")
+	conn.Exec("PRAGMA synchronous = OFF;")
+	defer func() {
+		conn.Exec("PRAGMA synchronous = FULL;")
+		conn.Exec(fmt.Sprintf("PRAGMA journal_mode = %s;", originalJournalMode))
+	}()
+
+	filtered := removeUsageDuplicates(parsed)
+	if len(filtered) == 0 {
+		return []model.TransactionRecord{}, nil
+	}
+
+	tx, err := conn.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("トランザクションの開始に失敗: %w", err)
+	}
+	defer tx.Rollback()
+
+	minDate, maxDate := "99999999", "00000000"
+	for _, rec := range filtered {
+		if rec.Date < minDate {
+			minDate = rec.Date
+		}
+		if rec.Date > maxDate {
+			maxDate = rec.Date
+		}
+	}
+
+	if err := db.DeleteUsageTransactionsInDateRange(tx, minDate, maxDate); err != nil {
+		return nil, fmt.Errorf("既存の処方データ削除に失敗: %w", err)
+	}
+
+	var keyList, janList []string
+	keySet, janSet := make(map[string]struct{}), make(map[string]struct{})
+	for _, rec := range filtered {
+		if rec.JanCode != "" && rec.JanCode != "0000000000000" {
+			if _, seen := janSet[rec.JanCode]; !seen {
+				janSet[rec.JanCode] = struct{}{}
+				janList = append(janList, rec.JanCode)
+			}
+		}
+		key := rec.JanCode
+		if key == "" || key == "0000000000000" {
+			key = fmt.Sprintf("9999999999999%s", rec.ProductName)
+		}
+		if _, seen := keySet[key]; !seen {
+			keySet[key] = struct{}{}
+			keyList = append(keyList, key)
+		}
+	}
+
+	mastersMap, err := db.GetProductMastersByCodesMap(tx, keyList)
+	if err != nil {
+		return nil, err
+	}
+	jcshmsMap, err := db.GetJcshmsByCodesMap(tx, janList)
+	if err != nil {
+		return nil, err
+	}
+
+	stmt, err := tx.Prepare(insertTransactionQuery)
+	if err != nil {
+		return nil, err
+	}
+	defer stmt.Close()
+
+	var finalRecords []model.TransactionRecord
+	for _, rec := range filtered {
+		ar := model.TransactionRecord{
+			TransactionDate: rec.Date, Flag: 3, JanCode: rec.JanCode,
+			YjCode: rec.YjCode, ProductName: rec.ProductName,
+			YjQuantity: rec.YjQuantity, YjUnitName: rec.YjUnitName,
+		}
+		master, err := mastermanager.FindOrCreate(tx, rec.JanCode, rec.ProductName, mastersMap, jcshmsMap)
+		if err != nil {
+			return nil, err
+		}
+
+		mappers.MapProductMasterToTransaction(&ar, master)
+		if master.Origin == "JCSHMS" {
+			ar.ProcessFlagMA = "COMPLETE"
+		} else {
+			ar.ProcessFlagMA = "PROVISIONAL"
+		}
+
+		_, err = stmt.Exec(
+			ar.TransactionDate, ar.ClientCode, ar.ReceiptNumber, ar.LineNumber, ar.Flag,
+			ar.JanCode, ar.YjCode, ar.ProductName, ar.KanaName, ar.UsageClassification, ar.PackageForm, ar.PackageSpec, ar.MakerName,
+			ar.DatQuantity, ar.JanPackInnerQty, ar.JanQuantity, ar.JanPackUnitQty, ar.JanUnitName, ar.JanUnitCode,
+			ar.YjQuantity, ar.YjPackUnitQty, ar.YjUnitName, ar.UnitPrice, ar.PurchasePrice, ar.SupplierWholesale,
+			ar.Subtotal, ar.TaxAmount, ar.TaxRate, ar.ExpiryDate, ar.LotNumber, ar.FlagPoison,
+			ar.FlagDeleterious, ar.FlagNarcotic, ar.FlagPsychotropic, ar.FlagStimulant,
+			ar.FlagStimulantRaw, ar.ProcessFlagMA,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to insert record for JAN %s: %w", ar.JanCode, err)
+		}
+
+		finalRecords = append(finalRecords, ar)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("トランザクションのコミットに失敗: %w", err)
+	}
+	return finalRecords, nil
 }
 
 func removeUsageDuplicates(records []model.UnifiedInputRecord) []model.UnifiedInputRecord {

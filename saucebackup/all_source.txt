@@ -9,7 +9,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"wasabi/config" // config パッケージをインポート
+	"time" // time パッケージをインポート
+	"wasabi/config"
 	"wasabi/db"
 	"wasabi/model"
 )
@@ -22,7 +23,7 @@ import (
  * HTTPリクエストのクエリパラメータからフィルタ条件を抽出し、
  * それに基づいて在庫元帳データを生成してJSON形式で返却します。
  * - coefficient: 発注点係数 (デフォルト: 1.5)
- * - startDate, endDate: 集計期間 (設定ファイルから読み込まれる)
+ * - startDate, endDate: 集計期間（設定の日数に基づいて動的に計算）
  * - kanaName: 製品名/カナ名での絞り込み
  * - drugTypes: 薬品種別での絞り込み (毒, 劇など)
  * - dosageForm: 剤型での絞り込み
@@ -38,17 +39,23 @@ func GetAggregationHandler(conn *sql.DB) http.HandlerFunc {
 		}
 
 		// ▼▼▼【ここから修正】▼▼▼
-		// 設定ファイルから期間を読み込む
+		// 設定ファイルから集計日数を読み込む
 		cfg, err := config.LoadConfig()
 		if err != nil {
 			http.Error(w, "設定ファイルの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		// フィルタ構造体に設定ファイルの値を使用する
+		// 日数から期間を動的に計算
+		now := time.Now()
+		// 終了日は無制限とするため、実質的に未来の最大値を設定
+		endDate := "99991231"
+		startDate := now.AddDate(0, 0, -cfg.CalculationPeriodDays)
+
+		// フィルタ構造体に計算した値を使用する
 		filters := model.AggregationFilters{
-			StartDate:    cfg.PeriodStartDate,
-			EndDate:      cfg.PeriodEndDate,
+			StartDate:    startDate.Format("20060102"),
+			EndDate:      endDate,
 			KanaName:     q.Get("kanaName"),
 			DrugTypes:    strings.Split(q.Get("drugTypes"), ","),
 			DosageForm:   q.Get("dosageForm"),
@@ -553,9 +560,11 @@ type Config struct {
 	EmednetPassword string `json:"emednetPassword"`
 	EdeUserID       string `json:"edeUserId"`
 	EdePassword     string `json:"edePassword"`
-	UsageFolderPath string `json:"usageFolderPath"` // <-- この行を追加
-	PeriodStartDate string `json:"periodStartDate"` // <-- この行を追加
-	PeriodEndDate   string `json:"periodEndDate"`   // <-- この行を追加
+	UsageFolderPath string `json:"usageFolderPath"`
+	// ▼▼▼【ここから修正】▼▼▼
+	// 2つの日付フィールドを削除し、集計日数を保持するフィールドを1つ追加
+	CalculationPeriodDays int `json:"calculationPeriodDays"`
+	// ▲▲▲【修正ここまで】▲▲▲
 }
 
 var (
@@ -584,7 +593,10 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			// ファイルが存在しないのは初回起動時などの正常なケースなのでエラーとはしない
-			return Config{}, nil
+			return Config{
+				// ▼▼▼【修正】日数のデフォルト値を設定 ▼▼▼
+				CalculationPeriodDays: 90,
+			}, nil
 		}
 		return Config{}, err
 	}
@@ -2087,8 +2099,27 @@ func SaveGuidedInventoryData(tx *sql.Tx, date string, yjCode string, allPackagin
 		mastersMap[pkg.ProductCode] = &p
 	}
 
+	// ▼▼▼【ここに追加】▼▼▼
+	// 新しい棚卸日より過去の棚卸レコード(flag=0)を削除する
+	if len(allProductCodes) > 0 {
+		placeholders := strings.Repeat("?,", len(allProductCodes)-1) + "?"
+		pastDeleteQuery := fmt.Sprintf(`DELETE FROM transaction_records WHERE flag = 0 AND transaction_date < ? AND jan_code IN (%s)`, placeholders)
+
+		args := make([]interface{}, 0, len(allProductCodes)+1)
+		args = append(args, date)
+		for _, code := range allProductCodes {
+			args = append(args, code)
+		}
+
+		if _, err := tx.Exec(pastDeleteQuery, args...); err != nil {
+			return fmt.Errorf("failed to delete past inventory records: %w", err)
+		}
+	}
+	// ▲▲▲【追加ここまで】▲▲▲
+
+	// 同日の古い棚卸レコードを削除する（これは既存の処理）
 	if err := DeleteTransactionsByFlagAndDateAndCodes(tx, 0, date, allProductCodes); err != nil {
-		return fmt.Errorf("failed to delete old inventory records: %w", err)
+		return fmt.Errorf("failed to delete old inventory records for the same day: %w", err)
 	}
 
 	const q = `
@@ -2117,8 +2148,7 @@ INSERT INTO transaction_records (
 			continue
 		}
 
-		// ▼▼▼ [修正点] 受け取る値はJAN数量とし、YJ数量を計算する ▼▼▼
-		janQty := inventoryData[productCode] // マップにキーがなくても0が返る
+		janQty := inventoryData[productCode]
 
 		if janQty > 0 {
 			productCodesWithInventory = append(productCodesWithInventory, productCode)
@@ -2134,8 +2164,6 @@ INSERT INTO transaction_records (
 		}
 
 		tr.YjQuantity = janQty * master.JanPackInnerQty
-		// ▲▲▲ 修正ここまで ▲▲▲
-
 		mappers.MapProductMasterToTransaction(&tr, master)
 		tr.ClientCode = ""
 		tr.SupplierWholesale = ""
@@ -2371,6 +2399,8 @@ type PrecompRecordView struct {
 	JanUnitName          string `json:"janUnitName"`
 }
 
+// ▼▼▼【ここから修正・追加】▼▼▼
+
 /**
  * @brief 特定の患者の予製レコードをデータベースと安全に同期します。
  * @param tx SQLトランザクションオブジェクト
@@ -2378,13 +2408,10 @@ type PrecompRecordView struct {
  * @param records フロントエンドから送信された最新の予製レコードのスライス
  * @return error 処理中にエラーが発生した場合
  * @details
- * 以下の3ステップで、データベースの状態をフロントエンドの状態と完全に一致させます。
- * 1. レコードが空の場合、この患者の全予製データを削除します。
- * 2. データベースに存在するがフロントエンドのリストにないレコードを削除します。
- * 3. フロントエンドのリストにあるレコードをDBに挿入または更新（UPSERT）します。
+ * データベースの状態をフロントエンドの状態と完全に一致させます。
+ * この際、ステータスは常に 'active' (有効) に設定されます。
  */
 func UpsertPreCompoundingRecordsInTx(tx *sql.Tx, patientNumber string, records []PrecompRecordInput) error {
-	// フロントエンドから空のリストが送られてきた場合、その患者の全レコードを削除する
 	if len(records) == 0 {
 		if _, err := tx.Exec("DELETE FROM precomp_records WHERE client_code = ?", patientNumber); err != nil {
 			return fmt.Errorf("failed to delete all precomp records for patient %s: %w", patientNumber, err)
@@ -2392,7 +2419,6 @@ func UpsertPreCompoundingRecordsInTx(tx *sql.Tx, patientNumber string, records [
 		return nil
 	}
 
-	// ステップ1: フロントエンドからの製品コードリストを準備
 	productCodesInPayload := make([]interface{}, len(records)+1)
 	placeholders := make([]string, len(records))
 	productCodesInPayload[0] = patientNumber
@@ -2401,13 +2427,11 @@ func UpsertPreCompoundingRecordsInTx(tx *sql.Tx, patientNumber string, records [
 		productCodesInPayload[i+1] = rec.ProductCode
 	}
 
-	// ステップ2: DBに存在するがフロントエンドのリストにない古いレコードを削除
 	deleteQuery := fmt.Sprintf("DELETE FROM precomp_records WHERE client_code = ? AND jan_code NOT IN (%s)", strings.Join(placeholders, ","))
 	if _, err := tx.Exec(deleteQuery, productCodesInPayload...); err != nil {
 		return fmt.Errorf("failed to delete removed precomp records for patient %s: %w", patientNumber, err)
 	}
 
-	// ステップ3: フロントエンドのリストにあるレコードをDBに挿入または更新 (UPSERT)
 	var productCodes []string
 	for _, rec := range records {
 		productCodes = append(productCodes, rec.ProductCode)
@@ -2421,12 +2445,13 @@ func UpsertPreCompoundingRecordsInTx(tx *sql.Tx, patientNumber string, records [
 		transaction_date, client_code, receipt_number, line_number, jan_code, yj_code, product_name, kana_name,
 		usage_classification, package_form, package_spec, maker_name, jan_pack_inner_qty, jan_quantity,
 		jan_pack_unit_qty, jan_unit_name, jan_unit_code, yj_quantity, yj_pack_unit_qty, yj_unit_name,
-		purchase_price, supplier_wholesale, created_at
-	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		purchase_price, supplier_wholesale, created_at, status
+	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 	ON CONFLICT(client_code, jan_code) DO UPDATE SET
 		jan_quantity = excluded.jan_quantity,
 		yj_quantity = excluded.yj_quantity,
-		created_at = excluded.created_at`
+		created_at = excluded.created_at,
+		status = excluded.status`
 
 	stmt, err := tx.Prepare(q)
 	if err != nil {
@@ -2462,7 +2487,7 @@ func UpsertPreCompoundingRecordsInTx(tx *sql.Tx, patientNumber string, records [
 			tr.TransactionDate, tr.ClientCode, tr.ReceiptNumber, tr.LineNumber, tr.JanCode, tr.YjCode, tr.ProductName, tr.KanaName,
 			tr.UsageClassification, tr.PackageForm, tr.PackageSpec, tr.MakerName, tr.JanPackInnerQty, tr.JanQuantity,
 			tr.JanPackUnitQty, tr.JanUnitName, tr.JanUnitCode, tr.YjQuantity, tr.YjPackUnitQty, tr.YjUnitName,
-			tr.PurchasePrice, tr.SupplierWholesale, now.Format("2006-01-02 15:04:05"),
+			tr.PurchasePrice, tr.SupplierWholesale, now.Format("2006-01-02 15:04:05"), "active",
 		)
 		if err != nil {
 			return fmt.Errorf("failed to upsert precomp record for product %s: %w", rec.ProductCode, err)
@@ -2528,9 +2553,10 @@ func DeletePreCompoundingRecordsByPatient(conn *sql.DB, patientNumber string) er
  * @return error 処理中にエラーが発生した場合
  * @details
  * この関数が返す値は、在庫元帳の計算において発注点の調整に使用されます。
+ * statusが'active'のレコードのみを集計対象とします。
  */
 func GetPreCompoundingTotals(conn *sql.DB) (map[string]float64, error) {
-	const q = `SELECT jan_code, SUM(yj_quantity) FROM precomp_records GROUP BY jan_code`
+	const q = `SELECT jan_code, SUM(yj_quantity) FROM precomp_records WHERE status = 'active' GROUP BY jan_code`
 	rows, err := conn.Query(q)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query precomp totals: %w", err)
@@ -2631,6 +2657,56 @@ func GetAllPreCompoundingRecords(conn *sql.DB) ([]model.TransactionRecord, error
 	}
 	return records, nil
 }
+
+/**
+ * @brief 指定された患者の予製レコードを中断状態（inactive）にします。
+ * @param tx SQLトランザクションオブジェクト
+ * @param patientNumber 対象の患者番号
+ * @return error 処理中にエラーが発生した場合
+ */
+func SuspendPreCompoundingRecordsByPatient(tx *sql.Tx, patientNumber string) error {
+	const q = `UPDATE precomp_records SET status = 'inactive' WHERE client_code = ?`
+	if _, err := tx.Exec(q, patientNumber); err != nil {
+		return fmt.Errorf("failed to suspend precomp records for patient %s: %w", patientNumber, err)
+	}
+	return nil
+}
+
+/**
+ * @brief 指定された患者の予製レコードを再開状態（active）にします。
+ * @param tx SQLトランザクションオブジェクト
+ * @param patientNumber 対象の患者番号
+ * @return error 処理中にエラーが発生した場合
+ */
+func ResumePreCompoundingRecordsByPatient(tx *sql.Tx, patientNumber string) error {
+	const q = `UPDATE precomp_records SET status = 'active' WHERE client_code = ?`
+	if _, err := tx.Exec(q, patientNumber); err != nil {
+		return fmt.Errorf("failed to resume precomp records for patient %s: %w", patientNumber, err)
+	}
+	return nil
+}
+
+/**
+ * @brief 指定された患者の現在の予製ステータスを取得します。
+ * @param conn データベース接続
+ * @param patientNumber 対象の患者番号
+ * @return string ステータス ('active', 'inactive', 'none')
+ * @return error 処理中にエラーが発生した場合
+ */
+func GetPreCompoundingStatusByPatient(conn *sql.DB, patientNumber string) (string, error) {
+	var status string
+	const q = `SELECT status FROM precomp_records WHERE client_code = ? LIMIT 1`
+	err := conn.QueryRow(q, patientNumber).Scan(&status)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "none", nil // レコードが存在しない
+		}
+		return "", fmt.Errorf("failed to get precomp status for patient %s: %w", patientNumber, err)
+	}
+	return status, nil
+}
+
+// ▲▲▲【修正ここまで】▲▲▲
 
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\product_master.go -----
@@ -3923,6 +3999,90 @@ func DeleteTransactionByIDInTx(tx *sql.Tx, id int) error {
 
 // ▲▲▲【追加ここまで】▲▲▲
 
+/**
+ * @brief 指定された製品の最新の棚卸レコードを取得します。
+ * @param conn データベース接続
+ * @param janCode 検索対象のJANコード
+ * @return *model.TransactionRecord 見つかった最新の棚卸レコード。存在しない場合はnil。
+ * @return error 処理中にエラーが発生した場合
+ */
+func GetLatestInventoryRecord(conn *sql.DB, janCode string) (*model.TransactionRecord, error) {
+	q := `SELECT ` + TransactionColumns + ` FROM transaction_records 
+		  WHERE jan_code = ? AND flag = 0 
+		  ORDER BY transaction_date DESC, id DESC LIMIT 1`
+
+	row := conn.QueryRow(q, janCode)
+	rec, err := ScanTransactionRecord(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // 棚卸履歴がない場合はエラーとしない
+		}
+		return nil, fmt.Errorf("failed to get latest inventory for %s: %w", janCode, err)
+	}
+	return rec, nil
+}
+
+/**
+ * @brief 指定された製品の、特定の日付以降の全取引レコードを取得します。
+ * @param conn データベース接続
+ * @param janCode 検索対象のJANコード
+ * @param date 開始日 (この日付は含まない YYYYMMDD)
+ * @return []model.TransactionRecord 取引レコードのスライス
+ * @return error 処理中にエラーが発生した場合
+ */
+func GetAllTransactionsForProductAfterDate(conn *sql.DB, janCode string, date string) ([]model.TransactionRecord, error) {
+	q := `SELECT ` + TransactionColumns + ` FROM transaction_records 
+		  WHERE jan_code = ? AND transaction_date > ? AND flag != 0
+		  ORDER BY transaction_date, id`
+
+	rows, err := conn.Query(q, janCode, date)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get transactions after date for %s: %w", janCode, err)
+	}
+	defer rows.Close()
+
+	var records []model.TransactionRecord
+	for rows.Next() {
+		r, err := ScanTransactionRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, *r)
+	}
+	return records, nil
+}
+
+/**
+ * @brief 指定された製品の、特定期間内の全取引レコードを日付の降順で取得します。
+ * @param conn データベース接続
+ * @param janCode 検索対象のJANコード
+ * @param startDate 開始日 (YYYYMMDD)
+ * @param endDate 終了日 (YYYYMMDD)
+ * @return []model.TransactionRecord 取引レコードのスライス
+ * @return error 処理中にエラーが発生した場合
+ */
+func GetTransactionsForProductInDateRange(conn *sql.DB, janCode string, startDate string, endDate string) ([]model.TransactionRecord, error) {
+	q := `SELECT ` + TransactionColumns + ` FROM transaction_records 
+		  WHERE jan_code = ? AND transaction_date BETWEEN ? AND ?
+		  ORDER BY transaction_date DESC, id DESC`
+
+	rows, err := conn.Query(q, janCode, startDate, endDate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get transactions in date range for %s: %w", janCode, err)
+	}
+	defer rows.Close()
+
+	var records []model.TransactionRecord
+	for rows.Next() {
+		r, err := ScanTransactionRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, *r)
+	}
+	return records, nil
+}
+
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\valuation.go -----
 // C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\valuation.go
@@ -4288,7 +4448,8 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"wasabi/config" // config パッケージをインポート
+	"time" // time パッケージをインポート
+	"wasabi/config"
 	"wasabi/db"
 	"wasabi/model"
 )
@@ -4302,17 +4463,22 @@ func GetDeadStockHandler(conn *sql.DB) http.HandlerFunc {
 		}
 
 		// ▼▼▼【ここから修正】▼▼▼
-		// 設定ファイルから期間を読み込む
+		// 設定ファイルから集計日数を読み込む
 		cfg, err := config.LoadConfig()
 		if err != nil {
 			http.Error(w, "設定ファイルの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		// フィルタ構造体に設定ファイルの値を使用する
+		// 日数から期間を動的に計算
+		now := time.Now()
+		endDate := "99991231" // 終了日は無制限
+		startDate := now.AddDate(0, 0, -cfg.CalculationPeriodDays)
+
+		// フィルタ構造体に計算した値を使用する
 		filters := model.DeadStockFilters{
-			StartDate:        cfg.PeriodStartDate,
-			EndDate:          cfg.PeriodEndDate,
+			StartDate:        startDate.Format("20060102"),
+			EndDate:          endDate,
 			ExcludeZeroStock: q.Get("excludeZeroStock") == "true",
 			Coefficient:      coefficient,
 			KanaName:         q.Get("kanaName"),
@@ -4443,110 +4609,103 @@ func ImportDeadStockHandler(conn *sql.DB) http.HandlerFunc {
 
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\edge\handler.go -----
-// C:\Users\wasab\OneDrive\デスクトップ\WASABI\edge\handler.go
-
-// C:\Users\wasab\OneDrive\デスクトップ\WASABI\edge\handler.go
-
 package edge
 
 import (
-	"bufio"
-	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
 	"wasabi/config"
 	"wasabi/dat"
 
+	"context" // contextパッケージをインポート
+
 	"github.com/chromedp/cdproto/browser"
-	// [修正] JavaScriptダイアログを扱うために "page" パッケージをインポートします
-	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
 
-// writeJsonError は、エラーメッセージをJSON形式でクライアントに返します。
 func writeJsonError(w http.ResponseWriter, message string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"message": message})
 }
 
-// DownloadHandlerは、e-mednetからのファイルダウンロードと処理を実行します。
 func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// 1) 設定読み込み
 		cfg, err := config.LoadConfig()
 		if err != nil {
 			writeJsonError(w, "設定ファイルの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-
 		if cfg.EdeUserID == "" || cfg.EdePassword == "" {
-			writeJsonError(w, "edeのIDまたはパスワードが設定されていません。設定画面を確認してください。", http.StatusBadRequest)
+			writeJsonError(w, "IDまたはパスワードが設定されていません。", http.StatusBadRequest)
 			return
 		}
 
-		opts := append(chromedp.DefaultExecAllocatorOptions[:],
-			chromedp.Flag("headless", false),
-			chromedp.Flag("disable-gpu", true),
-			chromedp.Flag("no-sandbox", true),
-			chromedp.Flag("no-first-run", true),
-			chromedp.Flag("no-default-browser-check", true),
-			// [修正] ブラウザのセキュリティ機能を無効化し、安定性を向上させます
-			chromedp.Flag("disable-features", "RendererCodeIntegrity"),
-			chromedp.UserAgent(`Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36`),
-		)
-
-		if edgePath := findEdgePath(); edgePath != "" {
-			opts = append(opts, chromedp.ExecPath(edgePath))
+		// 2) 一時プロファイルディレクトリ作成
+		tempDir, err := os.MkdirTemp("", "chromedp-edge-")
+		if err != nil {
+			writeJsonError(w, "一時プロファイルディレクトリの作成に失敗: "+err.Error(), http.StatusInternalServerError)
+			return
 		}
+		defer os.RemoveAll(tempDir)
 
-		allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
-		defer cancel()
+		// ▼▼▼【ここから修正】▼▼▼
+		// ご指摘の箇所を、元の動作するコードに戻しました。
+		// 3) Edge実行ファイルのパス (元のコードのまま)
+		edgePath := `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`
 
+		// 4) ExecAllocator を作成 (元のコードのまま)
+		allocCtx, allocCancel := chromedp.NewExecAllocator(
+			r.Context(),
+			append(chromedp.DefaultExecAllocatorOptions[:],
+				chromedp.ExecPath(edgePath),
+				chromedp.Flag("headless", false),
+				chromedp.Flag("disable-gpu", true),
+				chromedp.Flag("no-sandbox", true),
+				chromedp.UserDataDir(tempDir),
+			)...,
+		)
+		defer allocCancel()
+		// ▲▲▲【修正ここまで】▲▲▲
+
+		// 5) Context とロギング設定
 		ctx, cancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(log.Printf))
 		defer cancel()
 
-		downloadDir, err := filepath.Abs("./download/DAT")
+		// 6) ダウンロードフォルダ準備
+		downloadDir, err := filepath.Abs(filepath.Join(".", "download", "DAT"))
 		if err != nil {
-			writeJsonError(w, "ダウンロードディレクトリのパス取得に失敗しました: "+err.Error(), http.StatusInternalServerError)
+			writeJsonError(w, "ダウンロードディレクトリの絶対パス取得に失敗: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		if err := os.MkdirAll(downloadDir, 0755); err != nil {
-			writeJsonError(w, "ダウンロードディレクトリの作成に失敗しました: "+err.Error(), http.StatusInternalServerError)
+			writeJsonError(w, "ダウンロードディレクトリの作成に失敗: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		var downloadedFilePath string
-		done := make(chan string, 1)
-		// [修正] 自動でダイアログを処理するリスナーを追加します
-		chromedp.ListenTarget(ctx, func(ev interface{}) {
-			if e, ok := ev.(*browser.EventDownloadProgress); ok {
-				if e.State == browser.DownloadProgressStateCompleted {
-					done <- e.GUID
-				}
-			}
-			// JavaScriptの確認ダイアログが開いた場合に自動でOKを押します
-			if _, ok := ev.(*page.EventJavascriptDialogOpening); ok {
-				go func() {
-					if err := chromedp.Run(ctx, page.HandleJavaScriptDialog(true)); err != nil {
-						log.Printf("could not handle javascript dialog: %v", err)
-					}
-				}()
-			}
-		})
+		filesBefore, err := os.ReadDir(downloadDir)
+		if err != nil {
+			writeJsonError(w, "ダウンロードディレクトリの読み取りに失敗: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		filesBeforeMap := make(map[string]bool)
+		for _, f := range filesBefore {
+			filesBeforeMap[f.Name()] = true
+		}
 
-		var initialLatestTimestamp string
+		// 7) ログインしてボタンをクリック
+		var initialTS string
 		err = chromedp.Run(ctx,
-			browser.SetDownloadBehavior(browser.SetDownloadBehaviorBehaviorAllowAndName).
-				WithDownloadPath(downloadDir).
-				WithEventsEnabled(true),
+			browser.SetDownloadBehavior(browser.SetDownloadBehaviorBehaviorAllow).WithDownloadPath(downloadDir),
 			chromedp.Navigate(`https://www.e-mednet.jp/`),
 			chromedp.WaitVisible(`input[name="userid"]`),
 			chromedp.SendKeys(`input[name="userid"]`, cfg.EdeUserID),
@@ -4556,176 +4715,96 @@ func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 			chromedp.Click(`//a[contains(@href, "busi_id=11")]`),
 			chromedp.WaitVisible(`//a[contains(text(), "納品受信(JAN)")]`),
 			chromedp.Click(`//a[contains(text(), "納品受信(JAN)")]`),
-			// ▼▼▼【ここからが修正箇所です】▼▼▼
-			// [修正] ボタンの特定方法を、表示テキスト(value)からより確実なname属性に変更します
 			chromedp.WaitReady(`input[name="unreceive_button"]`),
-			chromedp.Text(`table.result-list-table tbody tr:first-child td.col-transceiving-date`, &initialLatestTimestamp),
+			chromedp.Text(`table.result-list-table tbody tr:first-child td.col-transceiving-date`, &initialTS, chromedp.AtLeast(0)),
 			chromedp.Click(`input[name="unreceive_button"]`),
-			// ▲▲▲【修正ここまで】▲▲▲
-			chromedp.Sleep(3*time.Second),
 		)
-
 		if err != nil {
-			log.Printf("ERROR: 自動操作に失敗しました: %v", err)
 			writeJsonError(w, "自動操作に失敗しました: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		var noDataFound bool
-		timeout := time.After(90 * time.Second)
-		ticker := time.NewTicker(500 * time.Millisecond)
-		defer ticker.Stop()
-
-	Loop:
+		// 8) 結果待ちのロジック (medrecの方式)
+		var newFilePath string
+		var downloadSuccess, noDataFound bool
+		timeout := time.After(30 * time.Second)
+	CheckLoop:
 		for {
 			select {
-			case guid := <-done:
-				downloadedFilePath = filepath.Join(downloadDir, guid)
-				log.Printf("Download completed: %s", guid)
-				break Loop
 			case <-timeout:
-				err = fmt.Errorf("90秒以内に処理が完了しなかったため、タイムアウトしました。")
-				break Loop
-			case <-ticker.C:
+				writeJsonError(w, "30秒以内にサイトの反応が確認できませんでした。", http.StatusRequestTimeout)
+				return
+			case <-time.After(1 * time.Second):
+				var newLatestTimestamp, resultText string
+
 				checkCtx, cancelCheck := context.WithTimeout(ctx, 4*time.Second)
-				var newLatestTimestamp, resultText, bodyText string
 				_ = chromedp.Run(checkCtx,
 					chromedp.Text(`table.result-list-table tbody tr:first-child td.col-transceiving-date`, &newLatestTimestamp, chromedp.AtLeast(0)),
-					chromedp.Text(`table.result-list-table tbody tr:first-child td.col-result`, &resultText, chromedp.AtLeast(0)),
-					chromedp.Text(`body`, &bodyText, chromedp.AtLeast(0)),
 				)
-				if strings.TrimSpace(newLatestTimestamp) != strings.TrimSpace(initialLatestTimestamp) && strings.TrimSpace(resultText) == "受信データなし" {
-					noDataFound = true
-					log.Println("No new delivery data message found in history table.")
-					cancelCheck()
-					break Loop
-				}
-				if strings.Contains(bodyText, "未受信の納品データはありませんでした") {
-					noDataFound = true
-					log.Println("No new delivery data message found in body text.")
-					cancelCheck()
-					break Loop
-				}
 				cancelCheck()
+
+				if strings.TrimSpace(newLatestTimestamp) != strings.TrimSpace(initialTS) {
+					checkCtx, cancelCheck = context.WithTimeout(ctx, 4*time.Second)
+					_ = chromedp.Run(checkCtx,
+						chromedp.Text(`table.result-list-table tbody tr:first-child td.col-result`, &resultText, chromedp.AtLeast(0)),
+					)
+					cancelCheck()
+
+					if strings.TrimSpace(resultText) == "正常完了" {
+						downloadSuccess = true
+						break CheckLoop
+					}
+					if strings.TrimSpace(resultText) == "受信データなし" {
+						noDataFound = true
+						break CheckLoop
+					}
+				}
 			}
 		}
 
-		if err != nil {
-			log.Printf("ERROR: 自動操作の待機処理に失敗しました: %v", err)
-			writeJsonError(w, "自動操作の待機処理に失敗しました: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
+		// 9) 「受信データなし」の場合のハンドリング
 		if noDataFound {
 			writeJsonError(w, "未受信の納品データはありませんでした。", http.StatusOK)
 			return
 		}
 
-		time.Sleep(500 * time.Millisecond)
-
-		if downloadedFilePath == "" {
-			writeJsonError(w, "ダウンロードに失敗したか、予期せぬ状態になりました。", http.StatusInternalServerError)
+		// 10) ファイルダウンロード待機処理
+		if downloadSuccess {
+			timeoutFile := time.After(10 * time.Second)
+		FileLoop:
+			for {
+				select {
+				case <-timeoutFile:
+					writeJsonError(w, "サイトの反応はありましたが、10秒以内にファイルが見つかりませんでした。", http.StatusInternalServerError)
+					return
+				case <-time.After(500 * time.Millisecond):
+					filesAfter, _ := os.ReadDir(downloadDir)
+					for _, f := range filesAfter {
+						if !filesBeforeMap[f.Name()] && !strings.HasSuffix(f.Name(), ".crdownload") {
+							newFilePath = filepath.Join(downloadDir, f.Name())
+							break FileLoop
+						}
+					}
+				}
+			}
+		} else {
+			writeJsonError(w, "ダウンロードされたファイルの検知に失敗しました。", http.StatusInternalServerError)
 			return
 		}
 
-		finalPath, err := renameDownloadedFile(downloadedFilePath)
+		// 11) DAT ファイル処理
+		processedRecords, err := dat.ProcessDatFile(conn, newFilePath)
 		if err != nil {
-			log.Printf("WARN: ダウンロードしたファイルのリネームに失敗しました: %v。元のファイル名で処理を続行します。", err)
-			finalPath = downloadedFilePath
-		}
-
-		processedRecords, err := dat.ProcessDatFile(conn, finalPath)
-		if err != nil {
-			log.Printf("ERROR: ダウンロードしたDATファイルの処理に失敗しました %s: %v", finalPath, err)
-			writeJsonError(w, "ダウンロードしたDATファイルの処理に失敗しました: "+err.Error(), http.StatusInternalServerError)
+			writeJsonError(w, "ダウンロードしたDATファイルの処理に失敗: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
+		// 12) レスポンス
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
-			"message": fmt.Sprintf("%d件の納品データをダウンロードし、システムに登録しました。", len(processedRecords)),
+			"message": fmt.Sprintf("%d件の納品データをダウンロードし登録しました。", len(processedRecords)),
 		})
 	}
-}
-
-// ... (renameDownloadedFile and findEdgePath functions remain unchanged) ...
-
-func renameDownloadedFile(originalPath string) (string, error) {
-	file, err := os.Open(originalPath)
-	if err != nil {
-		return "", fmt.Errorf("ダウンロードファイルを開けませんでした: %w", err)
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	var newBaseName string
-	if scanner.Scan() {
-		firstLine := scanner.Text()
-		if strings.HasPrefix(firstLine, "S") && len(firstLine) >= 39 {
-			timestampStr := firstLine[27:39]
-			yy, mm, dd, h, m, s := timestampStr[0:2], timestampStr[2:4], timestampStr[4:6], timestampStr[6:8], timestampStr[8:10], timestampStr[10:12]
-			newBaseName = fmt.Sprintf("20%s%s%s_%s%s%s", yy, mm, dd, h, m, s)
-		}
-	}
-
-	destDir := filepath.Join("download", "DAT")
-	if newBaseName == "" {
-		destDir = filepath.Join("download", "DAT", "unorganized")
-		newBaseName = time.Now().Format("20060102150405")
-		log.Printf("警告: ファイルからタイムスタンプを解析できませんでした。現在の時刻で保存します。")
-	}
-
-	finalPath := filepath.Join(destDir, newBaseName+".DAT")
-	for i := 1; ; i++ {
-		if _, err := os.Stat(finalPath); os.IsNotExist(err) {
-			break
-		}
-		finalPath = filepath.Join(destDir, fmt.Sprintf("%s(%d)%s", newBaseName, i, ".DAT"))
-	}
-
-	file.Close()
-	time.Sleep(200 * time.Millisecond)
-
-	sourceFile, err := os.Open(originalPath)
-	if err != nil {
-		return "", fmt.Errorf("元ファイルを開けませんでした: %w", err)
-	}
-	defer sourceFile.Close()
-
-	destFile, err := os.Create(finalPath)
-	if err != nil {
-		return "", fmt.Errorf("保存先ファイルを作成できませんでした: %w", err)
-	}
-	defer destFile.Close()
-
-	_, err = io.Copy(destFile, sourceFile)
-	if err != nil {
-		return "", fmt.Errorf("ファイルのコピーに失敗しました: %w", err)
-	}
-
-	sourceFile.Close()
-	destFile.Close()
-
-	if err := os.Remove(originalPath); err != nil {
-		log.Printf("WARN: 一時ファイルの削除に失敗しました: %v", err)
-	}
-
-	log.Printf("ファイルをリネームしました: %s", finalPath)
-	return finalPath, nil
-}
-
-func findEdgePath() string {
-	lookIn := []string{
-		os.Getenv("ProgramFiles"),
-		os.Getenv("ProgramFiles(x86)"),
-	}
-	for _, dir := range lookIn {
-		path := filepath.Join(dir, "Microsoft", "Edge", "Application", "msedge.exe")
-		if _, err := os.Stat(path); err == nil {
-			return path
-		}
-	}
-	return ""
 }
 
 
@@ -4741,7 +4820,6 @@ import (
 	"log"
 	"net/http"
 	"time"
-	"wasabi/config"
 	"wasabi/db"
 	"wasabi/model"
 	"wasabi/units"
@@ -4774,22 +4852,17 @@ func GetInventoryDataHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		cfg, err := config.LoadConfig()
-		if err != nil {
-			http.Error(w, "設定ファイルの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
+		// ▼▼▼【ここから修正】▼▼▼
+		// 設定ファイルに依存せず、期間を「本日より30日前まで」に固定する
+		now := time.Now()
+		endDate := now
+		startDate := now.AddDate(0, 0, -30) // 30日前に固定
+		yesterdayDate := now.AddDate(0, 0, -1)
 
-		endDate, err := time.Parse("20060102", cfg.PeriodEndDate)
-		if err != nil {
-			http.Error(w, "Invalid endDate format in config", http.StatusBadRequest)
-			return
-		}
-		yesterdayDateStr := endDate.AddDate(0, 0, -1).Format("20060102")
-
+		// 1. 本日までの取引履歴を含む元帳を取得
 		filtersToday := model.AggregationFilters{
-			StartDate: cfg.PeriodStartDate,
-			EndDate:   cfg.PeriodEndDate,
+			StartDate: startDate.Format("20060102"),
+			EndDate:   endDate.Format("20060102"),
 			YjCode:    yjCode,
 		}
 		ledgerToday, err := db.GetStockLedger(conn, filtersToday)
@@ -4798,18 +4871,20 @@ func GetInventoryDataHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
+		// 2. 前日時点の理論在庫を計算するための元帳を取得
 		filtersYesterday := model.AggregationFilters{
-			StartDate: cfg.PeriodStartDate,
-			EndDate:   yesterdayDateStr,
+			StartDate: startDate.Format("20060102"),
+			EndDate:   yesterdayDate.Format("20060102"),
 			YjCode:    yjCode,
 		}
+		// ▲▲▲【修正ここまで】▲▲▲
+
 		ledgerYesterday, err := db.GetStockLedger(conn, filtersYesterday)
 		if err != nil {
 			http.Error(w, "Failed to get yesterday's stock ledger: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		// ▼▼▼ [修正] convertToView の呼び出しが正しく動作するように、関数をGoで実装 ▼▼▼
 		transactionLedgerView := convertToView(ledgerToday)
 		var yesterdaysStockView *StockLedgerYJGroupView
 		if len(ledgerYesterday) > 0 {
@@ -4851,7 +4926,7 @@ func GetInventoryDataHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// ▼▼▼ [追加] JavaScriptのロジックをGoで再実装した `convertToView` 関数 ▼▼▼
+// (これ以降の convertToView, SaveInventoryDataHandler などの関数は変更ありません)
 func convertToView(ledgerData []model.StockLedgerYJGroup) []StockLedgerYJGroupView {
 	view := make([]StockLedgerYJGroupView, 0, len(ledgerData))
 	for _, yjGroup := range ledgerData {
@@ -4885,7 +4960,6 @@ func convertToView(ledgerData []model.StockLedgerYJGroup) []StockLedgerYJGroupVi
 	return view
 }
 
-// ▼▼▼ [追加] `main.go`から要求されている `SaveInventoryDataHandler` 関数 ▼▼▼
 type SavePayload struct {
 	Date          string                  `json:"date"`
 	YjCode        string                  `json:"yjCode"`
@@ -6232,12 +6306,9 @@ func createMasterModelFromInput(input model.ProductMasterInput) model.ProductMas
 
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\medrec\handler.go -----
-// C:\Dev\WASABI\medrec\handler.go
-
 package medrec
 
 import (
-	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -6252,38 +6323,56 @@ import (
 	"wasabi/dat"
 
 	"github.com/chromedp/cdproto/browser"
-	// ▼▼▼ [修正点] "page" パッケージをインポート ▼▼▼
-	"github.com/chromedp/cdproto/page"
-	// ▲▲▲ 修正ここまで ▲▲▲
 	"github.com/chromedp/chromedp"
 )
+
+func writeJsonError(w http.ResponseWriter, message string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]string{"message": message})
+}
+
+func findChromePath() string {
+	paths := []string{
+		filepath.Join(os.Getenv("ProgramFiles"), "Google", "Chrome", "Application", "chrome.exe"),
+		filepath.Join(os.Getenv("ProgramFiles(x86)"), "Google", "Chrome", "Application", "chrome.exe"),
+	}
+	for _, path := range paths {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ""
+}
 
 func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cfg, err := config.LoadConfig()
 		if err != nil {
-			http.Error(w, "設定ファイルの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
+			writeJsonError(w, "設定ファイルの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+
 		if cfg.EmednetUserID == "" || cfg.EmednetPassword == "" {
-			http.Error(w, "e-mednetのIDまたはパスワードが設定されていません。設定画面を確認してください。", http.StatusBadRequest)
+			writeJsonError(w, "IDまたはパスワードが設定されていません。", http.StatusBadRequest)
 			return
 		}
+
+		tempDir, err := os.MkdirTemp("", "chromedp-medrec-")
+		if err != nil {
+			writeJsonError(w, "一時プロファイルディレクトリの作成に失敗: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer os.RemoveAll(tempDir)
 
 		opts := append(chromedp.DefaultExecAllocatorOptions[:],
 			chromedp.Flag("headless", false),
 			chromedp.Flag("disable-gpu", true),
-			chromedp.Flag("no-sandbox", true),
-			chromedp.Flag("no-first-run", true),
-			chromedp.Flag("no-default-browser-check", true),
-			// ▼▼▼ [この行を追加] ▼▼▼
-			chromedp.Flag("disable-features", "RendererCodeIntegrity"),
-			// ▲▲▲ [追加ここまで] ▲▲▲
-			chromedp.UserAgent(`Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36`),
+			chromedp.UserDataDir(tempDir),
 		)
 
-		if edgePath := findEdgePath(); edgePath != "" {
-			opts = append(opts, chromedp.ExecPath(edgePath))
+		if execPath := findChromePath(); execPath != "" {
+			opts = append(opts, chromedp.ExecPath(execPath))
 		}
 
 		allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
@@ -6292,41 +6381,31 @@ func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 		ctx, cancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(log.Printf))
 		defer cancel()
 
-		downloadDir, err := filepath.Abs("./download/DAT")
+		downloadDir, err := filepath.Abs(filepath.Join(".", "download", "DAT"))
 		if err != nil {
-			http.Error(w, "ダウンロードディレクトリのパス取得に失敗しました: "+err.Error(), http.StatusInternalServerError)
+			writeJsonError(w, "ダウンロードディレクトリの絶対パス取得に失敗: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		if err := os.MkdirAll(downloadDir, 0755); err != nil {
-			http.Error(w, "ダウンロードディレクトリの作成に失敗しました: "+err.Error(), http.StatusInternalServerError)
+			writeJsonError(w, "ダウンロードディレクトリの作成に失敗: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		var downloadedFilePath string
-		done := make(chan string, 1)
-		// ▼▼▼ [修正点] 自動でダイアログを処理するリスナーを追加 ▼▼▼
-		chromedp.ListenTarget(ctx, func(ev interface{}) {
-			if e, ok := ev.(*browser.EventDownloadProgress); ok {
-				if e.State == browser.DownloadProgressStateCompleted {
-					done <- e.GUID
-				}
-			}
-			// JavaScriptの確認ダイアログ（alert, confirmなど）が開いた場合に自動でOKを押す
-			if _, ok := ev.(*page.EventJavascriptDialogOpening); ok {
-				go func() {
-					if err := chromedp.Run(ctx, page.HandleJavaScriptDialog(true)); err != nil {
-						log.Printf("could not handle javascript dialog: %v", err)
-					}
-				}()
-			}
-		})
-		// ▲▲▲ 修正ここまで ▲▲▲
+		filesBefore, err := os.ReadDir(downloadDir)
+		if err != nil {
+			writeJsonError(w, "ダウンロードディレクトリの読み取りに失敗: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		filesBeforeMap := make(map[string]bool)
+		for _, f := range filesBefore {
+			filesBeforeMap[f.Name()] = true
+		}
 
 		var initialLatestTimestamp string
 		err = chromedp.Run(ctx,
-			browser.SetDownloadBehavior(browser.SetDownloadBehaviorBehaviorAllowAndName).
-				WithDownloadPath(downloadDir).
-				WithEventsEnabled(true),
+			// ▼▼▼【ここを修正】 page. -> browser. に変更 ▼▼▼
+			browser.SetDownloadBehavior(browser.SetDownloadBehaviorBehaviorAllow).WithDownloadPath(downloadDir),
+			// ▲▲▲【修正ここまで】▲▲▲
 			chromedp.Navigate(`https://www.e-mednet.jp/`),
 			chromedp.WaitVisible(`input[name="userid"]`),
 			chromedp.SendKeys(`input[name="userid"]`, cfg.EmednetUserID),
@@ -6336,170 +6415,91 @@ func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 			chromedp.Click(`//a[contains(@href, "busi_id=11")]`),
 			chromedp.WaitVisible(`//a[contains(text(), "納品受信(JAN)")]`),
 			chromedp.Click(`//a[contains(text(), "納品受信(JAN)")]`),
-			// ▼▼▼ [修正点] WaitVisible から WaitReady に変更 ▼▼▼
-			chromedp.WaitReady(`input[value="未受信データ全件受信"]`),
-			// ▲▲▲ 修正ここまで ▲▲▲
-			// クリック前に、現在の最新履歴のタイムスタンプを取得しておく
-			chromedp.Text(`table.result-list-table tbody tr:first-child td.col-transceiving-date`, &initialLatestTimestamp),
-			// ボタンをクリックしてデータ受信を実行
-			chromedp.Click(`input[value="未受信データ全件受信"]`),
-			// クリック後に意図的に待機
-			chromedp.Sleep(3*time.Second),
+			chromedp.WaitReady(`input[name="unreceive_button"]`),
+			chromedp.Text(`table.result-list-table tbody tr:first-child td.col-transceiving-date`, &initialLatestTimestamp, chromedp.AtLeast(0)),
+			chromedp.Click(`input[name="unreceive_button"]`),
 		)
-
 		if err != nil {
-			log.Printf("ERROR: Chromedp task failed during navigation/clicks: %v", err)
-			http.Error(w, "e-mednetの自動操作（画面遷移）に失敗しました: "+err.Error(), http.StatusInternalServerError)
+			writeJsonError(w, "自動操作に失敗しました: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		var noDataFound bool
-		timeout := time.After(90 * time.Second) // タイムアウトを90秒に延長
-		ticker := time.NewTicker(500 * time.Millisecond)
-		defer ticker.Stop()
-
-	Loop:
+		var newFilePath string
+		var downloadSuccess, noDataFound bool
+		timeout := time.After(30 * time.Second)
+	CheckLoop:
 		for {
 			select {
-			case guid := <-done:
-				downloadedFilePath = filepath.Join(downloadDir, guid)
-				log.Printf("Download completed: %s", guid)
-				break Loop
 			case <-timeout:
-				err = fmt.Errorf("operation timed out after 90 seconds")
-				break Loop
-			case <-ticker.C:
-				checkCtx, cancelCheck := context.WithTimeout(ctx, 2*time.Second)
+				writeJsonError(w, "30秒以内にサイトの反応が確認できませんでした。", http.StatusRequestTimeout)
+				return
+			case <-time.After(1 * time.Second):
 				var newLatestTimestamp, resultText string
 
-				// 履歴テーブルの最新タイムスタンプを再取得
-				if errCheck := chromedp.Run(checkCtx,
-					chromedp.Text(`table.result-list-table tbody tr:first-child td.col-transceiving-date`, &newLatestTimestamp),
-				); errCheck == nil {
-					// タイムスタンプがクリック前と異なっていれば、ページが更新されたと判断
-					if strings.TrimSpace(newLatestTimestamp) != strings.TrimSpace(initialLatestTimestamp) {
-						// 更新された行の「受信結果」テキストを取得
-						if errResult := chromedp.Run(checkCtx,
-							chromedp.Text(`table.result-list-table tbody tr:first-child td.col-result`, &resultText),
-						); errResult == nil && strings.TrimSpace(resultText) == "受信データなし" {
-							noDataFound = true
-							log.Println("No new delivery data message found in history table.")
-							cancelCheck()
-							break Loop
-						}
+				checkCtx, cancelCheck := context.WithTimeout(ctx, 4*time.Second)
+				_ = chromedp.Run(checkCtx,
+					chromedp.Text(`table.result-list-table tbody tr:first-child td.col-transceiving-date`, &newLatestTimestamp, chromedp.AtLeast(0)),
+				)
+				cancelCheck()
+
+				if strings.TrimSpace(newLatestTimestamp) != strings.TrimSpace(initialLatestTimestamp) {
+					checkCtx, cancelCheck = context.WithTimeout(ctx, 4*time.Second)
+					_ = chromedp.Run(checkCtx,
+						chromedp.Text(`table.result-list-table tbody tr:first-child td.col-result`, &resultText, chromedp.AtLeast(0)),
+					)
+					cancelCheck()
+
+					if strings.TrimSpace(resultText) == "正常完了" {
+						downloadSuccess = true
+						break CheckLoop
+					}
+					if strings.TrimSpace(resultText) == "受信データなし" {
+						noDataFound = true
+						break CheckLoop
 					}
 				}
-				cancelCheck()
 			}
-		}
-
-		if err != nil {
-			log.Printf("ERROR: Chromedp task failed during wait: %v", err)
-			errMsg := strings.ReplaceAll(err.Error(), "\n", " ")
-			http.Error(w, "e-mednetの自動操作（待機処理）に失敗しました: "+errMsg, http.StatusInternalServerError)
-			return
 		}
 
 		if noDataFound {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{
-				"message": "未受信の納品データはありませんでした。",
-			})
+			writeJsonError(w, "未受信の納品データはありませんでした。", http.StatusOK)
 			return
 		}
 
-		// ファイルハンドルが解放されるのを少し待つ (ファイル名変更失敗対策)
-		time.Sleep(500 * time.Millisecond)
-
-		if downloadedFilePath == "" {
-			http.Error(w, "e-mednetからのダウンロードに失敗したか、予期せぬ状態になりました。", http.StatusInternalServerError)
-			return
-		}
-
-		log.Printf("File temporarily downloaded to %s", downloadedFilePath)
-
-		// ファイル名変換ロジック
-		tempFile, err := os.Open(downloadedFilePath)
-		if err != nil {
-			http.Error(w, "ダウンロードしたファイルを開けませんでした: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		scanner := bufio.NewScanner(tempFile)
-		var destDir string
-		var newBaseName string
-		if scanner.Scan() {
-			firstLine := scanner.Text()
-			if strings.HasPrefix(firstLine, "S") && len(firstLine) >= 39 {
-				timestampStr := firstLine[27:39]
-				yy, mm, dd, h, m, s := timestampStr[0:2], timestampStr[2:4], timestampStr[4:6], timestampStr[6:8], timestampStr[8:10], timestampStr[10:12]
-				newBaseName = fmt.Sprintf("20%s%s%s_%s%s%s", yy, mm, dd, h, m, s)
+		if downloadSuccess {
+			timeoutFile := time.After(10 * time.Second)
+		FileLoop:
+			for {
+				select {
+				case <-timeoutFile:
+					writeJsonError(w, "サイトの反応はありましたが、10秒以内にファイルが見つかりませんでした。", http.StatusInternalServerError)
+					return
+				case <-time.After(500 * time.Millisecond):
+					filesAfter, _ := os.ReadDir(downloadDir)
+					for _, f := range filesAfter {
+						if !filesBeforeMap[f.Name()] && !strings.HasSuffix(f.Name(), ".crdownload") {
+							newFilePath = filepath.Join(downloadDir, f.Name())
+							break FileLoop
+						}
+					}
+				}
 			}
-		}
-		tempFile.Close() // スキャンが終わったらファイルを閉じる
-
-		if newBaseName != "" {
-			destDir = filepath.Join("download", "DAT")
 		} else {
-			destDir = filepath.Join("download", "DAT", "unorganized")
-			newBaseName = time.Now().Format("20060102150405")
-			log.Printf("Warning: Could not parse timestamp from downloaded file. Saving to %s", destDir)
-		}
-
-		if err := os.MkdirAll(destDir, 0755); err != nil {
-			log.Printf("Failed to create destination directory %s: %v", destDir, err)
-			http.Error(w, "ディレクトリの作成に失敗しました: "+err.Error(), http.StatusInternalServerError)
+			writeJsonError(w, "ダウンロードされたファイルの検知に失敗しました。", http.StatusInternalServerError)
 			return
 		}
 
-		finalPath := filepath.Join(destDir, newBaseName+".DAT")
-		// 名前が衝突した場合の連番処理
-		for i := 1; ; i++ {
-			if _, err := os.Stat(finalPath); os.IsNotExist(err) {
-				break
-			}
-			finalPath = filepath.Join(destDir, fmt.Sprintf("%s(%d)%s", newBaseName, i, ".DAT"))
-		}
-
-		// ファイルハンドルが解放されるのを少し待つ
-		time.Sleep(500 * time.Millisecond)
-
-		if err := os.Rename(downloadedFilePath, finalPath); err != nil {
-			log.Printf("WARN: Failed to rename downloaded file: %v. Processing with original name.", err)
-			// リネームに失敗しても、元のファイルパスで処理を試みる
-			finalPath = downloadedFilePath
-		} else {
-			log.Printf("File successfully renamed to %s", finalPath)
-		}
-
-		processedRecords, err := dat.ProcessDatFile(conn, finalPath)
+		processedRecords, err := dat.ProcessDatFile(conn, newFilePath)
 		if err != nil {
-			log.Printf("ERROR: Failed to process downloaded DAT file %s: %v", finalPath, err)
-			http.Error(w, "ダウンロードしたDATファイルの処理に失敗しました: "+err.Error(), http.StatusInternalServerError)
+			writeJsonError(w, "ダウンロードしたDATファイルの処理に失敗: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
-			"message": fmt.Sprintf("e-mednetから%d件の納品データをダウンロードし、システムに登録しました。", len(processedRecords)),
+			"message": fmt.Sprintf("%d件の納品データをダウンロードし登録しました。", len(processedRecords)),
 		})
 	}
-}
-
-// findEdgePath は一般的なインストール場所からMicrosoft Edgeの実行ファイルを探します。
-func findEdgePath() string {
-	// Program FilesとProgram Files (x86)の両方を検索
-	lookIn := []string{
-		os.Getenv("ProgramFiles"),
-		os.Getenv("ProgramFiles(x86)"),
-	}
-	for _, dir := range lookIn {
-		path := filepath.Join(dir, "Microsoft", "Edge", "Application", "msedge.exe")
-		if _, err := os.Stat(path); err == nil {
-			return path // 見つかったらすぐにパスを返す
-		}
-	}
-	return "" // 見つからなければ空文字を返す
 }
 
 
@@ -6837,7 +6837,7 @@ import (
 	"net/http"
 	"strconv"
 	"time"
-	"wasabi/config" // config パッケージをインポート
+	"wasabi/config"
 	"wasabi/db"
 	"wasabi/model"
 	"wasabi/units"
@@ -6865,7 +6865,6 @@ type OrderCandidatePackageGroup struct {
 func GenerateOrderCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// ▼▼▼【ここから修正】▼▼▼
-		// URLクエリから期間設定を削除
 		kanaName := r.URL.Query().Get("kanaName")
 		dosageForm := r.URL.Query().Get("dosageForm")
 		coefficientStr := r.URL.Query().Get("coefficient")
@@ -6874,17 +6873,22 @@ func GenerateOrderCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 			coefficient = 1.3
 		}
 
-		// 設定ファイルから期間を読み込む
+		// 設定ファイルから集計日数を読み込む
 		cfg, err := config.LoadConfig()
 		if err != nil {
 			http.Error(w, "設定ファイルの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
+		// 日数から期間を動的に計算
+		now := time.Now()
+		endDate := "99991231" // 終了日は無制限
+		startDate := now.AddDate(0, 0, -cfg.CalculationPeriodDays)
+
 		// パラメータをフィルタ用の構造体にまとめる
 		filters := model.AggregationFilters{
-			StartDate:   cfg.PeriodStartDate,
-			EndDate:     cfg.PeriodEndDate,
+			StartDate:   startDate.Format("20060102"),
+			EndDate:     endDate,
 			KanaName:    kanaName,
 			DosageForm:  dosageForm,
 			Coefficient: coefficient,
@@ -7205,26 +7209,34 @@ package precomp
 
 import (
 	"database/sql"
-	"encoding/csv" // encoding/csvを追加
+	"encoding/csv"
 	"encoding/json"
-	"fmt" // fmtを追加
+	"fmt"
 	"log"
 	"net/http"
-	"strconv" // strconvを追加
-	"wasabi/db"
-
 	"os"
 	"path/filepath"
+	"strconv"
+	"wasabi/db"
+	"wasabi/model"
 
-	"golang.org/x/text/encoding/japanese" // transformを追加
+	"golang.org/x/text/encoding/japanese"
 	"golang.org/x/text/transform"
 )
 
+// PrecompPayload は保存・更新時にフロントエンドから受け取るデータ構造です
 type PrecompPayload struct {
 	PatientNumber string                  `json:"patientNumber"`
 	Records       []db.PrecompRecordInput `json:"records"`
 }
 
+// LoadResponse は呼び出し時にフロントエンドへ返すデータ構造です
+type LoadResponse struct {
+	Status  string                    `json:"status"`
+	Records []model.TransactionRecord `json:"records"`
+}
+
+// SavePrecompHandler は予製データを保存・更新します
 func SavePrecompHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var payload PrecompPayload
@@ -7246,7 +7258,7 @@ func SavePrecompHandler(conn *sql.DB) http.HandlerFunc {
 		defer tx.Rollback()
 
 		if err := db.UpsertPreCompoundingRecordsInTx(tx, payload.PatientNumber, payload.Records); err != nil {
-			log.Printf("ERROR: Failed to save pre-compounding records for patient %s: %v", payload.PatientNumber, err) // この行を追加
+			log.Printf("ERROR: Failed to save pre-compounding records for patient %s: %v", payload.PatientNumber, err)
 			http.Error(w, "Failed to save pre-compounding records: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -7261,6 +7273,7 @@ func SavePrecompHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
+// LoadPrecompHandler は患者の予製データと現在のステータスを返します
 func LoadPrecompHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		patientNumber := r.URL.Query().Get("patientNumber")
@@ -7269,18 +7282,27 @@ func LoadPrecompHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
+		status, err := db.GetPreCompoundingStatusByPatient(conn, patientNumber)
+		if err != nil {
+			http.Error(w, "Failed to get pre-compounding status: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 		records, err := db.GetPreCompoundingRecordsByPatient(conn, patientNumber)
 		if err != nil {
 			http.Error(w, "Failed to load pre-compounding records: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		// The simple list view does not require a complex view model, so we return the records directly.
+		response := LoadResponse{
+			Status:  status,
+			Records: records,
+		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(records)
+		json.NewEncoder(w).Encode(response)
 	}
 }
 
+// ClearPrecompHandler は予製データを完全に削除します
 func ClearPrecompHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		patientNumber := r.URL.Query().Get("patientNumber")
@@ -7295,11 +7317,93 @@ func ClearPrecompHandler(conn *sql.DB) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"message": "予製データを中断しました。"})
+		json.NewEncoder(w).Encode(map[string]string{"message": "予製データを完全に削除しました。"})
 	}
 }
 
-// ▼▼▼【ここから追加】▼▼▼
+// SuspendPrecompHandler は予製を中断状態にします
+func SuspendPrecompHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			PatientNumber string `json:"patientNumber"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		if payload.PatientNumber == "" {
+			http.Error(w, "Patient number is required", http.StatusBadRequest)
+			return
+		}
+		tx, err := conn.Begin()
+		if err != nil {
+			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback()
+		if err := db.SuspendPreCompoundingRecordsByPatient(tx, payload.PatientNumber); err != nil {
+			http.Error(w, "Failed to suspend pre-compounding records: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"message": "予製を中断しました。"})
+	}
+}
+
+// ResumePrecompHandler は予製を再開状態にします
+func ResumePrecompHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			PatientNumber string `json:"patientNumber"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		if payload.PatientNumber == "" {
+			http.Error(w, "Patient number is required", http.StatusBadRequest)
+			return
+		}
+		tx, err := conn.Begin()
+		if err != nil {
+			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback()
+		if err := db.ResumePreCompoundingRecordsByPatient(tx, payload.PatientNumber); err != nil {
+			http.Error(w, "Failed to resume pre-compounding records: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"message": "予製を再開しました。"})
+	}
+}
+
+// GetStatusPrecompHandler は予製の現在の状態を返します
+func GetStatusPrecompHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		patientNumber := r.URL.Query().Get("patientNumber")
+		if patientNumber == "" {
+			http.Error(w, "Patient number is required", http.StatusBadRequest)
+			return
+		}
+		status, err := db.GetPreCompoundingStatusByPatient(conn, patientNumber)
+		if err != nil {
+			http.Error(w, "Failed to get status: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": status})
+	}
+}
 
 func ExportPrecompHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -7351,7 +7455,6 @@ func ExportPrecompHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// ImportPrecompHandler はCSVから予製リストをインポートします。
 func ImportPrecompHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseMultipartForm(10 << 20); err != nil { // 10MB limit
@@ -7372,7 +7475,6 @@ func ImportPrecompHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer file.Close()
 
-		// Shift_JISからUTF-8への変換
 		reader := transform.NewReader(file, japanese.ShiftJIS.NewDecoder())
 		csvReader := csv.NewReader(reader)
 		csvReader.LazyQuotes = true
@@ -7384,7 +7486,6 @@ func ImportPrecompHandler(conn *sql.DB) http.HandlerFunc {
 		}
 
 		var precompRecords []db.PrecompRecordInput
-		// ヘッダー行をスキップ (i=1から開始)
 		for i, row := range records {
 			if i == 0 || len(row) < 3 {
 				continue
@@ -7424,9 +7525,6 @@ func ImportPrecompHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// ▲▲▲【追加ここまで】▲▲▲
-// ▼▼▼ [修正点] 以下の関数をファイル末尾に追加 ▼▼▼
-// ExportAllPrecompHandler は全患者の予製リストをCSVとしてエクスポートします。
 func ExportAllPrecompHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		records, err := db.GetAllPreCompoundingRecords(conn)
@@ -7443,14 +7541,12 @@ func ExportAllPrecompHandler(conn *sql.DB) http.HandlerFunc {
 		csvWriter := csv.NewWriter(w)
 		defer csvWriter.Flush()
 
-		// ヘッダーに「患者番号」を追加
 		header := []string{"patient_number", "product_code", "product_name", "quantity_jan", "unit_name"}
 		if err := csvWriter.Write(header); err != nil {
 			log.Printf("Failed to write CSV header for all precomp export: %v", err)
 			return
 		}
 
-		// データに患者番号(ClientCode)を追加して書き込み
 		for _, rec := range records {
 			row := []string{
 				rec.ClientCode,
@@ -7467,9 +7563,6 @@ func ExportAllPrecompHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// ▲▲▲ 修正ここまで ▲▲▲
-// ▼▼▼【ここから追加】▼▼▼
-// BulkImportPrecompHandler は複数患者の予製リストをCSVから一括でインポートします。
 func BulkImportPrecompHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		file, _, err := r.FormFile("file")
@@ -7479,7 +7572,6 @@ func BulkImportPrecompHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer file.Close()
 
-		// Shift_JISからUTF-8への変換
 		reader := transform.NewReader(file, japanese.ShiftJIS.NewDecoder())
 		csvReader := csv.NewReader(reader)
 		csvReader.LazyQuotes = true
@@ -7490,10 +7582,8 @@ func BulkImportPrecompHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// 患者番号ごとにレコードをグループ化
 		recordsByPatient := make(map[string][]db.PrecompRecordInput)
 		var importedCount int
-		// ヘッダー行をスキップ (i=1から開始)
 		for i, row := range records {
 			if i == 0 || len(row) < 4 {
 				continue
@@ -7523,7 +7613,6 @@ func BulkImportPrecompHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer tx.Rollback()
 
-		// 患者ごとにUpsert処理を実行
 		for patientNumber, precompRecords := range recordsByPatient {
 			if err := db.UpsertPreCompoundingRecordsInTx(tx, patientNumber, precompRecords); err != nil {
 				http.Error(w, fmt.Sprintf("Failed to save records for patient %s: %s", patientNumber, err.Error()), http.StatusInternalServerError)
@@ -7542,8 +7631,6 @@ func BulkImportPrecompHandler(conn *sql.DB) http.HandlerFunc {
 		})
 	}
 }
-
-// ▲▲▲【追加ここまで】▲▲▲
 
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\pricing\handler.go -----
@@ -7972,7 +8059,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"wasabi/config" // config パッケージをインポート
+	"time"
+	"wasabi/config"
 	"wasabi/db"
 	"wasabi/model"
 	"wasabi/units"
@@ -8005,32 +8093,28 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 		kanaInitial := q.Get("kanaInitial")
 		searchQuery := q.Get("q")
 		isDeadStockOnly := q.Get("deadStockOnly") == "true"
-
-		// ▼▼▼【ここから修正】▼▼▼
-		// URLクエリからの期間取得を削除
+		drugTypesParam := q.Get("drugTypes")
 
 		var results []model.ProductMasterView
 
 		if isDeadStockOnly {
-			// 設定ファイルから期間を読み込む
 			cfg, err := config.LoadConfig()
 			if err != nil {
 				http.Error(w, "設定ファイルの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
-			if cfg.PeriodStartDate == "" || cfg.PeriodEndDate == "" {
-				http.Error(w, "デッドストック検索には設定画面での期間設定が必要です。", http.StatusBadRequest)
-				return
-			}
+
+			now := time.Now()
+			endDate := "99991231"
+			startDate := now.AddDate(0, 0, -cfg.CalculationPeriodDays)
 
 			filters := model.DeadStockFilters{
-				StartDate:        cfg.PeriodStartDate,
-				EndDate:          cfg.PeriodEndDate,
-				ExcludeZeroStock: true, // 在庫0は除外
+				StartDate:        startDate.Format("20060102"),
+				EndDate:          endDate,
+				ExcludeZeroStock: true,
 				KanaName:         kanaInitial,
 				DosageForm:       dosageForm,
 			}
-			// ▲▲▲【修正ここまで】▲▲▲
 
 			tx, txErr := conn.Begin()
 			if txErr != nil {
@@ -8070,11 +8154,11 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 			}
 
 		} else {
-			query := `SELECT ` + db.SelectColumns + ` FROM product_master WHERE yj_code != ''`
+			query := `SELECT ` + db.SelectColumns + ` FROM product_master p WHERE p.yj_code != '' AND p.origin != 'PROVISIONAL'`
 			var args []interface{}
 
 			if dosageForm != "" {
-				query += " AND usage_classification LIKE ?"
+				query += " AND p.usage_classification LIKE ?"
 				args = append(args, "%"+dosageForm+"%")
 			}
 
@@ -8094,7 +8178,7 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 						for _, char := range charsToTest {
 							kataChar := string(char)
 							hiraChar := toHiragana(kataChar)
-							conditions = append(conditions, "kana_name LIKE ? OR kana_name LIKE ?")
+							conditions = append(conditions, "p.kana_name LIKE ? OR p.kana_name LIKE ?")
 							args = append(args, kataChar+"%", hiraChar+"%")
 						}
 					}
@@ -8104,12 +8188,35 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 				}
 			}
 
+			if drugTypesParam != "" {
+				drugTypes := strings.Split(drugTypesParam, ",")
+				if len(drugTypes) > 0 && drugTypes[0] != "" {
+					var conditions []string
+					flagMap := map[string]string{
+						"poison":        "p.flag_poison = 1",
+						"deleterious":   "p.flag_deleterious = 1",
+						"narcotic":      "p.flag_narcotic = 1",
+						"psychotropic1": "p.flag_psychotropic = 1",
+						"psychotropic2": "p.flag_psychotropic = 2",
+						"psychotropic3": "p.flag_psychotropic = 3",
+					}
+					for _, dt := range drugTypes {
+						if cond, ok := flagMap[dt]; ok {
+							conditions = append(conditions, cond)
+						}
+					}
+					if len(conditions) > 0 {
+						query += " AND (" + strings.Join(conditions, " OR ") + ")"
+					}
+				}
+			}
+
 			if searchQuery != "" {
-				query += " AND (kana_name LIKE ? OR product_name LIKE ?)"
+				query += " AND (p.kana_name LIKE ? OR p.product_name LIKE ?)"
 				args = append(args, "%"+searchQuery+"%", "%"+searchQuery+"%")
 			}
 
-			query += " ORDER BY kana_name"
+			query += " ORDER BY p.kana_name"
 
 			rows, queryErr := conn.Query(query, args...)
 			if queryErr != nil {
@@ -8168,6 +8275,108 @@ func toKatakana(s string) string {
 	}
 	return string(r)
 }
+
+// ▼▼▼【ここを修正】▼▼▼
+// LedgerEntry 構造体から TransactionType を削除
+type LedgerEntry struct {
+	Date       string  `json:"Date"`
+	Receipt    float64 `json:"Receipt"`
+	Dispense   float64 `json:"Dispense"`
+	Stock      float64 `json:"Stock"`
+	Wholesaler string  `json:"Wholesaler"`
+	LotNumber  string  `json:"LotNumber"`
+	ExpiryDate string  `json:"ExpiryDate"`
+}
+
+// GetProductLedgerHandler を「取引があった日のみ表示」するロジックに全面的に書き換え
+func GetProductLedgerHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		productCode := strings.TrimPrefix(r.URL.Path, "/api/ledger/product/")
+		if productCode == "" {
+			http.Error(w, "Product code is required", http.StatusBadRequest)
+			return
+		}
+
+		// 1. 本日時点の理論在庫を計算
+		endingBalance, err := db.CalculateCurrentStockForProduct(conn, productCode)
+		if err != nil {
+			http.Error(w, "Failed to calculate current stock: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// 2. 過去7日間のトランザクションを取得
+		endDate := time.Now()
+		startDate := endDate.AddDate(0, 0, -7)
+		transactions, err := db.GetTransactionsForProductInDateRange(conn, productCode, startDate.Format("20060102"), endDate.Format("20060102"))
+		if err != nil {
+			http.Error(w, "Failed to get recent transactions: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// 取引がなければ空の結果を返す
+		if len(transactions) == 0 {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode([]LedgerEntry{})
+			return
+		}
+
+		// 3. トランザクションを日付ごとにグループ化
+		txsByDate := make(map[string][]model.TransactionRecord)
+		uniqueDates := []string{}
+		seenDates := make(map[string]bool)
+
+		for _, tx := range transactions {
+			dateStr := tx.TransactionDate[0:4] + "-" + tx.TransactionDate[4:6] + "-" + tx.TransactionDate[6:8]
+			txsByDate[dateStr] = append(txsByDate[dateStr], tx)
+			if !seenDates[dateStr] {
+				uniqueDates = append(uniqueDates, dateStr)
+				seenDates[dateStr] = true
+			}
+		}
+
+		// 4. 取引があった日のみを対象に逆算
+		var reversedLedgerEntries []LedgerEntry
+		runningBalance := endingBalance
+
+		// 日付の降順で処理するため、uniqueDatesは既に降順（DBクエリがDESC）のはず
+		for _, dateStr := range uniqueDates {
+			dailyEntry := LedgerEntry{
+				Date:  dateStr,
+				Stock: runningBalance, // この日の「最終」在庫
+			}
+
+			var netChangeToday float64
+			dayTxs := txsByDate[dateStr]
+
+			for _, tx := range dayTxs {
+				signedQty := tx.SignedYjQty()
+				netChangeToday += signedQty
+
+				if signedQty > 0 {
+					dailyEntry.Receipt += signedQty
+				} else {
+					dailyEntry.Dispense += -signedQty
+				}
+				dailyEntry.Wholesaler = tx.ClientCode
+				dailyEntry.LotNumber = tx.LotNumber
+				dailyEntry.ExpiryDate = tx.ExpiryDate
+			}
+			reversedLedgerEntries = append(reversedLedgerEntries, dailyEntry)
+			runningBalance -= netChangeToday // 前の取引日の在庫を計算
+		}
+
+		// 5. 結果を時系列（古い順）に並び替え
+		finalLedgerEntries := make([]LedgerEntry, len(reversedLedgerEntries))
+		for i := 0; i < len(reversedLedgerEntries); i++ {
+			finalLedgerEntries[i] = reversedLedgerEntries[len(reversedLedgerEntries)-1-i]
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(finalLedgerEntries)
+	}
+}
+
+// ▲▲▲【修正ここまで】▲▲▲
 
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\reprocess\handler.go -----
@@ -8304,7 +8513,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"wasabi/config" // config パッケージをインポート
+	"time" // time パッケージをインポート
+	"wasabi/config"
 	"wasabi/db"
 	"wasabi/model"
 )
@@ -8320,17 +8530,23 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 		}
 
 		// ▼▼▼【ここから修正】▼▼▼
-		// 設定ファイルから期間を読み込む
+		// 設定ファイルから集計日数を読み込む
 		cfg, err := config.LoadConfig()
 		if err != nil {
 			http.Error(w, "設定ファイルの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		// フィルタ構造体に設定ファイルの値を使用する
+		// 日数から期間を動的に計算
+		now := time.Now()
+		endDate := "99991231" // 終了日は無制限
+		startDate := now.AddDate(0, 0, -cfg.CalculationPeriodDays)
+		startDateStr := startDate.Format("20060102")
+
+		// フィルタ構造体に計算した値を使用する
 		filters := model.AggregationFilters{
-			StartDate:   cfg.PeriodStartDate,
-			EndDate:     cfg.PeriodEndDate,
+			StartDate:   startDateStr,
+			EndDate:     endDate,
 			KanaName:    q.Get("kanaName"),
 			DosageForm:  q.Get("dosageForm"),
 			Coefficient: coefficient,
@@ -8338,11 +8554,11 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 
 		// ステップ1: 過去のデータから使用量を分析し、発注点を計算する
 		yjGroups, err := db.GetStockLedger(conn, filters)
-		// ▲▲▲【修正ここまで】▲▲▲
 		if err != nil {
 			http.Error(w, "Failed to get stock ledger: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		// ▲▲▲【修正ここまで】▲▲▲
 
 		// ステップ2: 「今現在」のリアルタイム在庫と発注残を別途取得する
 		currentStockMap, err := db.GetAllCurrentStockMap(conn)
@@ -8384,8 +8600,8 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 
 						// ▼▼▼ [追加ロジック] 納品履歴を取得する ▼▼▼
 						if len(productCodesInPackage) > 0 {
-							// ▼▼▼【修正】getDeliveryHistoryに渡す期間を設定ファイルの値に変更 ▼▼▼
-							deliveryHistory, err := getDeliveryHistory(conn, productCodesInPackage, cfg.PeriodStartDate, cfg.PeriodEndDate)
+							// ▼▼▼【修正】getDeliveryHistoryに渡す期間を動的に計算した値に変更 ▼▼▼
+							deliveryHistory, err := getDeliveryHistory(conn, productCodesInPackage, startDateStr, endDate)
 							if err != nil {
 								// エラーが発生しても処理は続行するが、ログには残す
 								fmt.Printf("WARN: Failed to get delivery history for package %s: %v\n", pkg.PackageKey, err)
@@ -8603,10 +8819,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
-	"strings" // stringsパッケージをインポート
+	"strings"
 	"wasabi/config"
-	"wasabi/db"    // dbパッケージをインポート
-	"wasabi/model" // modelパッケージをインポート
+	"wasabi/db"
+	"wasabi/model"
 )
 
 // GetSettingsHandler returns the current settings.
@@ -8645,9 +8861,8 @@ func SaveSettingsHandler(conn *sql.DB) http.HandlerFunc {
 		currentSettings.EdePassword = payload.EdePassword
 		currentSettings.UsageFolderPath = payload.UsageFolderPath
 		// ▼▼▼【ここから修正】▼▼▼
-		// 新しい期間設定の値をペイロードから読み取って上書きする
-		currentSettings.PeriodStartDate = payload.PeriodStartDate
-		currentSettings.PeriodEndDate = payload.PeriodEndDate
+		// 新しい期間日数の値をペイロードから読み取って上書きする
+		currentSettings.CalculationPeriodDays = payload.CalculationPeriodDays
 		// ▲▲▲【修正ここまで】▲▲▲
 
 		// 3. 完成した設定オブジェクトをサーバーに送信して保存
@@ -8742,6 +8957,22 @@ func ClearMastersHandler(conn *sql.DB) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"message": "全ての製品マスターを削除しました。"})
+	}
+}
+
+// GetUsagePathHandlerは設定からusageFolderPathの値のみを返します。
+func GetUsagePathHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cfg, err := config.LoadConfig()
+		if err != nil {
+			http.Error(w, "設定ファイルの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"path": cfg.UsageFolderPath,
+		})
 	}
 }
 
@@ -9020,6 +9251,12 @@ th { text-align: center; background-color: #f0f0f0; }
   .print-this-view tr {
     page-break-inside: avoid;
   }
+    /* ▼▼▼【ここに追加】▼▼▼ */
+  /* デッドストックリストの印刷時に、期間前取引履歴を非表示にする */
+  .print-this-view .recent-history-container {
+    display: none !important;
+  }
+  /* ▲▲▲【追加ここまで】▲▲▲ */
 }
 /* ▲▲▲ 修正ここまで ▲▲▲ */
 
@@ -9190,12 +9427,11 @@ export function initAggregation() {
 import { loadMasterData } from './master_data.js';
 import { initInOut, resetInOutView } from './inout.js';
 import { initDatUpload } from './dat.js';
-import { initUsageUpload } from './usage.js';
+import { initUsageUpload } from './usage.js'; // ★★★ この行が正しい唯一のimport文です ★★★
 import { initInventoryUpload } from './inventory.js';
 import { initInventoryAdjustment } from './inventory_adjustment.js';
-// ▼▼▼【ここに追加】▼▼▼
 import { initInventoryHistory } from './inventory_history.js';
-// ▲▲▲【追加ここまで】▲▲▲
+import { initLedgerView } from './ledger.js';
 import { initAggregation } from './aggregation.js';
 import { initMasterEdit, resetMasterEditView } from './master_edit.js';
 import { initReprocessButton } from './reprocess.js';
@@ -9214,7 +9450,6 @@ import { initPricingView } from './pricing.js';
 import { initReturnsView } from './returns.js';
 import { initEdge } from './edge.js';
 
-// ▼▼▼ [修正点] showLoading関数をメッセージが受け取れるように変更 ▼▼▼
 window.showLoading = (message = '処理中...') => {
     const overlay = document.getElementById('loading-overlay');
     const messageEl = document.getElementById('loading-message');
@@ -9225,7 +9460,6 @@ window.showLoading = (message = '処理中...') => {
         overlay.classList.remove('hidden');
     }
 };
-// ▲▲▲ 修正ここまで ▲▲▲
 
 window.hideLoading = () => document.getElementById('loading-overlay').classList.add('hidden');
 window.showNotification = (message, type = 'success') => {
@@ -9245,16 +9479,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     const usageBtn = document.getElementById('usageBtn');
     const inventoryBtn = document.getElementById('inventoryBtn');
     const inventoryAdjustmentBtn = document.getElementById('inventoryAdjustmentBtn');
-    // ▼▼▼【ここに追加】▼▼▼
     const inventoryHistoryBtn = document.getElementById('inventoryHistoryBtn');
-    // ▲▲▲【追加ここまで】▲▲▲
+    const ledgerBtn = document.getElementById('ledgerBtn');
     const manualInventoryBtn = document.getElementById('manualInventoryBtn');
     const aggregationBtn = document.getElementById('aggregationBtn');
     const masterEditBtn = document.getElementById('masterEditViewBtn');
     const settingsBtn = document.getElementById('settingsBtn');
     const datFileInput = document.getElementById('datFileInput');
     const usageFileInput = document.getElementById('usageFileInput');
- 
     const inventoryFileInput = document.getElementById('inventoryFileInput');
     const uploadOutputContainer = document.getElementById('upload-output-container');
     const inventoryOutputContainer = document.getElementById('inventory-output-container');
@@ -9277,9 +9509,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     initUsageUpload();
     initInventoryUpload();
     initInventoryAdjustment();
-    // ▼▼▼【ここに追加】▼▼▼
     initInventoryHistory();
-    // ▲▲▲【追加ここまで】▲▲▲
+    initLedgerView();
     initAggregation();
     initMasterEdit();
     initReprocessButton();
@@ -9316,13 +9547,30 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (uploadOutputContainer) uploadOutputContainer.innerHTML = '';
         datFileInput.click();
     });
-// 修正後
-usageBtn.addEventListener('click', () => {
-    showView('upload-view'); // 結果表示のためにビューは切り替える
-    document.getElementById('upload-view-title').textContent = `USAGE File Import`;
-    // initUsageUpload内の処理を直接呼び出す
-    document.dispatchEvent(new CustomEvent('importUsageFromPath'));
-});
+    
+    // ▼▼▼【ここが修正箇所】▼▼▼
+    // 「処方」ボタンのクリックイベント
+    usageBtn.addEventListener('click', async () => {
+        showView('upload-view');
+        document.getElementById('upload-view-title').textContent = `USAGE File Import`;
+        
+        try {
+            const res = await fetch('/api/config/usage_path');
+            const config = await res.json();
+
+            if (config.path) {
+                // パスが設定されていれば、自動インポート用のイベントを発火
+                document.dispatchEvent(new CustomEvent('importUsageFromPath'));
+            } else {
+                // パスがなければ、手動ファイル選択ダイアログを開く
+                usageFileInput.click();
+            }
+        } catch (err) {
+            window.showNotification('設定の読み込みに失敗しました。', 'error');
+        }
+    });
+    // ▲▲▲【修正ここまで】▲▲▲
+
     inventoryBtn.addEventListener('click', () => {
         showView('inventory-view');
         if (inventoryOutputContainer) inventoryOutputContainer.innerHTML = '';
@@ -9332,11 +9580,12 @@ usageBtn.addEventListener('click', () => {
         showView('manual-inventory-view');
         document.getElementById('manual-inventory-view').dispatchEvent(new Event('show'));
     });
-    // ▼▼▼【ここに追加】▼▼▼
     inventoryHistoryBtn.addEventListener('click', () => {
         showView('inventory-history-view');
     });
-    // ▲▲▲【追加ここまで】▲▲▲
+    ledgerBtn.addEventListener('click', () => {
+        showView('ledger-view');
+    });
     inventoryAdjustmentBtn.addEventListener('click', () => {
         showView('inventory-adjustment-view');
     });
@@ -10054,7 +10303,11 @@ function renderDeadStockList(data) {
     }
 
     let html = data.map(group => {
-        const unitName = group.packageGroups.length > 0 && group.packageGroups[0].products.length > 0 ? (group.packageGroups[0].yjUnitName || '単位') : '単位';
+let unitName = '単位'; // デフォルト値
+// グループ内に表示対象の製品が1つでもあれば、その製品のYJ単位名を使用する
+if (group.packageGroups.length > 0 && group.packageGroups[0].products.length > 0) {
+    unitName = group.packageGroups[0].products[0].yjUnitName || '単位';
+}
         const packagesHTML = group.packageGroups.map(createPackageGroupHTML).join('');
         
         return `<div class="yj-group-wrapper" 
@@ -11057,10 +11310,15 @@ async function performSearch() {
   // ▼▼▼ [修正点] 検索実行時にカナ変換 ▼▼▼
   const query = hiraganaToKatakana(searchInput.value.trim());
   // ▲▲▲ 修正ここまで ▲▲▲
-  if (query.length < 2 && query.length > 0) { // 1文字での検索は許可しないが、空欄での検索は（全件表示として）許可する場合
-    alert('2文字以上入力してください。');
+   // ▼▼▼【ここから修正】▼▼▼
+  // 検索文字が2文字未満の場合はAPIを呼び出さずに処理を中断する
+  if (query.length < 2) {
+    alert('検索キーワードを2文字以上入力してください。');
+    // 検索結果をクリアしてメッセージを表示
+    searchResultsBody.innerHTML = '<tr><td colspan="6" class="center">2文字以上入力して検索してください。</td></tr>';
     return;
   }
+  // ▲▲▲【修正ここまで】▲▲▲
   const searchApi = modal.dataset.searchApi || DEFAULT_SEARCH_API;
   searchResultsBody.innerHTML = '<tr><td colspan="6" class="center">検索中...</td></tr>';
   
@@ -11300,14 +11558,19 @@ function generateFullHtml(data) {
 }
 
 function generateSummaryLedgerHtml(yjGroup, yesterdaysTotal) {
-    const startDate = startDateFilter.value;
-    const endDate = endDateFilter.value;
+    // ▼▼▼【ここから修正】▼▼▼
+    // 削除された日付入力欄を参照するのではなく、JSで日付を直接計算する
+    const endDate = getLocalDateString();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - 30); // 30日前に固定
+    const startDateStr = startDate.toISOString().slice(0, 10);
+    // ▲▲▲【修正ここまで】▲▲▲
+
     let packageLedgerHtml = (yjGroup.packageLedgers || []).map(pkg => {
         const sortedTxs = (pkg.transactions || []).sort((a, b) => 
             (a.transactionDate + a.id).toString().localeCompare(b.transactionDate + b.id)
         );
-        
-        // ▼▼▼ [修正点] ラベルを「本日理論在庫」に変更し、値を当日のものにする ▼▼▼
+    
         const pkgHeader = `
             <div class="agg-pkg-header" style="margin-top: 10px;">
                 <span>包装: ${pkg.packageKey}</span>
@@ -11316,22 +11579,18 @@ function generateSummaryLedgerHtml(yjGroup, yesterdaysTotal) {
                 </span>
             </div>
         `;
-        // ▲▲▲ 修正ここまで ▲▲▲
-
         const txTable = renderStandardTable(`ledger-table-${pkg.packageKey.replace(/[^a-zA-Z0-9]/g, '')}`, sortedTxs);
         return pkgHeader + txTable;
     }).join('');
 
-    // ▼▼▼ [修正点] ラベルを「前日理論在庫」に変更し、値を前日のものにする ▼▼▼
     return `<div class="summary-section">
         <h3 class="view-subtitle">1. 全体サマリー</h3>
         <div class="report-section-header">
-            <h4>在庫元帳 (期間: ${startDate} ～ ${endDate})</h4>
+            <h4>在庫元帳 (期間: ${startDateStr} ～ ${endDate})</h4>
             <span class="header-total">【参考】前日理論在庫合計: ${yesterdaysTotal.toFixed(2)} ${yjGroup.yjUnitName}</span>
         </div>
         ${packageLedgerHtml}
     </div>`;
-    // ▲▲▲ 修正ここまで ▲▲▲
 }
 
 function generateSummaryPrecompHtml(precompDetails) {
@@ -11410,7 +11669,6 @@ function generateInputSectionsHtml(packageLedgers, yjUnitName = '単位') {
             
             const janUnitName = (master.janUnitCode === 0 || !unitMap[master.janUnitCode]) ? master.yjUnitName : (unitMap[master.janUnitCode] || master.yjUnitName);
             
-            // ▼▼▼ [修正点] ユーザー入力欄と逆算結果表示欄を追加 ▼▼▼
             const userInputArea = `
                 <div class="user-input-area" style="font-size: 14px; padding: 10px; background-color: #fffbdd;">
                     <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
@@ -11425,7 +11683,6 @@ function generateInputSectionsHtml(packageLedgers, yjUnitName = '単位') {
                         <span style="font-size: 11px; color: #555; margin-left: 10px;">(この数値が棚卸データとして登録されます)</span>
                     </div>
                 </div>`;
-            // ▲▲▲ 修正ここまで ▲▲▲
             
             const relevantDeadStock = (lastLoadedDataCache.deadStockDetails || []).filter(ds => ds.productCode === master.productCode);
             let finalInputTbodyHtml;
@@ -11438,13 +11695,16 @@ function generateInputSectionsHtml(packageLedgers, yjUnitName = '単位') {
             const finalInputTable = renderStandardTable(`final-table-${master.productCode}`, [], false, 
                 `<tbody class="final-input-tbody" data-product-code="${master.productCode}">${finalInputTbodyHtml}</tbody>`);
             
+            // ▼▼▼【ここから修正】▼▼▼
+            // <details>と<summary>タグを削除し、常に表示されるようにする
             return `<div class="product-input-group" style="padding-left: 20px; margin-top: 10px;">
                         ${userInputArea}
-                        <details style="margin-top: 10px;">
-                            <summary style="font-size: 12px; cursor: pointer;">ロット・期限を個別入力する</summary>
+                        <div style="margin-top: 10px;">
+                            <p style="font-size: 12px; font-weight: bold; margin-bottom: 4px;">ロット・期限を個別入力</p>
                             ${finalInputTable}
-                        </details>
+                        </div>
                     </div>`;
+            // ▲▲▲【修正ここまで】▲▲▲
         }).join('');
 
         html += `</div>`;
@@ -11956,6 +12216,145 @@ export function initJcshmsUpdate() {
         } finally {
             window.hideLoading();
         }
+    });
+}
+
+----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\ledger.js -----
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\ledger.js
+
+import { showModal } from './inout_modal.js';
+import { hiraganaToKatakana } from './utils.js';
+import { wholesalerMap } from './master_data.js';
+
+let view, selectProductBtn, outputContainer, selectedProductDisplay, printBtn;
+
+/**
+ * サーバーから受け取ったデータで台帳テーブルを描画する
+ * @param {Array} records - 表示する台帳データの配列
+ */
+function renderLedgerTable(records) {
+    if (!records || records.length === 0) {
+        outputContainer.innerHTML = "<p>対象期間の取引データがありませんでした。</p>";
+        return;
+    }
+
+    // Dateプロパティが存在しないレコードがあってもエラーにならないように、安全なソート処理を行う
+    records.sort((a, b) => (a.Date || '').localeCompare(b.Date || ''));
+
+    const tableHeader = `
+        <thead>
+            <tr>
+                <th>日付</th>
+                <th>入庫 (YJ単位)</th>
+                <th>出庫 (YJ単位)</th>
+                <th>在庫 (YJ単位)</th>
+                <th>卸</th>
+                <th>ロット番号</th>
+                <th>使用期限</th>
+            </tr>
+        </thead>
+    `;
+
+    const tableBody = records.map(rec => {
+        // 卸コードを卸名に変換する
+        const wholesalerName = wholesalerMap.get(rec.Wholesaler) || rec.Wholesaler || '';
+
+        return `
+        <tr>
+            <td>${rec.Date || ''}</td>
+            <td class="right">${rec.Receipt > 0 ? rec.Receipt.toFixed(2) : ''}</td>
+            <td class="right">${rec.Dispense > 0 ? rec.Dispense.toFixed(2) : ''}</td>
+            <td class="right">${(rec.Stock ?? 0).toFixed(2)}</td>
+            <td class="left">${wholesalerName}</td>
+            <td class="left">${rec.LotNumber || ''}</td>
+            <td>${rec.ExpiryDate || ''}</td>
+        </tr>
+    `}).join('');
+
+    outputContainer.innerHTML = `<table class="data-table">${tableHeader}<tbody>${tableBody}</tbody></table>`;
+}
+
+/**
+ * 指定された製品コードの台帳データをサーバーから取得して描画する
+ * @param {string} productCode - 対象の製品JANコード
+ */
+async function loadLedgerForProduct(productCode) {
+    outputContainer.innerHTML = '<p>台帳データを読み込み中...</p>';
+    window.showLoading();
+    try {
+        const res = await fetch(`/api/ledger/product/${productCode}`);
+        if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(errText || '台帳データの取得に失敗しました。');
+        }
+        const data = await res.json();
+        renderLedgerTable(data);
+    } catch (err) {
+        outputContainer.innerHTML = `<p style="color:red;">${err.message}</p>`;
+    } finally {
+        window.hideLoading();
+    }
+}
+
+/**
+ * 「品目を選択...」ボタンがクリックされたときの処理
+ */
+async function onSelectProductClick() {
+    const drugTypeCheckboxes = document.querySelectorAll('input[name="ledgerDrugType"]:checked');
+    const selectedDrugTypes = Array.from(drugTypeCheckboxes).map(cb => cb.value).join(',');
+
+    const params = new URLSearchParams({
+        deadStockOnly: false,
+        drugTypes: selectedDrugTypes
+    });
+    const apiUrl = `/api/products/search_filtered?${params.toString()}`;
+
+    window.showLoading();
+    try {
+        const res = await fetch(apiUrl);
+        if (!res.ok) throw new Error('品目リストの取得に失敗しました。');
+        const products = await res.json();
+        window.hideLoading();
+        
+showModal(view, (selectedProduct) => {
+    selectedProductDisplay.textContent = selectedProduct.productName;
+    loadLedgerForProduct(selectedProduct.productCode);
+}, { 
+    initialResults: products, 
+    searchApi: apiUrl 
+});
+    } catch (err) {
+        window.hideLoading();
+        window.showNotification(err.message, 'error');
+    }
+}
+
+
+/**
+ * 管理台帳ビューの初期化
+ */
+export function initLedgerView() {
+    view = document.getElementById('ledger-view');
+    if (!view) return;
+
+    selectProductBtn = document.getElementById('ledger-select-product-btn');
+    outputContainer = document.getElementById('ledger-output-container');
+    selectedProductDisplay = document.getElementById('ledger-selected-product');
+    printBtn = document.getElementById('print-ledger-btn');
+
+    selectProductBtn.addEventListener('click', onSelectProductClick);
+
+    printBtn.addEventListener('click', () => {
+        if (outputContainer.querySelector('table')) {
+            view.classList.add('print-this-view');
+            window.print();
+        } else {
+            window.showNotification('印刷するデータがありません。', 'error');
+        }
+    });
+    
+    window.addEventListener('afterprint', () => {
+        view.classList.remove('print-this-view');
     });
 }
 
@@ -12802,7 +13201,7 @@ function createRowHTML(rec = {}) {
 
     const topRow = `
         <tr class="data-row" data-row-id="${rowId}" data-product='${JSON.stringify(productData)}'>
-            <td rowspan="2" class="center"><button class="delete-row-btn btn">削除</button></td>
+            <td rowspan="2" class="center"><button class="delete-row-btn btn">削除</button><button class="insert-row-btn btn" style="margin-top: 4px;">挿入</button></td>
             <td>${rec.transactionDate || ''}</td>
             <td class="yj-jan-code">${rec.yjCode || ''}</td>
             <td colspan="2" class="product-name-cell left" style="cursor: pointer; text-decoration: underline; color: blue;">${rec.productName || 'ここをクリックして製品を検索'}</td>
@@ -12921,6 +13320,13 @@ export function initDetailsTable() {
             }
         }
 
+        if (target.classList.contains('insert-row-btn')) {
+    const topRow = target.closest('tr');
+    const bottomRow = topRow.nextElementSibling;
+    // 現在の行（下の行）の直後に新しい空の行を挿入
+    bottomRow.insertAdjacentHTML('afterend', createRowHTML());
+}
+
         if (target.classList.contains('product-name-cell')) {
             const activeRow = target.closest('tr');
             showModal(activeRow, (selectedProduct, targetRow) => {
@@ -12948,13 +13354,9 @@ export function initDetailsTable() {
 }
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\precomp_header.js -----
-// C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\precomp_header.js
-
 import { getDetailsData, clearDetailsTable, populateDetailsTable } from './precomp_details_table.js';
 
-// ▼▼▼【修正点】importAllBtn と importAllInput をこの行に追加 ▼▼▼
 let patientNumberInput, saveBtn, loadBtn, clearBtn, exportBtn, importBtn, importInput, exportAllBtn, importAllBtn, importAllInput;
-// ▲▲▲ 修正ここまで ▲▲▲
 
 export function resetHeader() {
     if (patientNumberInput) {
@@ -12974,6 +13376,49 @@ export function initHeader() {
     importAllBtn = document.getElementById('precomp-import-all-btn');
     importAllInput = document.getElementById('precomp-import-all-input');
 
+    // ▼▼▼【ここから追加】▼▼▼
+    const toggleStatusBtn = document.getElementById('precomp-toggle-status-btn');
+
+    if (toggleStatusBtn) {
+        toggleStatusBtn.addEventListener('click', async () => {
+            const patientNumber = patientNumberInput.value.trim();
+            if (!patientNumber) {
+                window.showNotification('患者番号を入力してください。', 'error');
+                return;
+            }
+
+            // ボタンの現在のテキストに応じてAPIを決定
+            const isSuspending = toggleStatusBtn.textContent === '予製中断';
+            const endpoint = isSuspending ? '/api/precomp/suspend' : '/api/precomp/resume';
+            const actionText = isSuspending ? '中断' : '再開';
+
+            if (!confirm(`患者番号: ${patientNumber} の予製を${actionText}します。よろしいですか？`)) {
+                return;
+            }
+
+            window.showLoading();
+            try {
+                const res = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ patientNumber }),
+                });
+
+                const resData = await res.json();
+                if (!res.ok) throw new Error(resData.message || `${actionText}に失敗しました。`);
+
+                window.showNotification(resData.message, 'success');
+                // 状態変更後にビューをリフレッシュ
+                loadBtn.click();
+            } catch (err) {
+                window.showNotification(err.message, 'error');
+            } finally {
+                window.hideLoading();
+            }
+        });
+    }
+    // ▲▲▲【追加ここまで】▲▲▲
+
     if (!patientNumberInput || !saveBtn || !loadBtn || !clearBtn) return;
     
     loadBtn.addEventListener('click', async () => {
@@ -12985,35 +13430,54 @@ export function initHeader() {
         window.showLoading();
         try {
             const res = await fetch(`/api/precomp/load?patientNumber=${encodeURIComponent(patientNumber)}`);
-             if (!res.ok) throw new Error('データの呼び出しに失敗しました。');
-            const records = await res.json();
-            populateDetailsTable(records);
+            if (!res.ok) throw new Error('データの呼び出しに失敗しました。');
+            
+            const responseData = await res.json();
+            
+            populateDetailsTable(responseData.records);
+
+            const toggleBtn = document.getElementById('precomp-toggle-status-btn');
+            const detailsContainer = document.getElementById('precomp-details-container');
+
+            if (responseData.status === 'inactive') {
+                if(toggleBtn) {
+                    toggleBtn.textContent = '予製再開';
+                    toggleBtn.style.backgroundColor = '#198754';
+                }
+                if(detailsContainer) detailsContainer.classList.add('is-inactive');
+                window.showNotification('この患者の予製は中断中です。', 'success');
+            } else {
+                 if(toggleBtn) {
+                    toggleBtn.textContent = '予製中断';
+                    toggleBtn.style.backgroundColor = '';
+                 }
+                 if(detailsContainer) detailsContainer.classList.remove('is-inactive');
+            }
         } catch (err) {
             window.showNotification(err.message, 'error');
             clearDetailsTable();
         } finally {
             window.hideLoading();
-         }
+        }
     });
 
     clearBtn.addEventListener('click', async () => {
         const patientNumber = patientNumberInput.value.trim();
         if (!patientNumber) {
-            window.showNotification('中断する患者番号を入力してください。', 'error');
+            window.showNotification('削除する患者番号を入力してください。', 'error');
             return;
         }
-        if (!confirm(`患者番号: ${patientNumber} の予製データをすべて削除（中断）します。よろしいですか？`)) {
+        if (!confirm(`患者番号: ${patientNumber} の予製データを完全に削除します。この操作は元に戻せません。よろしいですか？`)) {
             return;
         }
     
-         window.showLoading();
+        window.showLoading();
         try {
             const res = await fetch(`/api/precomp/clear?patientNumber=${encodeURIComponent(patientNumber)}`, { method: 'DELETE' });
             const resData = await res.json();
-            if (!res.ok) throw new Error(resData.message || '中断に失敗しました。');
+            if (!res.ok) throw new Error(resData.message || '削除に失敗しました。');
             window.showNotification(resData.message, 'success');
             resetHeader();
-            
             clearDetailsTable();
         } catch (err) {
             window.showNotification(err.message, 'error');
@@ -13031,16 +13495,16 @@ export function initHeader() {
         const records = getDetailsData();
         if (records.length === 0 && !confirm(`保存対象の品目がありません。患者番号: ${patientNumber} の予製データをすべて削除しますがよろしいですか？`)) {
             return;
-       }
+        }
         if (records.length > 0 && !confirm(`患者番号: ${patientNumber} の予製データを保存します。よろしいですか？`)) {
             return;
         }
         const payload = { patientNumber, records };
+  
         window.showLoading();
         try {
             const res = await fetch('/api/precomp/save', {
-           
-             method: 'POST',
+                method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
             });
@@ -13091,23 +13555,20 @@ export function initHeader() {
 
         window.showLoading();
         try {
-            const res = 
-             await fetch('/api/precomp/import', {
+            const res = await fetch('/api/precomp/import', {
                 method: 'POST',
                 body: formData,
             });
             const resData = await res.json();
             if (!res.ok) throw new Error(resData.message || 'インポートに失敗しました。');
             
-            
             window.showNotification(resData.message, 'success');
-            // インポート後にリストを自動で再読み込み
             loadBtn.click(); 
         } catch (err) {
             window.showNotification(`エラー: ${err.message}`, 'error');
         } finally {
             window.hideLoading();
-            e.target.value = ''; // ファイル入力をリセット
+            e.target.value = '';
         }
     });
 
@@ -13135,14 +13596,13 @@ export function initHeader() {
             if (!res.ok) throw new Error(resData.message || '全件インポートに失敗しました。');
             
             window.showNotification(resData.message, 'success');
-            // 全件インポート後は画面をクリア
             resetHeader();
             clearDetailsTable();
         } catch (err) {
             window.showNotification(`エラー: ${err.message}`, 'error');
         } finally {
             window.hideLoading();
-            e.target.value = ''; // ファイル入力をリセット
+            e.target.value = '';
         }
     });
 }
@@ -13702,8 +14162,8 @@ export function initReturnsView() {
 }
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\settings.js -----
-// ▼▼▼【修正】変数を追加 ▼▼▼
-let view, userIDInput, passwordInput, saveBtn, usageFolderPathInput, periodStartDateInput, periodEndDateInput;
+// ▼▼▼【修正】変数を変更 ▼▼▼
+let view, userIDInput, passwordInput, saveBtn, usageFolderPathInput, calculationPeriodDaysInput;
 let wholesalerCodeInput, wholesalerNameInput, addWholesalerBtn, wholesalersTableBody;
 
 /**
@@ -13716,17 +14176,13 @@ async function loadSettings() {
         const settings = await res.json();
         userIDInput.value = settings.emednetUserId || '';
         passwordInput.value = settings.emednetPassword || '';
-        // usageFolderPathInputが未定義のエラーを防ぐため、存在チェックを追加
         if (usageFolderPathInput) {
             usageFolderPathInput.value = settings.usageFolderPath || '';
         }
         // ▼▼▼【ここから修正】▼▼▼
-        // 新しい期間設定入力欄に値を設定
-        if (periodStartDateInput) {
-            periodStartDateInput.value = settings.periodStartDate || '';
-        }
-        if (periodEndDateInput) {
-            periodEndDateInput.value = settings.periodEndDate || '';
+        // 新しい期間日数入力欄に値を設定 (デフォルト値は90)
+        if (calculationPeriodDaysInput) {
+            calculationPeriodDaysInput.value = settings.calculationPeriodDays || 90;
         }
         // ▲▲▲【修正ここまで】▲▲▲
     } catch (err) {
@@ -13735,40 +14191,35 @@ async function loadSettings() {
     }
 }
 
+
 /**
  * 現在の画面の入力内容をサーバーに送信して保存します。
  */
 async function saveSettings() {
     window.showLoading();
     try {
-        // ステップ1: まず現在の設定を全てサーバーから読み込む
         const currentSettingsRes = await fetch('/api/settings/get');
         if (!currentSettingsRes.ok) throw new Error('現在の設定の読み込みに失敗しました。');
         const currentSettings = await currentSettingsRes.json();
 
-        // ステップ2: 画面上の全ての入力値を取得
         const userId = userIDInput.value;
         const password = passwordInput.value;
         const usagePath = usageFolderPathInput.value;
         // ▼▼▼【ここから修正】▼▼▼
-        // 新しい期間設定入力欄から値を取得
-        const startDate = periodStartDateInput.value;
-        const endDate = periodEndDateInput.value;
+        // 新しい期間日数入力欄から値を取得
+        const periodDays = parseInt(calculationPeriodDaysInput.value, 10);
 
-        // ステップ3: 読み込んだ現在の設定に、画面の入力値を全てマージ（上書き）する
         const newSettings = {
-            ...currentSettings, // 既存の設定を保持
+            ...currentSettings,
             emednetUserId: userId,
             emednetPassword: password,
             edeUserId: userId,
             edePassword: password,
             usageFolderPath: usagePath,
-            periodStartDate: startDate, // ペイロードに追加
-            periodEndDate: endDate,   // ペイロードに追加
+            calculationPeriodDays: periodDays, // ペイロードに追加
         };
         // ▲▲▲【修正ここまで】▲▲▲
 
-        // ステップ4: 完成した設定オブジェクトをサーバーに送信して保存
         const res = await fetch('/api/settings/save', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -13787,7 +14238,7 @@ async function saveSettings() {
 }
 
 /**
- * 卸業者リストを描画します。
+ * 卸業者リストを描画します。 (変更なし)
  * @param {Array} wholesalers - 卸業者の配列
  */
 function renderWholesalers(wholesalers) {
@@ -13805,7 +14256,7 @@ function renderWholesalers(wholesalers) {
 }
 
 /**
- * サーバーから卸業者リストを読み込みます。
+ * サーバーから卸業者リストを読み込みます。(変更なし)
  */
 async function loadWholesalers() {
     try {
@@ -13820,7 +14271,7 @@ async function loadWholesalers() {
 }
 
 /**
- * 新しい卸業者を追加します。
+ * 新しい卸業者を追加します。(変更なし)
  */
 async function addWholesaler() {
     const code = wholesalerCodeInput.value.trim();
@@ -13852,6 +14303,7 @@ async function addWholesaler() {
     }
 }
 
+
 /**
  * 設定画面の初期化処理
  */
@@ -13865,9 +14317,8 @@ export function initSettings() {
     saveBtn = document.getElementById('saveSettingsBtn');
     usageFolderPathInput = document.getElementById('usageFolderPath');
     // ▼▼▼【ここから修正】▼▼▼
-    // 新しい期間設定入力欄の要素を取得
-    periodStartDateInput = document.getElementById('periodStartDate');
-    periodEndDateInput = document.getElementById('periodEndDate');
+    // 新しい期間日数入力欄の要素を取得
+    calculationPeriodDaysInput = document.getElementById('calculationPeriodDays');
     // ▲▲▲【修正ここまで】▲▲▲
     wholesalerCodeInput = document.getElementById('wholesalerCode');
     wholesalerNameInput = document.getElementById('wholesalerName');
@@ -14002,41 +14453,92 @@ export function resetUploadView() {
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\usage.js -----
 // C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\usage.js
+// このファイル全体を以下の内容で置き換えてください。
 
 import { createUploadTableHTML, renderUploadTableRows } from './common_table.js';
 
-async function handleUsageImport() {
+// 共通のエラーハンドリング関数
+async function handleResponseError(res) {
+    const errorText = await res.text();
+    try {
+        // エラーメッセージがJSON形式の場合
+        const errorJson = JSON.parse(errorText);
+        return new Error(errorJson.message || '不明なエラーが発生しました。');
+    } catch (e) {
+        // エラーメッセージがテキスト形式の場合
+        return new Error(errorText || `サーバーエラーが発生しました (HTTP ${res.status})`);
+    }
+}
+
+// 自動インポート用の関数
+async function handleAutomaticUsageImport() {
     const uploadContainer = document.getElementById('upload-output-container');
     uploadContainer.innerHTML = `<p>設定されたパスからUSAGEファイルを読み込んでいます...</p>`;
     window.showLoading();
 
     try {
         const res = await fetch('/api/usage/upload', { method: 'POST' });
-        const data = await res.json();
         if (!res.ok) {
-            throw new Error(data.message || 'USAGEファイルの処理に失敗しました。');
+            throw await handleResponseError(res);
         }
+        const data = await res.json();
 
         const tableShell = createUploadTableHTML('upload-output-table');
         const tableBodyContent = renderUploadTableRows(data.records);
-        const fullTableHtml = tableShell.replace('<tbody></tbody>', `<tbody>${tableBodyContent}</tbody>`);
-        uploadContainer.innerHTML = fullTableHtml;
-
+        uploadContainer.innerHTML = tableShell.replace('<tbody></tbody>', `<tbody>${tableBodyContent}</tbody>`);
         window.showNotification('USAGEファイルのインポートが完了しました。', 'success');
-
     } catch (err) {
-        const tableShell = createUploadTableHTML('upload-output-table');
         const errorRow = `<tr><td colspan="14" style="color:red; text-align:center;">エラー: ${err.message}</td></tr>`;
-        uploadContainer.innerHTML = tableShell.replace('<tbody></tbody>', `<tbody>${errorRow}</tbody>`);
+        uploadContainer.innerHTML = createUploadTableHTML('upload-output-table').replace('<tbody></tbody>', `<tbody>${errorRow}</tbody>`);
         window.showNotification(err.message, 'error');
     } finally {
         window.hideLoading();
     }
 }
 
+// 手動ファイルアップロード用の関数
+async function handleManualUsageUpload(event) {
+    const files = event.target.files;
+    if (!files.length) return;
+
+    const uploadContainer = document.getElementById('upload-output-container');
+    uploadContainer.innerHTML = `<p>USAGEファイルをアップロードしています...</p>`;
+    window.showLoading();
+    
+    try {
+        const formData = new FormData();
+        formData.append('file', files[0]);
+
+        const res = await fetch('/api/usage/upload', {
+            method: 'POST',
+            body: formData,
+        });
+        if (!res.ok) {
+            throw await handleResponseError(res);
+        }
+        const data = await res.json();
+
+        const tableShell = createUploadTableHTML('upload-output-table');
+        const tableBodyContent = renderUploadTableRows(data.records);
+        uploadContainer.innerHTML = tableShell.replace('<tbody></tbody>', `<tbody>${tableBodyContent}</tbody>`);
+        window.showNotification('USAGEファイルのインポートが完了しました。', 'success');
+    } catch (err) {
+        const errorRow = `<tr><td colspan="14" style="color:red; text-align:center;">エラー: ${err.message}</td></tr>`;
+        uploadContainer.innerHTML = createUploadTableHTML('upload-output-table').replace('<tbody></tbody>', `<tbody>${errorRow}</tbody>`);
+        window.showNotification(err.message, 'error');
+    } finally {
+        window.hideLoading();
+        event.target.value = '';
+    }
+}
+
 export function initUsageUpload() {
-    // app.jsからのカスタムイベントをリッスンする
-    document.addEventListener('importUsageFromPath', handleUsageImport);
+    document.addEventListener('importUsageFromPath', handleAutomaticUsageImport);
+
+    const usageInput = document.getElementById('usageFileInput');
+    if (usageInput) {
+        usageInput.addEventListener('change', handleManualUsageUpload);
+    }
 }
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\utils.js -----
@@ -14327,6 +14829,7 @@ export function initValuationView() {
     <button id="manualInventoryBtn" class="btn btn-green">棚卸入力</button>
     <button id="inventoryAdjustmentBtn" class="btn btn-green">棚卸調整</button>
     <button id="inventoryHistoryBtn" class="btn btn-green">棚卸履歴</button>
+    <button id="ledgerBtn" class="btn btn-green">管理台帳</button> 
     <button id="aggregationBtn" class="btn btn-spring-green">集計</button>
     <button id="valuationBtn" class="btn btn-spring-green">在庫評価</button>
     <button id="orderBtn" class="btn btn-orange">発注</button>
@@ -14505,8 +15008,9 @@ export function initValuationView() {
             <button id="precomp-import-all-btn" class="btn">CSVインポート（全件）</button>
             <button id="precomp-export-btn" class="btn">CSVエクスポート</button>
             <button id="precomp-export-all-btn" class="btn">CSVエクスポート（全件）</button>
-            <button id="precomp-clear-btn" class="btn" style="background-color: #dc3545; color: white;">中断</button>
-            <button id="precomp-save-btn" class="btn" style="background-color: #0d6efd; color: white;">保存</button>
+<button id="precomp-toggle-status-btn" class="btn">予製中断</button>
+<button id="precomp-clear-btn" class="btn" style="background-color: #dc3545; color: white;">完全削除</button>
+<button id="precomp-save-btn" class="btn" style="background-color: #0d6efd; color: white;">保存</button>
         </div>
     </div>
     <div class="inout-details-header">
@@ -14577,20 +15081,15 @@ export function initValuationView() {
             </p>
         </fieldset>
 
-        <fieldset style="margin-top: 20px;">
+<fieldset style="margin-top: 20px;">
             <legend>集計期間設定</legend>
             <p style="font-size: 11px; margin-bottom: 10px;">
-                集計、発注、返品リストなど、期間を指定する全ての機能でこの設定が共通して使用されます。
+                各機能で参照する期間を、本日を基準とした日数で指定します。<br>
+                <b>開始日</b>は「本日 - 指定日数」、<b>終了日</b>は「無制限（最新データまで）」として自動計算されます。
             </p>
-            <div style="display: flex; gap: 20px;">
-                <div class="field-group">
-                    <label for="periodStartDate">期間 開始日</label>
-                    <input type="date" id="periodStartDate">
-                </div>
-                <div class="field-group">
-                    <label for="periodEndDate">期間 終了日</label>
-                    <input type="date" id="periodEndDate">
-                </div>
+            <div class="field-group">
+                <label for="calculationPeriodDays">集計期間日数（例: 90日）</label>
+                <input type="number" id="calculationPeriodDays" style="width: 150px;">
             </div>
         </fieldset>
 
@@ -14855,6 +15354,37 @@ export function initValuationView() {
             <p>日付を選択して「表示」ボタンを押してください。</p>
         </div>
     </div>
+
+<div id="ledger-view" class="hidden">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+        <p class="view-title">薬品管理台帳</p>
+        <div id="ledger-selected-product" style="font-weight: bold; font-size: 1.2em; text-align: right;"></div>
+    </div>
+    <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end;">
+        <div class="field-group">
+            <label>品目を選択</label>
+            <button id="ledger-select-product-btn" class="btn">検索して選択...</button>
+        </div>
+        <div class="field-group">
+            <label>薬の種類</label>
+            <div style="display: flex; flex-wrap: wrap; gap: 5px 10px;">
+                <label><input type="checkbox" name="ledgerDrugType" value="poison">毒</label>
+                <label><input type="checkbox" name="ledgerDrugType" value="deleterious">劇</label>
+                <label><input type="checkbox" name="ledgerDrugType" value="narcotic">麻</label>
+                <label><input type="checkbox" name="ledgerDrugType" value="psychotropic1">向1</label>
+                <label><input type="checkbox" name="ledgerDrugType" value="psychotropic2">向2</label>
+                <label><input type="checkbox" name="ledgerDrugType" value="psychotropic3">向3</label>
+            </div>
+        </div>
+        <div class="buttons-group" style="margin-left: auto;">
+            <button id="print-ledger-btn" class="btn">この台帳を印刷</button>
+        </div>
+    </div>
+    <div id="ledger-output-container">
+        <p>上記ボタンから品目を選択してください。</p>
+    </div>
+</div>
+</div>
 
 <input type="file" id="importClientsInput" style="display:none;" accept=".csv">
 <input type="file" id="importDeadstockInput" style="display:none;" accept=".csv">
@@ -15206,17 +15736,19 @@ func ResolveCode(name string) string {
 
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\usage\handler.go -----
-// C:\Dev\WASABI\usage\handler.go
-
 package usage
 
 import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
-	"os" // osパッケージをインポート
+	"os"
+	"strings"
+	"wasabi/config"
 	"wasabi/db"
 	"wasabi/mappers"
 	"wasabi/mastermanager"
@@ -15235,190 +15767,179 @@ INSERT OR REPLACE INTO transaction_records (
     flag_stimulant_raw, process_flag_ma
 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 
-// UploadUsageHandler は指定された固定パスからUSAGEファイルを読み込み処理します。
+// UploadUsageHandler は自動または手動でのUSAGEファイルアップロードを処理します。
 func UploadUsageHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// ▼▼▼【ここからが修正箇所です】▼▼▼
+		var file io.Reader
+		var err error
 
-		// Step 1: ユーザーに指示された固定ファイルパスを定義
-		const targetFile = `C:\Users\wasab\OneDrive\デスクトップ\WASABI\download\USAGE\usage.csv`
-
-		log.Printf("Processing fixed USAGE file: %s", targetFile)
-		file, err := os.Open(targetFile)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("指定されたUSAGEファイルのオープンに失敗しました: %s。パスを確認してください。", targetFile), http.StatusInternalServerError)
-			return
-		}
-		defer file.Close()
-
-		// Step 2: ファイルをパースする
-		parsed, err := parsers.ParseUsage(file)
-		if err != nil {
-			http.Error(w, "USAGEファイルの解析に失敗しました: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		// ▲▲▲【修正ここまで】▲▲▲
-
-		// Step 3: これ以降は既存のDB登録ロジックを流用
-		var originalJournalMode string
-		conn.QueryRow("PRAGMA journal_mode").Scan(&originalJournalMode)
-		conn.Exec("PRAGMA journal_mode = MEMORY;")
-		conn.Exec("PRAGMA synchronous = OFF;")
-		defer func() {
-			conn.Exec("PRAGMA synchronous = FULL;")
-			conn.Exec(fmt.Sprintf("PRAGMA journal_mode = %s;", originalJournalMode))
-			log.Println("Database settings restored for USAGE handler.")
-		}()
-
-		filtered := removeUsageDuplicates(parsed)
-
-		if len(filtered) == 0 {
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			json.NewEncoder(w).Encode(map[string]interface{}{"records": []model.TransactionRecord{}})
-			return
-		}
-
-		tx, err := conn.Begin()
-		if err != nil {
-			log.Printf("Failed to begin transaction for usage: %v", err)
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-		defer tx.Rollback()
-
-		minDate, maxDate := "99999999", "00000000"
-		for _, rec := range filtered {
-			if rec.Date < minDate {
-				minDate = rec.Date
-			}
-			if rec.Date > maxDate {
-				maxDate = rec.Date
-			}
-		}
-		if err := db.DeleteUsageTransactionsInDateRange(tx, minDate, maxDate); err != nil {
-			log.Printf("db.DeleteUsageTransactionsInDateRange error: %v", err)
-			tx.Rollback()
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		var keyList, janList []string
-		keySet, janSet := make(map[string]struct{}), make(map[string]struct{})
-		for _, rec := range filtered {
-			if rec.JanCode != "" && rec.JanCode != "0000000000000" {
-				if _, seen := janSet[rec.JanCode]; !seen {
-					janSet[rec.JanCode] = struct{}{}
-					janList = append(janList, rec.JanCode)
-				}
-			}
-			key := rec.JanCode
-			if key == "" || key == "0000000000000" {
-				key = fmt.Sprintf("9999999999999%s", rec.ProductName)
-			}
-			if _, seen := keySet[key]; !seen {
-				keySet[key] = struct{}{}
-				keyList = append(keyList, key)
-			}
-		}
-
-		mastersMap, err := db.GetProductMastersByCodesMap(tx, keyList)
-		if err != nil {
-			tx.Rollback()
-			http.Error(w, "Failed to pre-fetch product masters", http.StatusInternalServerError)
-			return
-		}
-		jcshmsMap, err := db.GetJcshmsByCodesMap(tx, janList)
-		if err != nil {
-			tx.Rollback()
-			http.Error(w, "Failed to pre-fetch JCSHMS data", http.StatusInternalServerError)
-			return
-		}
-
-		stmt, err := tx.Prepare(insertTransactionQuery)
-		if err != nil {
-			tx.Rollback()
-			http.Error(w, "Failed to prepare statement", http.StatusInternalServerError)
-			return
-		}
-		defer stmt.Close()
-
-		const batchSize = 500
-		var finalRecords []model.TransactionRecord
-
-		for i, rec := range filtered {
-			ar := model.TransactionRecord{
-				TransactionDate: rec.Date,
-				Flag:            3,
-				JanCode:         rec.JanCode,
-				YjCode:          rec.YjCode,
-				ProductName:     rec.ProductName,
-				YjQuantity:      rec.YjQuantity,
-				YjUnitName:      rec.YjUnitName,
-			}
-
-			master, err := mastermanager.FindOrCreate(tx, rec.JanCode, rec.ProductName, mastersMap, jcshmsMap)
+		if strings.Contains(r.Header.Get("Content-Type"), "multipart/form-data") {
+			log.Println("Processing manual USAGE file upload...")
+			var f multipart.File
+			f, _, err = r.FormFile("file")
 			if err != nil {
-				tx.Rollback()
-				http.Error(w, fmt.Sprintf("mastermanager failed for jan %s: %v", rec.JanCode, err), http.StatusInternalServerError)
+				http.Error(w, "ファイルの取得に失敗しました: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			defer f.Close()
+			file = f
+		} else {
+			log.Println("Processing automatic USAGE file import...")
+			cfg, cfgErr := config.LoadConfig()
+			if cfgErr != nil {
+				http.Error(w, "設定ファイルの読み込みに失敗: "+cfgErr.Error(), http.StatusInternalServerError)
+				return
+			}
+			if cfg.UsageFolderPath == "" {
+				http.Error(w, "USAGEファイル取込パスが設定されていません。", http.StatusBadRequest)
 				return
 			}
 
-			mappers.MapProductMasterToTransaction(&ar, master)
-			if master.Origin == "JCSHMS" {
-				ar.ProcessFlagMA = "COMPLETE"
-			} else {
-				ar.ProcessFlagMA = "PROVISIONAL"
-			}
+			rawPath := cfg.UsageFolderPath
+			// ▼▼▼【ここが修正箇所】パスの前後の空白と " を自動的に削除 ▼▼▼
+			unquotedPath := strings.Trim(strings.TrimSpace(rawPath), "\"")
+			// ▲▲▲【修正ここまで】▲▲▲
 
-			_, err = stmt.Exec(
-				ar.TransactionDate, ar.ClientCode, ar.ReceiptNumber, ar.LineNumber, ar.Flag,
-				ar.JanCode, ar.YjCode, ar.ProductName, ar.KanaName, ar.UsageClassification, ar.PackageForm, ar.PackageSpec, ar.MakerName,
-				ar.DatQuantity, ar.JanPackInnerQty, ar.JanQuantity, ar.JanPackUnitQty, ar.JanUnitName, ar.JanUnitCode,
-				ar.YjQuantity, ar.YjPackUnitQty, ar.YjUnitName, ar.UnitPrice, ar.PurchasePrice, ar.SupplierWholesale,
-				ar.Subtotal, ar.TaxAmount, ar.TaxRate, ar.ExpiryDate, ar.LotNumber, ar.FlagPoison,
-				ar.FlagDeleterious, ar.FlagNarcotic, ar.FlagPsychotropic, ar.FlagStimulant,
-				ar.FlagStimulantRaw, ar.ProcessFlagMA,
-			)
-			if err != nil {
-				tx.Rollback()
-				http.Error(w, fmt.Sprintf("Failed to insert record for JAN %s: %v", ar.JanCode, err), http.StatusInternalServerError)
+			filePath := strings.ReplaceAll(unquotedPath, "\\", "/")
+
+			log.Printf("Opening specified USAGE file: %s", filePath)
+			f, fErr := os.Open(filePath)
+			if fErr != nil {
+				displayError := fmt.Sprintf("設定されたパスのファイルを開けませんでした。\nパス: %s\nエラー: %v", filePath, fErr)
+				http.Error(w, displayError, http.StatusInternalServerError)
 				return
 			}
-
-			finalRecords = append(finalRecords, ar)
-
-			if (i+1)%batchSize == 0 && i < len(filtered)-1 {
-				if err := tx.Commit(); err != nil {
-					log.Printf("transaction commit error (batch): %v", err)
-					http.Error(w, "internal server error", http.StatusInternalServerError)
-					return
-				}
-				tx, err = conn.Begin()
-				if err != nil {
-					http.Error(w, "Failed to begin next transaction", http.StatusInternalServerError)
-					return
-				}
-				stmt, err = tx.Prepare(insertTransactionQuery)
-				if err != nil {
-					tx.Rollback()
-					http.Error(w, "Failed to re-prepare statement", http.StatusInternalServerError)
-					return
-				}
-			}
+			defer f.Close()
+			file = f
 		}
 
-		if err := tx.Commit(); err != nil {
-			log.Printf("transaction commit error (final): %v", err)
-			http.Error(w, "internal server error", http.StatusInternalServerError)
+		processedRecords, procErr := processUsageFile(conn, file)
+		if procErr != nil {
+			http.Error(w, procErr.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"records": finalRecords,
+			"records": processedRecords,
 		})
 	}
+}
+
+// processUsageFile はファイルストリームから処方データを解析しDBに登録する共通関数です。
+func processUsageFile(conn *sql.DB, file io.Reader) ([]model.TransactionRecord, error) {
+	parsed, err := parsers.ParseUsage(file)
+	if err != nil {
+		return nil, fmt.Errorf("USAGEファイルの解析に失敗しました: %w", err)
+	}
+
+	var originalJournalMode string
+	conn.QueryRow("PRAGMA journal_mode").Scan(&originalJournalMode)
+	conn.Exec("PRAGMA journal_mode = MEMORY;")
+	conn.Exec("PRAGMA synchronous = OFF;")
+	defer func() {
+		conn.Exec("PRAGMA synchronous = FULL;")
+		conn.Exec(fmt.Sprintf("PRAGMA journal_mode = %s;", originalJournalMode))
+	}()
+
+	filtered := removeUsageDuplicates(parsed)
+	if len(filtered) == 0 {
+		return []model.TransactionRecord{}, nil
+	}
+
+	tx, err := conn.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("トランザクションの開始に失敗: %w", err)
+	}
+	defer tx.Rollback()
+
+	minDate, maxDate := "99999999", "00000000"
+	for _, rec := range filtered {
+		if rec.Date < minDate {
+			minDate = rec.Date
+		}
+		if rec.Date > maxDate {
+			maxDate = rec.Date
+		}
+	}
+
+	if err := db.DeleteUsageTransactionsInDateRange(tx, minDate, maxDate); err != nil {
+		return nil, fmt.Errorf("既存の処方データ削除に失敗: %w", err)
+	}
+
+	var keyList, janList []string
+	keySet, janSet := make(map[string]struct{}), make(map[string]struct{})
+	for _, rec := range filtered {
+		if rec.JanCode != "" && rec.JanCode != "0000000000000" {
+			if _, seen := janSet[rec.JanCode]; !seen {
+				janSet[rec.JanCode] = struct{}{}
+				janList = append(janList, rec.JanCode)
+			}
+		}
+		key := rec.JanCode
+		if key == "" || key == "0000000000000" {
+			key = fmt.Sprintf("9999999999999%s", rec.ProductName)
+		}
+		if _, seen := keySet[key]; !seen {
+			keySet[key] = struct{}{}
+			keyList = append(keyList, key)
+		}
+	}
+
+	mastersMap, err := db.GetProductMastersByCodesMap(tx, keyList)
+	if err != nil {
+		return nil, err
+	}
+	jcshmsMap, err := db.GetJcshmsByCodesMap(tx, janList)
+	if err != nil {
+		return nil, err
+	}
+
+	stmt, err := tx.Prepare(insertTransactionQuery)
+	if err != nil {
+		return nil, err
+	}
+	defer stmt.Close()
+
+	var finalRecords []model.TransactionRecord
+	for _, rec := range filtered {
+		ar := model.TransactionRecord{
+			TransactionDate: rec.Date, Flag: 3, JanCode: rec.JanCode,
+			YjCode: rec.YjCode, ProductName: rec.ProductName,
+			YjQuantity: rec.YjQuantity, YjUnitName: rec.YjUnitName,
+		}
+		master, err := mastermanager.FindOrCreate(tx, rec.JanCode, rec.ProductName, mastersMap, jcshmsMap)
+		if err != nil {
+			return nil, err
+		}
+
+		mappers.MapProductMasterToTransaction(&ar, master)
+		if master.Origin == "JCSHMS" {
+			ar.ProcessFlagMA = "COMPLETE"
+		} else {
+			ar.ProcessFlagMA = "PROVISIONAL"
+		}
+
+		_, err = stmt.Exec(
+			ar.TransactionDate, ar.ClientCode, ar.ReceiptNumber, ar.LineNumber, ar.Flag,
+			ar.JanCode, ar.YjCode, ar.ProductName, ar.KanaName, ar.UsageClassification, ar.PackageForm, ar.PackageSpec, ar.MakerName,
+			ar.DatQuantity, ar.JanPackInnerQty, ar.JanQuantity, ar.JanPackUnitQty, ar.JanUnitName, ar.JanUnitCode,
+			ar.YjQuantity, ar.YjPackUnitQty, ar.YjUnitName, ar.UnitPrice, ar.PurchasePrice, ar.SupplierWholesale,
+			ar.Subtotal, ar.TaxAmount, ar.TaxRate, ar.ExpiryDate, ar.LotNumber, ar.FlagPoison,
+			ar.FlagDeleterious, ar.FlagNarcotic, ar.FlagPsychotropic, ar.FlagStimulant,
+			ar.FlagStimulantRaw, ar.ProcessFlagMA,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to insert record for JAN %s: %w", ar.JanCode, err)
+		}
+
+		finalRecords = append(finalRecords, ar)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("トランザクションのコミットに失敗: %w", err)
+	}
+	return finalRecords, nil
 }
 
 func removeUsageDuplicates(records []model.UnifiedInputRecord) []model.UnifiedInputRecord {
@@ -15686,6 +16207,11 @@ func main() {
 	mux.HandleFunc("/api/precomp/import", precomp.ImportPrecompHandler(conn))
 	mux.HandleFunc("/api/precomp/import_all", precomp.BulkImportPrecompHandler(conn))
 	mux.HandleFunc("/api/precomp/export_all", precomp.ExportAllPrecompHandler(conn))
+	// ▼▼▼【ここに追加】▼▼▼
+	mux.HandleFunc("/api/precomp/suspend", precomp.SuspendPrecompHandler(conn))
+	mux.HandleFunc("/api/precomp/resume", precomp.ResumePrecompHandler(conn))
+	mux.HandleFunc("/api/precomp/status", precomp.GetStatusPrecompHandler(conn))
+	// ▲▲▲【追加ここまで】▲▲▲
 	mux.HandleFunc("/api/orders/candidates", orders.GenerateOrderCandidatesHandler(conn))
 	mux.HandleFunc("/api/orders/place", orders.PlaceOrderHandler(conn))
 	mux.HandleFunc("/api/returns/candidates", returns.GenerateReturnCandidatesHandler(conn))
@@ -15710,7 +16236,10 @@ func main() {
 	mux.HandleFunc("/api/inventory/by_date", transaction.GetInventoryByDateHandler(conn))
 	mux.HandleFunc("/api/transaction/delete_by_id/", transaction.DeleteTransactionByIDHandler(conn))
 	// ▲▲▲【追加ここまで】▲▲▲
-
+	// ▼▼▼【ここに追加】▼▼▼
+	mux.HandleFunc("/api/config/usage_path", settings.GetUsagePathHandler(conn))
+	// ▲▲▲【追加ここまで】▲▲▲
+	mux.HandleFunc("/api/ledger/product/", product.GetProductLedgerHandler(conn))
 	// Serve Frontend
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -15905,7 +16434,8 @@ CREATE TABLE IF NOT EXISTS precomp_records (
   purchase_price REAL,
   supplier_wholesale TEXT,
   created_at TEXT NOT NULL,
-  UNIQUE(client_code, jan_code) -- この行を必ず追加してください
+  status TEXT NOT NULL DEFAULT 'active', -- status列をここに追加
+  UNIQUE(client_code, jan_code)
 );
 
 -- 卸業者マスターテーブル

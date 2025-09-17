@@ -161,7 +161,8 @@ CREATE TABLE IF NOT EXISTS precomp_records (
   purchase_price REAL,
   supplier_wholesale TEXT,
   created_at TEXT NOT NULL,
-  UNIQUE(client_code, jan_code) -- この行を必ず追加してください
+  status TEXT NOT NULL DEFAULT 'active', -- status列をここに追加
+  UNIQUE(client_code, jan_code)
 );
 
 -- 卸業者マスターテーブル

@@ -217,7 +217,11 @@ function renderDeadStockList(data) {
     }
 
     let html = data.map(group => {
-        const unitName = group.packageGroups.length > 0 && group.packageGroups[0].products.length > 0 ? (group.packageGroups[0].yjUnitName || '単位') : '単位';
+let unitName = '単位'; // デフォルト値
+// グループ内に表示対象の製品が1つでもあれば、その製品のYJ単位名を使用する
+if (group.packageGroups.length > 0 && group.packageGroups[0].products.length > 0) {
+    unitName = group.packageGroups[0].products[0].yjUnitName || '単位';
+}
         const packagesHTML = group.packageGroups.map(createPackageGroupHTML).join('');
         
         return `<div class="yj-group-wrapper" 

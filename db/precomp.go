@@ -25,6 +25,8 @@ type PrecompRecordView struct {
 	JanUnitName          string `json:"janUnitName"`
 }
 
+// ▼▼▼【ここから修正・追加】▼▼▼
+
 /**
  * @brief 特定の患者の予製レコードをデータベースと安全に同期します。
  * @param tx SQLトランザクションオブジェクト
@@ -32,13 +34,10 @@ type PrecompRecordView struct {
  * @param records フロントエンドから送信された最新の予製レコードのスライス
  * @return error 処理中にエラーが発生した場合
  * @details
- * 以下の3ステップで、データベースの状態をフロントエンドの状態と完全に一致させます。
- * 1. レコードが空の場合、この患者の全予製データを削除します。
- * 2. データベースに存在するがフロントエンドのリストにないレコードを削除します。
- * 3. フロントエンドのリストにあるレコードをDBに挿入または更新（UPSERT）します。
+ * データベースの状態をフロントエンドの状態と完全に一致させます。
+ * この際、ステータスは常に 'active' (有効) に設定されます。
  */
 func UpsertPreCompoundingRecordsInTx(tx *sql.Tx, patientNumber string, records []PrecompRecordInput) error {
-	// フロントエンドから空のリストが送られてきた場合、その患者の全レコードを削除する
 	if len(records) == 0 {
 		if _, err := tx.Exec("DELETE FROM precomp_records WHERE client_code = ?", patientNumber); err != nil {
 			return fmt.Errorf("failed to delete all precomp records for patient %s: %w", patientNumber, err)
@@ -46,7 +45,6 @@ func UpsertPreCompoundingRecordsInTx(tx *sql.Tx, patientNumber string, records [
 		return nil
 	}
 
-	// ステップ1: フロントエンドからの製品コードリストを準備
 	productCodesInPayload := make([]interface{}, len(records)+1)
 	placeholders := make([]string, len(records))
 	productCodesInPayload[0] = patientNumber
@@ -55,13 +53,11 @@ func UpsertPreCompoundingRecordsInTx(tx *sql.Tx, patientNumber string, records [
 		productCodesInPayload[i+1] = rec.ProductCode
 	}
 
-	// ステップ2: DBに存在するがフロントエンドのリストにない古いレコードを削除
 	deleteQuery := fmt.Sprintf("DELETE FROM precomp_records WHERE client_code = ? AND jan_code NOT IN (%s)", strings.Join(placeholders, ","))
 	if _, err := tx.Exec(deleteQuery, productCodesInPayload...); err != nil {
 		return fmt.Errorf("failed to delete removed precomp records for patient %s: %w", patientNumber, err)
 	}
 
-	// ステップ3: フロントエンドのリストにあるレコードをDBに挿入または更新 (UPSERT)
 	var productCodes []string
 	for _, rec := range records {
 		productCodes = append(productCodes, rec.ProductCode)
@@ -75,12 +71,13 @@ func UpsertPreCompoundingRecordsInTx(tx *sql.Tx, patientNumber string, records [
 		transaction_date, client_code, receipt_number, line_number, jan_code, yj_code, product_name, kana_name,
 		usage_classification, package_form, package_spec, maker_name, jan_pack_inner_qty, jan_quantity,
 		jan_pack_unit_qty, jan_unit_name, jan_unit_code, yj_quantity, yj_pack_unit_qty, yj_unit_name,
-		purchase_price, supplier_wholesale, created_at
-	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		purchase_price, supplier_wholesale, created_at, status
+	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 	ON CONFLICT(client_code, jan_code) DO UPDATE SET
 		jan_quantity = excluded.jan_quantity,
 		yj_quantity = excluded.yj_quantity,
-		created_at = excluded.created_at`
+		created_at = excluded.created_at,
+		status = excluded.status`
 
 	stmt, err := tx.Prepare(q)
 	if err != nil {
@@ -116,7 +113,7 @@ func UpsertPreCompoundingRecordsInTx(tx *sql.Tx, patientNumber string, records [
 			tr.TransactionDate, tr.ClientCode, tr.ReceiptNumber, tr.LineNumber, tr.JanCode, tr.YjCode, tr.ProductName, tr.KanaName,
 			tr.UsageClassification, tr.PackageForm, tr.PackageSpec, tr.MakerName, tr.JanPackInnerQty, tr.JanQuantity,
 			tr.JanPackUnitQty, tr.JanUnitName, tr.JanUnitCode, tr.YjQuantity, tr.YjPackUnitQty, tr.YjUnitName,
-			tr.PurchasePrice, tr.SupplierWholesale, now.Format("2006-01-02 15:04:05"),
+			tr.PurchasePrice, tr.SupplierWholesale, now.Format("2006-01-02 15:04:05"), "active",
 		)
 		if err != nil {
 			return fmt.Errorf("failed to upsert precomp record for product %s: %w", rec.ProductCode, err)
@@ -182,9 +179,10 @@ func DeletePreCompoundingRecordsByPatient(conn *sql.DB, patientNumber string) er
  * @return error 処理中にエラーが発生した場合
  * @details
  * この関数が返す値は、在庫元帳の計算において発注点の調整に使用されます。
+ * statusが'active'のレコードのみを集計対象とします。
  */
 func GetPreCompoundingTotals(conn *sql.DB) (map[string]float64, error) {
-	const q = `SELECT jan_code, SUM(yj_quantity) FROM precomp_records GROUP BY jan_code`
+	const q = `SELECT jan_code, SUM(yj_quantity) FROM precomp_records WHERE status = 'active' GROUP BY jan_code`
 	rows, err := conn.Query(q)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query precomp totals: %w", err)
@@ -285,3 +283,53 @@ func GetAllPreCompoundingRecords(conn *sql.DB) ([]model.TransactionRecord, error
 	}
 	return records, nil
 }
+
+/**
+ * @brief 指定された患者の予製レコードを中断状態（inactive）にします。
+ * @param tx SQLトランザクションオブジェクト
+ * @param patientNumber 対象の患者番号
+ * @return error 処理中にエラーが発生した場合
+ */
+func SuspendPreCompoundingRecordsByPatient(tx *sql.Tx, patientNumber string) error {
+	const q = `UPDATE precomp_records SET status = 'inactive' WHERE client_code = ?`
+	if _, err := tx.Exec(q, patientNumber); err != nil {
+		return fmt.Errorf("failed to suspend precomp records for patient %s: %w", patientNumber, err)
+	}
+	return nil
+}
+
+/**
+ * @brief 指定された患者の予製レコードを再開状態（active）にします。
+ * @param tx SQLトランザクションオブジェクト
+ * @param patientNumber 対象の患者番号
+ * @return error 処理中にエラーが発生した場合
+ */
+func ResumePreCompoundingRecordsByPatient(tx *sql.Tx, patientNumber string) error {
+	const q = `UPDATE precomp_records SET status = 'active' WHERE client_code = ?`
+	if _, err := tx.Exec(q, patientNumber); err != nil {
+		return fmt.Errorf("failed to resume precomp records for patient %s: %w", patientNumber, err)
+	}
+	return nil
+}
+
+/**
+ * @brief 指定された患者の現在の予製ステータスを取得します。
+ * @param conn データベース接続
+ * @param patientNumber 対象の患者番号
+ * @return string ステータス ('active', 'inactive', 'none')
+ * @return error 処理中にエラーが発生した場合
+ */
+func GetPreCompoundingStatusByPatient(conn *sql.DB, patientNumber string) (string, error) {
+	var status string
+	const q = `SELECT status FROM precomp_records WHERE client_code = ? LIMIT 1`
+	err := conn.QueryRow(q, patientNumber).Scan(&status)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "none", nil // レコードが存在しない
+		}
+		return "", fmt.Errorf("failed to get precomp status for patient %s: %w", patientNumber, err)
+	}
+	return status, nil
+}
+
+// ▲▲▲【修正ここまで】▲▲▲

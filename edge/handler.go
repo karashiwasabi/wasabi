@@ -1,107 +1,100 @@
-// C:\Users\wasab\OneDrive\デスクトップ\WASABI\edge\handler.go
-
-// C:\Users\wasab\OneDrive\デスクトップ\WASABI\edge\handler.go
-
 package edge
 
 import (
-	"bufio"
-	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
 	"wasabi/config"
 	"wasabi/dat"
 
+	"context" // contextパッケージをインポート
+
 	"github.com/chromedp/cdproto/browser"
-	// [修正] JavaScriptダイアログを扱うために "page" パッケージをインポートします
-	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
 
-// writeJsonError は、エラーメッセージをJSON形式でクライアントに返します。
 func writeJsonError(w http.ResponseWriter, message string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"message": message})
 }
 
-// DownloadHandlerは、e-mednetからのファイルダウンロードと処理を実行します。
 func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// 1) 設定読み込み
 		cfg, err := config.LoadConfig()
 		if err != nil {
 			writeJsonError(w, "設定ファイルの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-
 		if cfg.EdeUserID == "" || cfg.EdePassword == "" {
-			writeJsonError(w, "edeのIDまたはパスワードが設定されていません。設定画面を確認してください。", http.StatusBadRequest)
+			writeJsonError(w, "IDまたはパスワードが設定されていません。", http.StatusBadRequest)
 			return
 		}
 
-		opts := append(chromedp.DefaultExecAllocatorOptions[:],
-			chromedp.Flag("headless", false),
-			chromedp.Flag("disable-gpu", true),
-			chromedp.Flag("no-sandbox", true),
-			chromedp.Flag("no-first-run", true),
-			chromedp.Flag("no-default-browser-check", true),
-			// [修正] ブラウザのセキュリティ機能を無効化し、安定性を向上させます
-			chromedp.Flag("disable-features", "RendererCodeIntegrity"),
-			chromedp.UserAgent(`Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36`),
-		)
-
-		if edgePath := findEdgePath(); edgePath != "" {
-			opts = append(opts, chromedp.ExecPath(edgePath))
+		// 2) 一時プロファイルディレクトリ作成
+		tempDir, err := os.MkdirTemp("", "chromedp-edge-")
+		if err != nil {
+			writeJsonError(w, "一時プロファイルディレクトリの作成に失敗: "+err.Error(), http.StatusInternalServerError)
+			return
 		}
+		defer os.RemoveAll(tempDir)
 
-		allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
-		defer cancel()
+		// ▼▼▼【ここから修正】▼▼▼
+		// ご指摘の箇所を、元の動作するコードに戻しました。
+		// 3) Edge実行ファイルのパス (元のコードのまま)
+		edgePath := `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`
 
+		// 4) ExecAllocator を作成 (元のコードのまま)
+		allocCtx, allocCancel := chromedp.NewExecAllocator(
+			r.Context(),
+			append(chromedp.DefaultExecAllocatorOptions[:],
+				chromedp.ExecPath(edgePath),
+				chromedp.Flag("headless", false),
+				chromedp.Flag("disable-gpu", true),
+				chromedp.Flag("no-sandbox", true),
+				chromedp.UserDataDir(tempDir),
+			)...,
+		)
+		defer allocCancel()
+		// ▲▲▲【修正ここまで】▲▲▲
+
+		// 5) Context とロギング設定
 		ctx, cancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(log.Printf))
 		defer cancel()
 
-		downloadDir, err := filepath.Abs("./download/DAT")
+		// 6) ダウンロードフォルダ準備
+		downloadDir, err := filepath.Abs(filepath.Join(".", "download", "DAT"))
 		if err != nil {
-			writeJsonError(w, "ダウンロードディレクトリのパス取得に失敗しました: "+err.Error(), http.StatusInternalServerError)
+			writeJsonError(w, "ダウンロードディレクトリの絶対パス取得に失敗: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		if err := os.MkdirAll(downloadDir, 0755); err != nil {
-			writeJsonError(w, "ダウンロードディレクトリの作成に失敗しました: "+err.Error(), http.StatusInternalServerError)
+			writeJsonError(w, "ダウンロードディレクトリの作成に失敗: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		var downloadedFilePath string
-		done := make(chan string, 1)
-		// [修正] 自動でダイアログを処理するリスナーを追加します
-		chromedp.ListenTarget(ctx, func(ev interface{}) {
-			if e, ok := ev.(*browser.EventDownloadProgress); ok {
-				if e.State == browser.DownloadProgressStateCompleted {
-					done <- e.GUID
-				}
-			}
-			// JavaScriptの確認ダイアログが開いた場合に自動でOKを押します
-			if _, ok := ev.(*page.EventJavascriptDialogOpening); ok {
-				go func() {
-					if err := chromedp.Run(ctx, page.HandleJavaScriptDialog(true)); err != nil {
-						log.Printf("could not handle javascript dialog: %v", err)
-					}
-				}()
-			}
-		})
+		filesBefore, err := os.ReadDir(downloadDir)
+		if err != nil {
+			writeJsonError(w, "ダウンロードディレクトリの読み取りに失敗: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		filesBeforeMap := make(map[string]bool)
+		for _, f := range filesBefore {
+			filesBeforeMap[f.Name()] = true
+		}
 
-		var initialLatestTimestamp string
+		// 7) ログインしてボタンをクリック
+		var initialTS string
 		err = chromedp.Run(ctx,
-			browser.SetDownloadBehavior(browser.SetDownloadBehaviorBehaviorAllowAndName).
-				WithDownloadPath(downloadDir).
-				WithEventsEnabled(true),
+			browser.SetDownloadBehavior(browser.SetDownloadBehaviorBehaviorAllow).WithDownloadPath(downloadDir),
 			chromedp.Navigate(`https://www.e-mednet.jp/`),
 			chromedp.WaitVisible(`input[name="userid"]`),
 			chromedp.SendKeys(`input[name="userid"]`, cfg.EdeUserID),
@@ -111,174 +104,94 @@ func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 			chromedp.Click(`//a[contains(@href, "busi_id=11")]`),
 			chromedp.WaitVisible(`//a[contains(text(), "納品受信(JAN)")]`),
 			chromedp.Click(`//a[contains(text(), "納品受信(JAN)")]`),
-			// ▼▼▼【ここからが修正箇所です】▼▼▼
-			// [修正] ボタンの特定方法を、表示テキスト(value)からより確実なname属性に変更します
 			chromedp.WaitReady(`input[name="unreceive_button"]`),
-			chromedp.Text(`table.result-list-table tbody tr:first-child td.col-transceiving-date`, &initialLatestTimestamp),
+			chromedp.Text(`table.result-list-table tbody tr:first-child td.col-transceiving-date`, &initialTS, chromedp.AtLeast(0)),
 			chromedp.Click(`input[name="unreceive_button"]`),
-			// ▲▲▲【修正ここまで】▲▲▲
-			chromedp.Sleep(3*time.Second),
 		)
-
 		if err != nil {
-			log.Printf("ERROR: 自動操作に失敗しました: %v", err)
 			writeJsonError(w, "自動操作に失敗しました: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		var noDataFound bool
-		timeout := time.After(90 * time.Second)
-		ticker := time.NewTicker(500 * time.Millisecond)
-		defer ticker.Stop()
-
-	Loop:
+		// 8) 結果待ちのロジック (medrecの方式)
+		var newFilePath string
+		var downloadSuccess, noDataFound bool
+		timeout := time.After(30 * time.Second)
+	CheckLoop:
 		for {
 			select {
-			case guid := <-done:
-				downloadedFilePath = filepath.Join(downloadDir, guid)
-				log.Printf("Download completed: %s", guid)
-				break Loop
 			case <-timeout:
-				err = fmt.Errorf("90秒以内に処理が完了しなかったため、タイムアウトしました。")
-				break Loop
-			case <-ticker.C:
+				writeJsonError(w, "30秒以内にサイトの反応が確認できませんでした。", http.StatusRequestTimeout)
+				return
+			case <-time.After(1 * time.Second):
+				var newLatestTimestamp, resultText string
+
 				checkCtx, cancelCheck := context.WithTimeout(ctx, 4*time.Second)
-				var newLatestTimestamp, resultText, bodyText string
 				_ = chromedp.Run(checkCtx,
 					chromedp.Text(`table.result-list-table tbody tr:first-child td.col-transceiving-date`, &newLatestTimestamp, chromedp.AtLeast(0)),
-					chromedp.Text(`table.result-list-table tbody tr:first-child td.col-result`, &resultText, chromedp.AtLeast(0)),
-					chromedp.Text(`body`, &bodyText, chromedp.AtLeast(0)),
 				)
-				if strings.TrimSpace(newLatestTimestamp) != strings.TrimSpace(initialLatestTimestamp) && strings.TrimSpace(resultText) == "受信データなし" {
-					noDataFound = true
-					log.Println("No new delivery data message found in history table.")
-					cancelCheck()
-					break Loop
-				}
-				if strings.Contains(bodyText, "未受信の納品データはありませんでした") {
-					noDataFound = true
-					log.Println("No new delivery data message found in body text.")
-					cancelCheck()
-					break Loop
-				}
 				cancelCheck()
+
+				if strings.TrimSpace(newLatestTimestamp) != strings.TrimSpace(initialTS) {
+					checkCtx, cancelCheck = context.WithTimeout(ctx, 4*time.Second)
+					_ = chromedp.Run(checkCtx,
+						chromedp.Text(`table.result-list-table tbody tr:first-child td.col-result`, &resultText, chromedp.AtLeast(0)),
+					)
+					cancelCheck()
+
+					if strings.TrimSpace(resultText) == "正常完了" {
+						downloadSuccess = true
+						break CheckLoop
+					}
+					if strings.TrimSpace(resultText) == "受信データなし" {
+						noDataFound = true
+						break CheckLoop
+					}
+				}
 			}
 		}
 
-		if err != nil {
-			log.Printf("ERROR: 自動操作の待機処理に失敗しました: %v", err)
-			writeJsonError(w, "自動操作の待機処理に失敗しました: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
+		// 9) 「受信データなし」の場合のハンドリング
 		if noDataFound {
 			writeJsonError(w, "未受信の納品データはありませんでした。", http.StatusOK)
 			return
 		}
 
-		time.Sleep(500 * time.Millisecond)
-
-		if downloadedFilePath == "" {
-			writeJsonError(w, "ダウンロードに失敗したか、予期せぬ状態になりました。", http.StatusInternalServerError)
+		// 10) ファイルダウンロード待機処理
+		if downloadSuccess {
+			timeoutFile := time.After(10 * time.Second)
+		FileLoop:
+			for {
+				select {
+				case <-timeoutFile:
+					writeJsonError(w, "サイトの反応はありましたが、10秒以内にファイルが見つかりませんでした。", http.StatusInternalServerError)
+					return
+				case <-time.After(500 * time.Millisecond):
+					filesAfter, _ := os.ReadDir(downloadDir)
+					for _, f := range filesAfter {
+						if !filesBeforeMap[f.Name()] && !strings.HasSuffix(f.Name(), ".crdownload") {
+							newFilePath = filepath.Join(downloadDir, f.Name())
+							break FileLoop
+						}
+					}
+				}
+			}
+		} else {
+			writeJsonError(w, "ダウンロードされたファイルの検知に失敗しました。", http.StatusInternalServerError)
 			return
 		}
 
-		finalPath, err := renameDownloadedFile(downloadedFilePath)
+		// 11) DAT ファイル処理
+		processedRecords, err := dat.ProcessDatFile(conn, newFilePath)
 		if err != nil {
-			log.Printf("WARN: ダウンロードしたファイルのリネームに失敗しました: %v。元のファイル名で処理を続行します。", err)
-			finalPath = downloadedFilePath
-		}
-
-		processedRecords, err := dat.ProcessDatFile(conn, finalPath)
-		if err != nil {
-			log.Printf("ERROR: ダウンロードしたDATファイルの処理に失敗しました %s: %v", finalPath, err)
-			writeJsonError(w, "ダウンロードしたDATファイルの処理に失敗しました: "+err.Error(), http.StatusInternalServerError)
+			writeJsonError(w, "ダウンロードしたDATファイルの処理に失敗: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
+		// 12) レスポンス
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
-			"message": fmt.Sprintf("%d件の納品データをダウンロードし、システムに登録しました。", len(processedRecords)),
+			"message": fmt.Sprintf("%d件の納品データをダウンロードし登録しました。", len(processedRecords)),
 		})
 	}
-}
-
-// ... (renameDownloadedFile and findEdgePath functions remain unchanged) ...
-
-func renameDownloadedFile(originalPath string) (string, error) {
-	file, err := os.Open(originalPath)
-	if err != nil {
-		return "", fmt.Errorf("ダウンロードファイルを開けませんでした: %w", err)
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	var newBaseName string
-	if scanner.Scan() {
-		firstLine := scanner.Text()
-		if strings.HasPrefix(firstLine, "S") && len(firstLine) >= 39 {
-			timestampStr := firstLine[27:39]
-			yy, mm, dd, h, m, s := timestampStr[0:2], timestampStr[2:4], timestampStr[4:6], timestampStr[6:8], timestampStr[8:10], timestampStr[10:12]
-			newBaseName = fmt.Sprintf("20%s%s%s_%s%s%s", yy, mm, dd, h, m, s)
-		}
-	}
-
-	destDir := filepath.Join("download", "DAT")
-	if newBaseName == "" {
-		destDir = filepath.Join("download", "DAT", "unorganized")
-		newBaseName = time.Now().Format("20060102150405")
-		log.Printf("警告: ファイルからタイムスタンプを解析できませんでした。現在の時刻で保存します。")
-	}
-
-	finalPath := filepath.Join(destDir, newBaseName+".DAT")
-	for i := 1; ; i++ {
-		if _, err := os.Stat(finalPath); os.IsNotExist(err) {
-			break
-		}
-		finalPath = filepath.Join(destDir, fmt.Sprintf("%s(%d)%s", newBaseName, i, ".DAT"))
-	}
-
-	file.Close()
-	time.Sleep(200 * time.Millisecond)
-
-	sourceFile, err := os.Open(originalPath)
-	if err != nil {
-		return "", fmt.Errorf("元ファイルを開けませんでした: %w", err)
-	}
-	defer sourceFile.Close()
-
-	destFile, err := os.Create(finalPath)
-	if err != nil {
-		return "", fmt.Errorf("保存先ファイルを作成できませんでした: %w", err)
-	}
-	defer destFile.Close()
-
-	_, err = io.Copy(destFile, sourceFile)
-	if err != nil {
-		return "", fmt.Errorf("ファイルのコピーに失敗しました: %w", err)
-	}
-
-	sourceFile.Close()
-	destFile.Close()
-
-	if err := os.Remove(originalPath); err != nil {
-		log.Printf("WARN: 一時ファイルの削除に失敗しました: %v", err)
-	}
-
-	log.Printf("ファイルをリネームしました: %s", finalPath)
-	return finalPath, nil
-}
-
-func findEdgePath() string {
-	lookIn := []string{
-		os.Getenv("ProgramFiles"),
-		os.Getenv("ProgramFiles(x86)"),
-	}
-	for _, dir := range lookIn {
-		path := filepath.Join(dir, "Microsoft", "Edge", "Application", "msedge.exe")
-		if _, err := os.Stat(path); err == nil {
-			return path
-		}
-	}
-	return ""
 }

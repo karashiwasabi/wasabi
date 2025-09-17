@@ -20,6 +20,7 @@
     <button id="manualInventoryBtn" class="btn btn-green">棚卸入力</button>
     <button id="inventoryAdjustmentBtn" class="btn btn-green">棚卸調整</button>
     <button id="inventoryHistoryBtn" class="btn btn-green">棚卸履歴</button>
+    <button id="ledgerBtn" class="btn btn-green">管理台帳</button> 
     <button id="aggregationBtn" class="btn btn-spring-green">集計</button>
     <button id="valuationBtn" class="btn btn-spring-green">在庫評価</button>
     <button id="orderBtn" class="btn btn-orange">発注</button>
@@ -198,8 +199,9 @@
             <button id="precomp-import-all-btn" class="btn">CSVインポート（全件）</button>
             <button id="precomp-export-btn" class="btn">CSVエクスポート</button>
             <button id="precomp-export-all-btn" class="btn">CSVエクスポート（全件）</button>
-            <button id="precomp-clear-btn" class="btn" style="background-color: #dc3545; color: white;">中断</button>
-            <button id="precomp-save-btn" class="btn" style="background-color: #0d6efd; color: white;">保存</button>
+<button id="precomp-toggle-status-btn" class="btn">予製中断</button>
+<button id="precomp-clear-btn" class="btn" style="background-color: #dc3545; color: white;">完全削除</button>
+<button id="precomp-save-btn" class="btn" style="background-color: #0d6efd; color: white;">保存</button>
         </div>
     </div>
     <div class="inout-details-header">
@@ -543,6 +545,37 @@
             <p>日付を選択して「表示」ボタンを押してください。</p>
         </div>
     </div>
+
+<div id="ledger-view" class="hidden">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+        <p class="view-title">薬品管理台帳</p>
+        <div id="ledger-selected-product" style="font-weight: bold; font-size: 1.2em; text-align: right;"></div>
+    </div>
+    <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end;">
+        <div class="field-group">
+            <label>品目を選択</label>
+            <button id="ledger-select-product-btn" class="btn">検索して選択...</button>
+        </div>
+        <div class="field-group">
+            <label>薬の種類</label>
+            <div style="display: flex; flex-wrap: wrap; gap: 5px 10px;">
+                <label><input type="checkbox" name="ledgerDrugType" value="poison">毒</label>
+                <label><input type="checkbox" name="ledgerDrugType" value="deleterious">劇</label>
+                <label><input type="checkbox" name="ledgerDrugType" value="narcotic">麻</label>
+                <label><input type="checkbox" name="ledgerDrugType" value="psychotropic1">向1</label>
+                <label><input type="checkbox" name="ledgerDrugType" value="psychotropic2">向2</label>
+                <label><input type="checkbox" name="ledgerDrugType" value="psychotropic3">向3</label>
+            </div>
+        </div>
+        <div class="buttons-group" style="margin-left: auto;">
+            <button id="print-ledger-btn" class="btn">この台帳を印刷</button>
+        </div>
+    </div>
+    <div id="ledger-output-container">
+        <p>上記ボタンから品目を選択してください。</p>
+    </div>
+</div>
+</div>
 
 <input type="file" id="importClientsInput" style="display:none;" accept=".csv">
 <input type="file" id="importDeadstockInput" style="display:none;" accept=".csv">

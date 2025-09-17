@@ -146,3 +146,19 @@ func ClearMastersHandler(conn *sql.DB) http.HandlerFunc {
 		json.NewEncoder(w).Encode(map[string]string{"message": "全ての製品マスターを削除しました。"})
 	}
 }
+
+// GetUsagePathHandlerは設定からusageFolderPathの値のみを返します。
+func GetUsagePathHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cfg, err := config.LoadConfig()
+		if err != nil {
+			http.Error(w, "設定ファイルの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"path": cfg.UsageFolderPath,
+		})
+	}
+}

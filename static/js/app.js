@@ -3,12 +3,11 @@
 import { loadMasterData } from './master_data.js';
 import { initInOut, resetInOutView } from './inout.js';
 import { initDatUpload } from './dat.js';
-import { initUsageUpload } from './usage.js';
+import { initUsageUpload } from './usage.js'; // ★★★ この行が正しい唯一のimport文です ★★★
 import { initInventoryUpload } from './inventory.js';
 import { initInventoryAdjustment } from './inventory_adjustment.js';
-// ▼▼▼【ここに追加】▼▼▼
 import { initInventoryHistory } from './inventory_history.js';
-// ▲▲▲【追加ここまで】▲▲▲
+import { initLedgerView } from './ledger.js';
 import { initAggregation } from './aggregation.js';
 import { initMasterEdit, resetMasterEditView } from './master_edit.js';
 import { initReprocessButton } from './reprocess.js';
@@ -27,7 +26,6 @@ import { initPricingView } from './pricing.js';
 import { initReturnsView } from './returns.js';
 import { initEdge } from './edge.js';
 
-// ▼▼▼ [修正点] showLoading関数をメッセージが受け取れるように変更 ▼▼▼
 window.showLoading = (message = '処理中...') => {
     const overlay = document.getElementById('loading-overlay');
     const messageEl = document.getElementById('loading-message');
@@ -38,7 +36,6 @@ window.showLoading = (message = '処理中...') => {
         overlay.classList.remove('hidden');
     }
 };
-// ▲▲▲ 修正ここまで ▲▲▲
 
 window.hideLoading = () => document.getElementById('loading-overlay').classList.add('hidden');
 window.showNotification = (message, type = 'success') => {
@@ -58,16 +55,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     const usageBtn = document.getElementById('usageBtn');
     const inventoryBtn = document.getElementById('inventoryBtn');
     const inventoryAdjustmentBtn = document.getElementById('inventoryAdjustmentBtn');
-    // ▼▼▼【ここに追加】▼▼▼
     const inventoryHistoryBtn = document.getElementById('inventoryHistoryBtn');
-    // ▲▲▲【追加ここまで】▲▲▲
+    const ledgerBtn = document.getElementById('ledgerBtn');
     const manualInventoryBtn = document.getElementById('manualInventoryBtn');
     const aggregationBtn = document.getElementById('aggregationBtn');
     const masterEditBtn = document.getElementById('masterEditViewBtn');
     const settingsBtn = document.getElementById('settingsBtn');
     const datFileInput = document.getElementById('datFileInput');
     const usageFileInput = document.getElementById('usageFileInput');
- 
     const inventoryFileInput = document.getElementById('inventoryFileInput');
     const uploadOutputContainer = document.getElementById('upload-output-container');
     const inventoryOutputContainer = document.getElementById('inventory-output-container');
@@ -90,9 +85,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     initUsageUpload();
     initInventoryUpload();
     initInventoryAdjustment();
-    // ▼▼▼【ここに追加】▼▼▼
     initInventoryHistory();
-    // ▲▲▲【追加ここまで】▲▲▲
+    initLedgerView();
     initAggregation();
     initMasterEdit();
     initReprocessButton();
@@ -129,13 +123,30 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (uploadOutputContainer) uploadOutputContainer.innerHTML = '';
         datFileInput.click();
     });
-// 修正後
-usageBtn.addEventListener('click', () => {
-    showView('upload-view'); // 結果表示のためにビューは切り替える
-    document.getElementById('upload-view-title').textContent = `USAGE File Import`;
-    // initUsageUpload内の処理を直接呼び出す
-    document.dispatchEvent(new CustomEvent('importUsageFromPath'));
-});
+    
+    // ▼▼▼【ここが修正箇所】▼▼▼
+    // 「処方」ボタンのクリックイベント
+    usageBtn.addEventListener('click', async () => {
+        showView('upload-view');
+        document.getElementById('upload-view-title').textContent = `USAGE File Import`;
+        
+        try {
+            const res = await fetch('/api/config/usage_path');
+            const config = await res.json();
+
+            if (config.path) {
+                // パスが設定されていれば、自動インポート用のイベントを発火
+                document.dispatchEvent(new CustomEvent('importUsageFromPath'));
+            } else {
+                // パスがなければ、手動ファイル選択ダイアログを開く
+                usageFileInput.click();
+            }
+        } catch (err) {
+            window.showNotification('設定の読み込みに失敗しました。', 'error');
+        }
+    });
+    // ▲▲▲【修正ここまで】▲▲▲
+
     inventoryBtn.addEventListener('click', () => {
         showView('inventory-view');
         if (inventoryOutputContainer) inventoryOutputContainer.innerHTML = '';
@@ -145,11 +156,12 @@ usageBtn.addEventListener('click', () => {
         showView('manual-inventory-view');
         document.getElementById('manual-inventory-view').dispatchEvent(new Event('show'));
     });
-    // ▼▼▼【ここに追加】▼▼▼
     inventoryHistoryBtn.addEventListener('click', () => {
         showView('inventory-history-view');
     });
-    // ▲▲▲【追加ここまで】▲▲▲
+    ledgerBtn.addEventListener('click', () => {
+        showView('ledger-view');
+    });
     inventoryAdjustmentBtn.addEventListener('click', () => {
         showView('inventory-adjustment-view');
     });

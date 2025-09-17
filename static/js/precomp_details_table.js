@@ -17,7 +17,7 @@ function createRowHTML(rec = {}) {
 
     const topRow = `
         <tr class="data-row" data-row-id="${rowId}" data-product='${JSON.stringify(productData)}'>
-            <td rowspan="2" class="center"><button class="delete-row-btn btn">削除</button></td>
+            <td rowspan="2" class="center"><button class="delete-row-btn btn">削除</button><button class="insert-row-btn btn" style="margin-top: 4px;">挿入</button></td>
             <td>${rec.transactionDate || ''}</td>
             <td class="yj-jan-code">${rec.yjCode || ''}</td>
             <td colspan="2" class="product-name-cell left" style="cursor: pointer; text-decoration: underline; color: blue;">${rec.productName || 'ここをクリックして製品を検索'}</td>
@@ -135,6 +135,13 @@ export function initDetailsTable() {
                 clearDetailsTable();
             }
         }
+
+        if (target.classList.contains('insert-row-btn')) {
+    const topRow = target.closest('tr');
+    const bottomRow = topRow.nextElementSibling;
+    // 現在の行（下の行）の直後に新しい空の行を挿入
+    bottomRow.insertAdjacentHTML('afterend', createRowHTML());
+}
 
         if (target.classList.contains('product-name-cell')) {
             const activeRow = target.closest('tr');
