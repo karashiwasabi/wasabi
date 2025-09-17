@@ -4,5 +4,6 @@
   "edeUserId": "0526297817",
   "edePassword": "a526297817",
   "usageFolderPath": "",
-  "calculationPeriodDays": 90
+  "calculationPeriodDays": 90,
+  "edgePath": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
 }

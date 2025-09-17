@@ -20,6 +20,9 @@ type Config struct {
 	// 2つの日付フィールドを削除し、集計日数を保持するフィールドを1つ追加
 	CalculationPeriodDays int `json:"calculationPeriodDays"`
 	// ▲▲▲【修正ここまで】▲▲▲
+	// ▼▼▼【ここに追加】▼▼▼
+	EdgePath string `json:"edgePath"` // Edgeの実行可能ファイルパス
+	// ▲▲▲【追加ここまで】▲▲▲
 }
 
 var (

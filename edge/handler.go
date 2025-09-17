@@ -38,7 +38,13 @@ func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 			writeJsonError(w, "IDまたはパスワードが設定されていません。", http.StatusBadRequest)
 			return
 		}
-
+		// ▼▼▼【ここから修正】▼▼▼
+		// Edgeパスのチェックを追加
+		if cfg.EdgePath == "" {
+			writeJsonError(w, "Edgeの実行パスが設定されていません。設定画面でパスを指定してください。", http.StatusBadRequest)
+			return
+		}
+		// ▲▲▲【修正ここまで】▲▲▲
 		// 2) 一時プロファイルディレクトリ作成
 		tempDir, err := os.MkdirTemp("", "chromedp-edge-")
 		if err != nil {
@@ -48,15 +54,14 @@ func DownloadHandler(conn *sql.DB) http.HandlerFunc {
 		defer os.RemoveAll(tempDir)
 
 		// ▼▼▼【ここから修正】▼▼▼
-		// ご指摘の箇所を、元の動作するコードに戻しました。
-		// 3) Edge実行ファイルのパス (元のコードのまま)
-		edgePath := `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`
+		// 3) Edge実行ファイルのパス (ハードコードを削除し、設定値を使用)
+		edgePath := cfg.EdgePath
 
 		// 4) ExecAllocator を作成 (元のコードのまま)
 		allocCtx, allocCancel := chromedp.NewExecAllocator(
 			r.Context(),
 			append(chromedp.DefaultExecAllocatorOptions[:],
-				chromedp.ExecPath(edgePath),
+				chromedp.ExecPath(edgePath), // ここで設定値が使われる
 				chromedp.Flag("headless", false),
 				chromedp.Flag("disable-gpu", true),
 				chromedp.Flag("no-sandbox", true),

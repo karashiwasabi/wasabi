@@ -1,7 +1,7 @@
-// ▼▼▼【修正】変数を変更 ▼▼▼
-let view, userIDInput, passwordInput, saveBtn, usageFolderPathInput, calculationPeriodDaysInput;
-let wholesalerCodeInput, wholesalerNameInput, addWholesalerBtn, wholesalersTableBody;
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\settings.js
 
+let view, userIDInput, passwordInput, saveBtn, usageFolderPathInput, calculationPeriodDaysInput, edgePathInput;
+let wholesalerCodeInput, wholesalerNameInput, addWholesalerBtn, wholesalersTableBody;
 /**
  * サーバーから設定を読み込み、画面の入力欄に反映させます。
  */
@@ -15,14 +15,20 @@ async function loadSettings() {
         if (usageFolderPathInput) {
             usageFolderPathInput.value = settings.usageFolderPath || '';
         }
-        // ▼▼▼【ここから修正】▼▼▼
-        // 新しい期間日数入力欄に値を設定 (デフォルト値は90)
         if (calculationPeriodDaysInput) {
             calculationPeriodDaysInput.value = settings.calculationPeriodDays || 90;
         }
-        // ▲▲▲【修正ここまで】▲▲▲
+        if (edgePathInput) {
+            edgePathInput.value = settings.edgePath || '';
+        }
+        // Edgeのパスが設定されていなければボタンを無効化する
+        const edgeBtn = document.getElementById('edgeDownloadBtn');
+        if(edgeBtn) {
+            edgeBtn.disabled = !settings.edgePath;
+        }
+
     } catch (err) {
-        console.error(err);
+         console.error(err);
         window.showNotification(err.message, 'error');
     }
 }
@@ -41,20 +47,19 @@ async function saveSettings() {
         const userId = userIDInput.value;
         const password = passwordInput.value;
         const usagePath = usageFolderPathInput.value;
-        // ▼▼▼【ここから修正】▼▼▼
-        // 新しい期間日数入力欄から値を取得
         const periodDays = parseInt(calculationPeriodDaysInput.value, 10);
+        const edgePath = edgePathInput.value.trim(); // Edgeパスの値を取得
 
         const newSettings = {
-            ...currentSettings,
+             ...currentSettings,
             emednetUserId: userId,
             emednetPassword: password,
             edeUserId: userId,
             edePassword: password,
             usageFolderPath: usagePath,
-            calculationPeriodDays: periodDays, // ペイロードに追加
+            calculationPeriodDays: periodDays,
+            edgePath: edgePath, // ペイロードに追加
         };
-        // ▲▲▲【修正ここまで】▲▲▲
 
         const res = await fetch('/api/settings/save', {
             method: 'POST',
@@ -63,10 +68,17 @@ async function saveSettings() {
         });
         const resData = await res.json();
         if (!res.ok) throw new Error(resData.message || '設定の保存に失敗しました。');
+        
         window.showNotification(resData.message, 'success');
+        
+        // 保存後にボタンの状態を更新
+        const edgeBtn = document.getElementById('edgeDownloadBtn');
+        if(edgeBtn) {
+            edgeBtn.disabled = !newSettings.edgePath;
+        }
 
     } catch (err) {
-        console.error(err);
+         console.error(err);
         window.showNotification(err.message, 'error');
     } finally {
         window.hideLoading();
@@ -152,10 +164,8 @@ export function initSettings() {
     passwordInput = document.getElementById('emednetPassword');
     saveBtn = document.getElementById('saveSettingsBtn');
     usageFolderPathInput = document.getElementById('usageFolderPath');
-    // ▼▼▼【ここから修正】▼▼▼
-    // 新しい期間日数入力欄の要素を取得
     calculationPeriodDaysInput = document.getElementById('calculationPeriodDays');
-    // ▲▲▲【修正ここまで】▲▲▲
+    edgePathInput = document.getElementById('edgePath');
     wholesalerCodeInput = document.getElementById('wholesalerCode');
     wholesalerNameInput = document.getElementById('wholesalerName');
     addWholesalerBtn = document.getElementById('addWholesalerBtn');

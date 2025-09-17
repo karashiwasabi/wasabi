@@ -26,6 +26,7 @@ func GetSettingsHandler(conn *sql.DB) http.HandlerFunc {
 }
 
 // SaveSettingsHandler saves the settings.
+// SaveSettingsHandler saves the settings.
 func SaveSettingsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var payload config.Config
@@ -34,25 +35,22 @@ func SaveSettingsHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// 1. まず現在の設定を全てサーバーから読み込む
 		currentSettings, err := config.LoadConfig()
 		if err != nil {
 			http.Error(w, "Failed to load current settings", http.StatusInternalServerError)
 			return
 		}
 
-		// 2. 読み込んだ現在の設定に、画面の入力値をマージ（上書き）する
 		currentSettings.EmednetUserID = payload.EmednetUserID
 		currentSettings.EmednetPassword = payload.EmednetPassword
 		currentSettings.EdeUserID = payload.EdeUserID
 		currentSettings.EdePassword = payload.EdePassword
 		currentSettings.UsageFolderPath = payload.UsageFolderPath
-		// ▼▼▼【ここから修正】▼▼▼
-		// 新しい期間日数の値をペイロードから読み取って上書きする
 		currentSettings.CalculationPeriodDays = payload.CalculationPeriodDays
-		// ▲▲▲【修正ここまで】▲▲▲
+		// ▼▼▼【ここに追加】▼▼▼
+		currentSettings.EdgePath = payload.EdgePath // Edgeパスをマージ
+		// ▲▲▲【追加ここまで】▲▲▲
 
-		// 3. 完成した設定オブジェクトをサーバーに送信して保存
 		if err := config.SaveConfig(currentSettings); err != nil {
 			http.Error(w, "Failed to save settings: "+err.Error(), http.StatusInternalServerError)
 			return
