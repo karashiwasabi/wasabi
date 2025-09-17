@@ -4,6 +4,7 @@ package model
 
 import "database/sql"
 
+// (ProductMaster, ProductMasterInput, JCShms, ValuationPackageDetail, TransactionRecord は変更なし)
 type ProductMaster struct {
 	ProductCode         string  `json:"productCode"`
 	YjCode              string  `json:"yjCode"`
@@ -146,6 +147,7 @@ func (t *TransactionRecord) ToProductMaster() *ProductMaster {
 	}
 }
 
+// (ProductMasterView, InventoryProductView, Client, AggregationFilters, ValuationFilters, StockLedgerYJGroup, StockLedgerPackageGroup, LedgerTransaction は変更なし)
 type ProductMasterView struct {
 	ProductMaster
 	FormattedPackageSpec string `json:"formattedPackageSpec"`
@@ -212,6 +214,8 @@ type LedgerTransaction struct {
 	TransactionRecord
 	RunningBalance float64 `json:"runningBalance"`
 }
+
+// (UnifiedInputRecord, DeadStockGroup, DeadStockPackageGroup, DeadStockProduct, DeadStockRecord, DeadStockFilters, PreCompoundingRecord, Wholesaler, Backorder, PriceUpdate, QuoteData, ValuationDetailRow は変更なし)
 type UnifiedInputRecord struct {
 	Date            string  `json:"date"`
 	JanCode         string  `json:"janCode"`
