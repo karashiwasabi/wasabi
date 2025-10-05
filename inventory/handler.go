@@ -1,5 +1,3 @@
-// C:\Dev\WASABI\inventory\handler.go
-
 package inventory
 
 import (
@@ -7,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net/http" // stringsパッケージをインポート
+	"net/http"
 	"wasabi/db"
 	"wasabi/mappers"
 	"wasabi/mastermanager"
@@ -64,56 +62,10 @@ func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
 			return
 		}
-		defer tx.Rollback() // Ensure rollback on error
-
-		// Step 1: Delete any existing inventory records for the target date.
-		if err := db.DeleteTransactionsByFlagAndDate(tx, 0, date); err != nil { // Flag 0 for inventory
-			http.Error(w, "Failed to delete existing inventory data for date "+date, http.StatusInternalServerError)
-			return
-		}
-
-		// Step 2: Get all product masters to create a zero-inventory baseline.
-		allMasters, err := db.GetAllProductMasters(tx)
-		if err != nil {
-			http.Error(w, "Failed to get all product masters for zero-fill: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		receiptNumber := fmt.Sprintf("INV%s", date)
-		var zeroRecords []model.TransactionRecord
-
-		for i, master := range allMasters {
-			tr := model.TransactionRecord{
-				Flag:            0, // Inventory
-				TransactionDate: date,
-				ReceiptNumber:   receiptNumber,
-				LineNumber:      fmt.Sprintf("Z%d", i+1), // Use a prefix for zero-fill records
-				YjQuantity:      0,
-				JanQuantity:     0,
-				DatQuantity:     0,
-			}
-			mappers.MapProductMasterToTransaction(&tr, master)
-			if master.Origin == "JCSHMS" {
-				tr.ProcessFlagMA = "COMPLETE"
-			} else {
-				tr.ProcessFlagMA = "PROVISIONAL"
-			}
-			zeroRecords = append(zeroRecords, tr)
-		}
-
-		// Step 3: Persist the zero-inventory records to the database.
-		if len(zeroRecords) > 0 {
-			if err := db.PersistTransactionRecordsInTx(tx, zeroRecords); err != nil {
-				http.Error(w, "Failed to persist zero-inventory records: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
-		}
+		defer tx.Rollback()
 
 		recordsToProcess := parsedData.Records
 
-		// ▼▼▼【ここからが修正箇所】▼▼▼
-
-		// Step 4: ファイルから読み込んだJANコードのリストを作成
 		janCodesFromFile := make([]string, 0, len(recordsToProcess))
 		for _, rec := range recordsToProcess {
 			if rec.JanCode != "" {
@@ -121,26 +73,21 @@ func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 			}
 		}
 
-		// Step 5: ファイルに存在するJANコードのゼロ埋めデータのみを削除
 		if len(janCodesFromFile) > 0 {
-			if err := db.DeleteZeroFillInventoryTransactions(tx, date, janCodesFromFile); err != nil {
-				http.Error(w, "Failed to clear zero-fill records for overwrite: "+err.Error(), http.StatusInternalServerError)
+			if err := db.DeleteTransactionsByFlagAndDateAndCodes(tx, 0, date, janCodesFromFile); err != nil {
+				http.Error(w, "Failed to clear old inventory data for specified products: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
 		}
 
-		// ▲▲▲【修正ここまで】▲▲▲
-
-		// Step 6: Process the actual inventory records from the uploaded file.
 		if len(recordsToProcess) == 0 {
-			// If the file is empty, commit the zero-fill records and finish.
 			if err := tx.Commit(); err != nil {
-				http.Error(w, "Failed to commit transaction for zero-fill: "+err.Error(), http.StatusInternalServerError)
+				http.Error(w, "Failed to commit transaction: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
-				"message": fmt.Sprintf("棚卸ファイルにデータがなかったため、%d件の在庫を0として登録しました。", len(zeroRecords)),
+				"message": "棚卸ファイルにデータがありませんでした。",
 				"details": []model.TransactionRecord{},
 			})
 			return
@@ -171,7 +118,7 @@ func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 
 		mastersMap, err := db.GetProductMastersByCodesMap(tx, keyList)
 		if err != nil {
-			tx.Rollback() // Rollback is already deferred, but being explicit is fine.
+			tx.Rollback()
 			http.Error(w, "Failed to pre-fetch product masters", http.StatusInternalServerError)
 			return
 		}
@@ -192,6 +139,7 @@ func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 
 		const batchSize = 500
 		var finalRecords []model.TransactionRecord
+		receiptNumber := fmt.Sprintf("INV%s", date)
 
 		for i, rec := range recordsToProcess {
 			tr := model.TransactionRecord{
@@ -210,6 +158,10 @@ func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 				tr.JanQuantity = tr.YjQuantity / master.JanPackInnerQty
 			}
 			mappers.MapProductMasterToTransaction(&tr, master)
+
+			// ▼▼▼【修正】Subtotalを計算する処理を追加 ▼▼▼
+			tr.Subtotal = tr.YjQuantity * tr.UnitPrice
+			// ▲▲▲【修正ここまで】▲▲▲
 
 			if master.Origin == "JCSHMS" {
 				tr.ProcessFlagMA = "COMPLETE"
@@ -262,7 +214,7 @@ func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"message": fmt.Sprintf("全%d件の棚卸データを登録しました。（うち%d件がファイルから読込）", len(allMasters), len(finalRecords)),
+			"message": fmt.Sprintf("%d件の棚卸データをファイルから登録しました。", len(finalRecords)),
 			"details": finalRecords,
 		})
 	}

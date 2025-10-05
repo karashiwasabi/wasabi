@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time" // time パッケージをインポート
+	"time"
 	"wasabi/config"
 	"wasabi/db"
 	"wasabi/model"
@@ -25,21 +25,17 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 			coefficient = 1.5
 		}
 
-		// ▼▼▼【ここから修正】▼▼▼
-		// 設定ファイルから集計日数を読み込む
 		cfg, err := config.LoadConfig()
 		if err != nil {
 			http.Error(w, "設定ファイルの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		// 日数から期間を動的に計算
 		now := time.Now()
-		endDate := "99991231" // 終了日は無制限
+		endDate := "99991231"
 		startDate := now.AddDate(0, 0, -cfg.CalculationPeriodDays)
 		startDateStr := startDate.Format("20060102")
 
-		// フィルタ構造体に計算した値を使用する
 		filters := model.AggregationFilters{
 			StartDate:   startDateStr,
 			EndDate:     endDate,
@@ -54,19 +50,21 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 			http.Error(w, "Failed to get stock ledger: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// ▲▲▲【修正ここまで】▲▲▲
 
-		// ステップ2: 「今現在」のリアルタイム在庫と発注残を別途取得する
+		// ステップ2: 「今現在」のリアルタイム在庫を取得する
 		currentStockMap, err := db.GetAllCurrentStockMap(conn)
 		if err != nil {
 			http.Error(w, "Failed to get current stock map: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		backordersMap, err := db.GetAllBackordersMap(conn)
-		if err != nil {
-			http.Error(w, "Failed to get backorders map: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
+
+		// ▼▼▼【修正】発注残の取得処理を削除 ▼▼▼
+		// backordersMap, err := db.GetAllBackordersMap(conn)
+		// if err != nil {
+		// 	http.Error(w, "Failed to get backorders map: "+err.Error(), http.StatusInternalServerError)
+		// 	return
+		// }
+		// ▲▲▲【修正ここまで】▲▲▲
 
 		var returnCandidates []model.StockLedgerYJGroup
 		for _, group := range yjGroups {
@@ -82,29 +80,25 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 					productCodesInPackage = append(productCodesInPackage, master.ProductCode)
 				}
 
-				// 「今現在」の発注残を含めた有効在庫を計算
-				backorderQty := backordersMap[pkg.PackageKey]
-				trueEffectiveBalance := currentStockForPackage + backorderQty
+				// ▼▼▼【修正】有効在庫の計算から発注残(backorderQty)を除外 ▼▼▼
+				// backorderQty := backordersMap[pkg.PackageKey]
+				trueEffectiveBalance := currentStockForPackage // + backorderQty
+				// ▲▲▲【修正ここまで】▲▲▲
 
 				// ステップ4: 「発注点」と「今現在の有効在庫」を比較する
 				if len(pkg.Masters) > 0 {
 					yjPackUnitQty := pkg.Masters[0].YjPackUnitQty
 					if pkg.ReorderPoint > 0 && trueEffectiveBalance > (pkg.ReorderPoint+yjPackUnitQty) {
 
-						// 画面表示用に、計算した「今現在の有効在庫」をセットし直す
 						pkg.EffectiveEndingBalance = trueEffectiveBalance
 
-						// ▼▼▼ [追加ロジック] 納品履歴を取得する ▼▼▼
 						if len(productCodesInPackage) > 0 {
-							// ▼▼▼【修正】getDeliveryHistoryに渡す期間を動的に計算した値に変更 ▼▼▼
 							deliveryHistory, err := getDeliveryHistory(conn, productCodesInPackage, startDateStr, endDate)
 							if err != nil {
-								// エラーが発生しても処理は続行するが、ログには残す
 								fmt.Printf("WARN: Failed to get delivery history for package %s: %v\n", pkg.PackageKey, err)
 							}
 							pkg.DeliveryHistory = deliveryHistory
 						}
-						// ▲▲▲【修正ここまで】▲▲▲
 
 						returnablePackages = append(returnablePackages, pkg)
 						isGroupAdded = true
@@ -124,7 +118,6 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// ▼▼▼ [追加関数] 指定された製品コードの納品履歴を取得するヘルパー関数 ▼▼▼
 func getDeliveryHistory(conn *sql.DB, productCodes []string, startDate, endDate string) ([]model.TransactionRecord, error) {
 	placeholders := strings.Repeat("?,", len(productCodes)-1) + "?"
 	query := fmt.Sprintf(`SELECT `+db.TransactionColumns+` FROM transaction_records 

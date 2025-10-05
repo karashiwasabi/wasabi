@@ -1,5 +1,3 @@
-// C:\Dev\WASABI\mappers\mappers.go
-
 package mappers
 
 import (
@@ -9,14 +7,22 @@ import (
 	"wasabi/units"
 )
 
+// MapProductMasterToTransaction は、ProductMaster構造体の情報からTransactionRecord構造体へ必要なデータをコピーします。
 func MapProductMasterToTransaction(ar *model.TransactionRecord, master *model.ProductMaster) {
+	// 取引記録に単価が設定されていない場合、マスターの薬価をデフォルト値として使用します。
 	if ar.UnitPrice == 0 {
 		ar.UnitPrice = master.NhiPrice
 	}
 
+	// product_master から transaction_records へ共通して存在する情報をコピーします。
 	ar.JanCode = master.ProductCode
 	ar.YjCode = master.YjCode
-	ar.ProductName = master.ProductName
+	// WASABIではproduct_nameに規格が含まれることが期待されるため、tkrのロジックを応用します。
+	if master.Specification != "" {
+		ar.ProductName = master.ProductName + " " + master.Specification
+	} else {
+		ar.ProductName = master.ProductName
+	}
 	ar.KanaName = master.KanaName
 	ar.UsageClassification = master.UsageClassification
 	ar.PackageForm = master.PackageForm
@@ -33,19 +39,17 @@ func MapProductMasterToTransaction(ar *model.TransactionRecord, master *model.Pr
 	ar.FlagStimulant = master.FlagStimulant
 	ar.FlagStimulantRaw = master.FlagStimulantRaw
 
-	// ▼▼▼ [修正点] YJ単位名とJAN単位名の設定ロジックをここに集約・修正 ▼▼▼
+	// 単位名の解決ロジック (tkrのロジックを流用)
 	ar.YjUnitName = units.ResolveName(master.YjUnitName)
 	ar.JanUnitCode = strconv.Itoa(master.JanUnitCode)
-
-	// ご指摘のロジックを実装
 	if master.JanUnitCode == 0 {
-		ar.JanUnitName = ar.YjUnitName // 0の場合はYJ単位名を引き継ぐ
+		ar.JanUnitName = ar.YjUnitName
 	} else {
-		ar.JanUnitName = units.ResolveName(ar.JanUnitCode) // 0以外はコードを名称に変換
+		ar.JanUnitName = units.ResolveName(ar.JanUnitCode)
 	}
-	// ▲▲▲ 修正ここまで ▲▲▲
 
-	// FormatPackageSpecに必要なデータを全て持つ一時的なJCShms構造体を作成します。
+	// 包装仕様文字列の生成ロジック (tkrのロジックを流用)
+	// この処理のために、一時的にJCShms構造体の形式にデータを当てはめます。
 	tempJcshms := model.JCShms{
 		JC037: master.PackageForm,
 		JC039: master.YjUnitName,
@@ -54,6 +58,5 @@ func MapProductMasterToTransaction(ar *model.TransactionRecord, master *model.Pr
 		JA008: sql.NullFloat64{Float64: master.JanPackUnitQty, Valid: true},
 		JA007: sql.NullString{String: strconv.Itoa(master.JanUnitCode), Valid: true},
 	}
-	// 完全にデータが揃った構造体を渡して、包装仕様を生成します。
 	ar.PackageSpec = units.FormatPackageSpec(&tempJcshms)
 }

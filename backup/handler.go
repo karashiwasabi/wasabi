@@ -1,5 +1,3 @@
-// C:\Users\wasab\OneDrive\デスクトップ\WASABI\backup\handler.go
-
 package backup
 
 import (
@@ -15,13 +13,6 @@ import (
 	"wasabi/model"
 )
 
-/**
- * @brief 得意先マスターをCSV形式でエクスポートします。
- * @param conn データベース接続
- * @return http.HandlerFunc HTTPリクエストを処理するハンドラ関数
- * @details
- * 得意先コードはExcelで開いた際に先頭のゼロが消えないよう `="<CODE>"` の形式で出力します。
- */
 func ExportClientsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		clients, err := db.GetAllClients(conn)
@@ -55,11 +46,6 @@ func ExportClientsHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-/**
- * @brief 得意先マスターをCSVファイルからインポートします。
- * @param conn データベース接続
- * @return http.HandlerFunc HTTPリクエストを処理するハンドラ関数
- */
 func ImportClientsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		file, _, err := r.FormFile("file")
@@ -107,13 +93,17 @@ func ImportClientsHandler(conn *sql.DB) http.HandlerFunc {
 			importedCount++
 		}
 
+		// ▼▼▼【修正点】コミットの前にシーケンス初期化を移動 ▼▼▼
+		if err := db.InitializeSequenceFromMaxClientCode(tx); err != nil {
+			log.Printf("Warning: failed to re-initialize client sequence after import: %v", err)
+			// ここではエラーを返さず、警告ログにとどめる
+		}
+
 		if err := tx.Commit(); err != nil {
 			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
 			return
 		}
-		if err := db.InitializeSequenceFromMaxClientCode(conn); err != nil {
-			log.Printf("Warning: failed to re-initialize client sequence after import: %v", err)
-		}
+		// ▲▲▲【修正ここまで】▲▲▲
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
@@ -122,17 +112,9 @@ func ImportClientsHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-/**
- * @brief 製品マスター（編集可能データ）をCSV形式でエクスポートします。
- * @param conn データベース接続
- * @return http.HandlerFunc HTTPリクエストを処理するハンドラ関数
- * @details
- * データベースから編集可能な製品マスター（JCSHMS由来でないもの）を取得します。
- * JANコードはExcelで開いた際に先頭のゼロが消えないよう `="<JAN>"` の形式で出力します。
- */
 func ExportProductsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		products, err := db.GetEditableProductMasters(conn)
+		products, err := db.GetAllProductMasters(conn)
 		if err != nil {
 			http.Error(w, "Failed to get products", http.StatusInternalServerError)
 			return
@@ -189,11 +171,6 @@ func ExportProductsHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-/**
- * @brief 製品マスターをCSVファイルからインポートします。
- * @param conn データベース接続
- * @return http.HandlerFunc HTTPリクエストを処理するハンドラ関数
- */
 func ImportProductsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		file, _, err := r.FormFile("file")
@@ -272,14 +249,16 @@ func ImportProductsHandler(conn *sql.DB) http.HandlerFunc {
 			importedCount++
 		}
 
+		// ▼▼▼【修正点】コミットの前にシーケンス初期化を移動 ▼▼▼
+		if err := db.InitializeSequenceFromMaxYjCode(tx); err != nil {
+			log.Printf("Warning: failed to re-initialize YJ sequence after import: %v", err)
+		}
+
 		if err := tx.Commit(); err != nil {
 			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
 			return
 		}
-
-		if err := db.InitializeSequenceFromMaxYjCode(conn); err != nil {
-			log.Printf("Warning: failed to re-initialize YJ sequence after import: %v", err)
-		}
+		// ▲▲▲【修正ここまで】▲▲▲
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{

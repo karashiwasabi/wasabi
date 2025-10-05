@@ -1,5 +1,3 @@
-// C:\Dev\WASABI\inout\handler.go
-
 package inout
 
 import (
@@ -8,7 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strings" // stringsパッケージを追加
+	"strings"
 	"time"
 	"wasabi/db"
 	"wasabi/mappers"
@@ -21,7 +19,7 @@ type SaveRecordInput struct {
 	ProductCode string  `json:"productCode"`
 	ProductName string  `json:"productName"` // Used as a fallback for mastermanager
 	JanQuantity float64 `json:"janQuantity"`
-	DatQuantity float64 `json:"datQuantity"` // 「個数」フィールドを追加
+	DatQuantity float64 `json:"datQuantity"` // 「個数」フィールド
 	ExpiryDate  string  `json:"expiryDate"`
 	LotNumber   string  `json:"lotNumber"`
 }
@@ -82,11 +80,9 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 			dateStr = time.Now().Format("20060102")
 		}
 
-		// ▼▼▼【ここからが修正箇所です】▼▼▼
 		if payload.OriginalReceiptNumber != "" {
 			receiptNumber = payload.OriginalReceiptNumber
 
-			// 画面から送られてきたレコードの製品コードリストを作成
 			payloadProductCodes := make(map[string]bool)
 			for _, rec := range payload.Records {
 				if rec.ProductCode != "" {
@@ -94,7 +90,6 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 				}
 			}
 
-			// payloadに含まれていない製品コードの明細のみをDBから削除する
 			if len(payloadProductCodes) > 0 {
 				var codesToDelete []interface{}
 				var placeholders []string
@@ -110,7 +105,6 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 					return
 				}
 			} else {
-				// payloadが空の場合、それは伝票の全明細を削除することを意味する
 				if err := db.DeleteTransactionsByReceiptNumberInTx(tx, receiptNumber); err != nil {
 					http.Error(w, "Failed to delete all items from slip", http.StatusInternalServerError)
 					return
@@ -129,7 +123,6 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 			newSeq := lastSeq + 1
 			receiptNumber = fmt.Sprintf("io%s%03d", dateStr, newSeq)
 		}
-		// ▲▲▲【修正ここまで】▲▲▲
 
 		var finalRecords []model.TransactionRecord
 		flagMap := map[string]int{"入庫": 11, "出庫": 12}
@@ -176,7 +169,13 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 			}
 
 			yjQuantity := rec.JanQuantity * master.JanPackInnerQty
-			subtotal := yjQuantity * master.NhiPrice
+
+			var unitNhiPrice float64
+			if master.YjPackUnitQty > 0 {
+				// DBのnhi_priceは包装薬価なので、ここで単価を計算
+				unitNhiPrice = master.NhiPrice / master.YjPackUnitQty
+			}
+			subtotal := yjQuantity * unitNhiPrice
 
 			tr := model.TransactionRecord{
 				TransactionDate: dateStr,

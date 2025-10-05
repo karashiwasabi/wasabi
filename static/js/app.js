@@ -3,7 +3,7 @@
 import { loadMasterData } from './master_data.js';
 import { initInOut, resetInOutView } from './inout.js';
 import { initDatUpload } from './dat.js';
-import { initUsageUpload } from './usage.js'; // ★★★ この行が正しい唯一のimport文です ★★★
+import { initUsageUpload } from './usage.js';
 import { initInventoryUpload } from './inventory.js';
 import { initInventoryAdjustment } from './inventory_adjustment.js';
 import { initInventoryHistory } from './inventory_history.js';
@@ -45,7 +45,6 @@ window.showNotification = (message, type = 'success') => {
     notificationBox.classList.add(type, 'show');
     setTimeout(() => { notificationBox.classList.remove('show'); }, 3000);
 };
-
 document.addEventListener('DOMContentLoaded', async () => {
     
     await loadMasterData();
@@ -116,6 +115,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
+    // 棚卸調整画面への遷移イベントを捕捉する
+    document.addEventListener('navigateToInventoryAdjustment', (e) => {
+        const { yjCode } = e.detail;
+        showView('inventory-adjustment-view');
+        // 遷移先の画面に、データを読み込むためのイベントを発行する
+        const event = new CustomEvent('loadInventoryAdjustment', { detail: { yjCode } });
+        document.getElementById('inventory-adjustment-view').dispatchEvent(event);
+    });
+  
     inOutBtn.addEventListener('click', () => { showView('in-out-view'); resetInOutView(); });
     datBtn.addEventListener('click', () => {
         showView('upload-view');
@@ -124,8 +132,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         datFileInput.click();
     });
     
-    // ▼▼▼【ここが修正箇所】▼▼▼
-    // 「処方」ボタンのクリックイベント
     usageBtn.addEventListener('click', async () => {
         showView('upload-view');
         document.getElementById('upload-view-title').textContent = `USAGE File Import`;
@@ -135,17 +141,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             const config = await res.json();
 
             if (config.path) {
-                // パスが設定されていれば、自動インポート用のイベントを発火
                 document.dispatchEvent(new CustomEvent('importUsageFromPath'));
             } else {
-                // パスがなければ、手動ファイル選択ダイアログを開く
                 usageFileInput.click();
             }
         } catch (err) {
             window.showNotification('設定の読み込みに失敗しました。', 'error');
         }
     });
-    // ▲▲▲【修正ここまで】▲▲▲
 
     inventoryBtn.addEventListener('click', () => {
         showView('inventory-view');

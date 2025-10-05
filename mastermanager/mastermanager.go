@@ -1,11 +1,10 @@
-// C:\Dev\WASABI\mastermanager\mastermanager.go
-
 package mastermanager
 
 import (
 	"database/sql"
 	"fmt"
 	"strconv"
+	"strings"
 	"wasabi/db"
 	"wasabi/model"
 )
@@ -31,36 +30,33 @@ func FindOrCreate(
 		return master, nil
 	}
 
-	// ▼▼▼ [修正点] 仮マスターの場合、DBに既存レコードがないか確認するロジックを追加 ▼▼▼
-	if isSyntheticKey {
-		// 2. 次にデータベースを検索
-		existingMaster, err := db.GetProductMasterByCode(tx, key)
-		if err != nil {
-			return nil, fmt.Errorf("failed to check for existing provisional master %s: %w", key, err)
-		}
-		// もしDBに存在すれば、それを使用する
-		if existingMaster != nil {
-			mastersMap[key] = existingMaster // メモリマップにも追加して次回以降の検索を高速化
-			return existingMaster, nil
-		}
+	// 2. 次にデータベースを検索 (tkrのロジック)
+	existingMaster, err := db.GetProductMasterByCode(tx, key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check for existing master %s: %w", key, err)
 	}
-	// ▲▲▲ 修正ここまで ▲▲▲
+	// もしDBに存在すれば、それを使用する
+	if existingMaster != nil {
+		mastersMap[key] = existingMaster // メモリマップにも追加して次回以降の検索を高速化
+		return existingMaster, nil
+	}
 
+	// 3. JCSHMSマスターから作成を試みる
 	if !isSyntheticKey {
 		if jcshms, ok := jcshmsMap[janCode]; ok && jcshms.JC018 != "" {
-			if jcshms.JC009 != "" {
-				input := createMasterInputFromJcshms(janCode, jcshms.JC009, jcshms)
-				if err := db.CreateProductMasterInTx(tx, input); err != nil {
-					return nil, fmt.Errorf("failed to create master from jcshms: %w", err)
-				}
-				newMaster := createMasterModelFromInput(input)
-				mastersMap[key] = &newMaster
-				return &newMaster, nil
+			// ヘルパー関数を呼び出して、新しいDB構造に基づいたデータを作成
+			input := createMasterInputFromJcshms(janCode, jcshms)
+
+			if err := db.UpsertProductMasterInTx(tx, input); err != nil {
+				return nil, fmt.Errorf("failed to create master from jcshms: %w", err)
 			}
+			newMaster := createMasterModelFromInput(input)
+			mastersMap[key] = &newMaster
+			return &newMaster, nil
 		}
 	}
 
-	// 3. メモリにもDBにも存在しない場合、新しい仮マスターを作成
+	// 4. メモリにもDBにもJCSHMSにも存在しない場合、新しい仮マスターを作成
 	newYj, err := db.NextSequenceInTx(tx, "MA2Y", "MA2Y", 8)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get next sequence for provisional master: %w", err)
@@ -69,17 +65,11 @@ func FindOrCreate(
 	provisionalInput := model.ProductMasterInput{
 		ProductCode: key,
 		YjCode:      newYj,
-		ProductName: productName,
+		ProductName: productName, // DATファイルから読み取った名前を基本製品名として設定
 		Origin:      "PROVISIONAL",
 	}
 
-	if !isSyntheticKey {
-		if jcshms, ok := jcshmsMap[janCode]; ok && jcshms.JC009 == "" {
-			provisionalInput.UsageClassification = "他"
-		}
-	}
-
-	if err := db.CreateProductMasterInTx(tx, provisionalInput); err != nil {
+	if err := db.UpsertProductMasterInTx(tx, provisionalInput); err != nil {
 		return nil, fmt.Errorf("failed to create provisional master: %w", err)
 	}
 
@@ -88,17 +78,20 @@ func FindOrCreate(
 	return &newMaster, nil
 }
 
-// createMasterInputFromJcshms はJCSHMSのデータからDB登録用のProductMasterInputを作成するヘルパー関数です。
-func createMasterInputFromJcshms(jan, yj string, jcshms *model.JCShms) model.ProductMasterInput {
+// createMasterInputFromJcshms はJCSHMSのデータからDB登録用のProductMasterInputを作成します。
+func createMasterInputFromJcshms(jan string, jcshms *model.JCShms) model.ProductMasterInput {
 	var nhiPrice float64
 	if jcshms.JC044 > 0 {
 		nhiPrice = jcshms.JC050 / jcshms.JC044
 	}
 	janUnitCodeVal, _ := strconv.Atoi(jcshms.JA007.String)
-	return model.ProductMasterInput{
+
+	input := model.ProductMasterInput{
 		ProductCode:         jan,
-		YjCode:              yj,
-		ProductName:         jcshms.JC018,
+		YjCode:              jcshms.JC009,
+		ProductName:         strings.TrimSpace(jcshms.JC018), // 基本製品名 (JC018)
+		Specification:       strings.TrimSpace(jcshms.JC020), // 規格 (JC020)
+		Gs1Code:             jcshms.JC122,                    // GS1コード (JC122)
 		Origin:              "JCSHMS",
 		KanaName:            jcshms.JC022,
 		MakerName:           jcshms.JC030,
@@ -106,6 +99,7 @@ func createMasterInputFromJcshms(jan, yj string, jcshms *model.JCShms) model.Pro
 		PackageForm:         jcshms.JC037,
 		YjUnitName:          jcshms.JC039,
 		YjPackUnitQty:       jcshms.JC044,
+		NhiPrice:            nhiPrice,
 		FlagPoison:          jcshms.JC061,
 		FlagDeleterious:     jcshms.JC062,
 		FlagNarcotic:        jcshms.JC063,
@@ -115,36 +109,41 @@ func createMasterInputFromJcshms(jan, yj string, jcshms *model.JCShms) model.Pro
 		JanPackInnerQty:     jcshms.JA006.Float64,
 		JanUnitCode:         janUnitCodeVal,
 		JanPackUnitQty:      jcshms.JA008.Float64,
-		NhiPrice:            nhiPrice,
 	}
+	return input
 }
 
-// createMasterModelFromInput はDB登録用のInputからメモリマップ格納用のProductMasterを作成するヘルパー関数です。
+// createMasterModelFromInput はDB登録用のInputからメモリマップ格納用のProductMasterを作成します。
 func createMasterModelFromInput(input model.ProductMasterInput) model.ProductMaster {
-	master := model.ProductMaster{
+	return model.ProductMaster{
 		ProductCode:         input.ProductCode,
 		YjCode:              input.YjCode,
+		Gs1Code:             input.Gs1Code,
 		ProductName:         input.ProductName,
-		Origin:              input.Origin,
 		KanaName:            input.KanaName,
 		MakerName:           input.MakerName,
+		Specification:       input.Specification,
 		UsageClassification: input.UsageClassification,
 		PackageForm:         input.PackageForm,
 		YjUnitName:          input.YjUnitName,
 		YjPackUnitQty:       input.YjPackUnitQty,
+		JanPackInnerQty:     input.JanPackInnerQty,
+		JanUnitCode:         input.JanUnitCode,
+		JanPackUnitQty:      input.JanPackUnitQty,
+		Origin:              input.Origin,
+		NhiPrice:            input.NhiPrice,
+		PurchasePrice:       input.PurchasePrice,
 		FlagPoison:          input.FlagPoison,
 		FlagDeleterious:     input.FlagDeleterious,
 		FlagNarcotic:        input.FlagNarcotic,
 		FlagPsychotropic:    input.FlagPsychotropic,
 		FlagStimulant:       input.FlagStimulant,
 		FlagStimulantRaw:    input.FlagStimulantRaw,
-		JanPackInnerQty:     input.JanPackInnerQty,
-		JanUnitCode:         input.JanUnitCode,
-		JanPackUnitQty:      input.JanPackUnitQty,
-		NhiPrice:            input.NhiPrice,
-		PurchasePrice:       input.PurchasePrice,
+		IsOrderStopped:      input.IsOrderStopped,
 		SupplierWholesale:   input.SupplierWholesale,
+		GroupCode:           input.GroupCode,
+		ShelfNumber:         input.ShelfNumber,
+		Category:            input.Category,
+		UserNotes:           input.UserNotes,
 	}
-
-	return master
 }

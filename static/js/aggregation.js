@@ -1,11 +1,9 @@
 // C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\aggregation.js
 
-// ▼▼▼ [修正点] getLocalDateString をインポート ▼▼▼
 import { hiraganaToKatakana, getLocalDateString } from './utils.js';
-// ▲▲▲ 修正ここまで ▲▲▲
 import { transactionTypeMap, createUploadTableHTML, renderUploadTableRows } from './common_table.js';
 
-let view, runBtn, printBtn, outputContainer, startDateInput, endDateInput, kanaNameInput, dosageFormInput, coefficientInput, drugTypeCheckboxes, reorderNeededCheckbox, movementOnlyCheckbox;
+let view, runBtn, printBtn, outputContainer, kanaNameInput, dosageFormInput, coefficientInput, drugTypeCheckboxes, reorderNeededCheckbox, movementOnlyCheckbox;
 let lastData = [];
 
 function formatBalance(balance) {
@@ -38,13 +36,16 @@ function renderResults() {
         
         const yjHeader = `
             <div class="agg-yj-header" ${yjGroup.isReorderNeeded ? 'style="background-color: #ff0015ff; color: white;"' : ''}>
-                <span>YJ: ${yjGroup.yjCode}</span>
-                <span class="product-name">${yjGroup.productName}</span>
-                <span class="balance-info">
-                    在庫: ${formatBalance(yjGroup.endingBalance)} | 
-                    発注点: ${yjReorderPointText} | 
-                    変動: ${formatBalance(yjGroup.netChange)}
-                </span>
+                <div style="flex-grow: 1;">
+                    <span>YJ: ${yjGroup.yjCode}</span>
+                    <span class="product-name">${yjGroup.productName}</span>
+                    <span class="balance-info">
+                        在庫: ${formatBalance(yjGroup.endingBalance)} | 
+                        発注点: ${yjReorderPointText} | 
+                        変動: ${formatBalance(yjGroup.netChange)}
+                    </span>
+                </div>
+                <button class="btn inventory-adjust-link-btn" data-yj-code="${yjGroup.yjCode}" style="margin-left: 15px; background-color: #ffc107; color: black;">棚卸調整</button>
             </div>
         `;
      
@@ -85,7 +86,6 @@ export function initAggregation() {
     runBtn = document.getElementById('run-aggregation-btn');
     printBtn = document.getElementById('print-aggregation-btn');
     outputContainer = document.getElementById('aggregation-output-container');
-    // ▼▼▼【修正】startDateInput, endDateInput の取得を削除 ▼▼▼
     kanaNameInput = document.getElementById('agg-kanaName');
     dosageFormInput = document.getElementById('agg-dosageForm');
     coefficientInput = document.getElementById('reorder-coefficient');
@@ -93,9 +93,6 @@ export function initAggregation() {
     reorderNeededCheckbox = document.getElementById('reorder-needed-filter');
     movementOnlyCheckbox = document.getElementById('movement-only-filter');
     
-    // ▼▼▼【修正】日付のデフォルト値設定ロジックを削除 ▼▼▼
-    // (削除) const today = new Date(); ...
-
     printBtn.addEventListener('click', () => {
         if (lastData && lastData.length > 0) {
             document.getElementById('valuation-view').classList.remove('print-this-view');
@@ -111,6 +108,19 @@ export function initAggregation() {
     });
     reorderNeededCheckbox.addEventListener('change', () => renderResults());
     
+    // 棚卸調整ボタンのクリックイベント
+    outputContainer.addEventListener('click', (e) => {
+        const target = e.target;
+        if (target.classList.contains('inventory-adjust-link-btn')) {
+            const yjCode = target.dataset.yjCode;
+            const event = new CustomEvent('navigateToInventoryAdjustment', {
+                detail: { yjCode: yjCode },
+                bubbles: true
+            });
+            target.dispatchEvent(event);
+        }
+    });
+
     runBtn.addEventListener('click', async () => {
         window.showLoading('データを取得・計算中...');
 
@@ -119,7 +129,6 @@ export function initAggregation() {
             .map(cb => cb.value)
             .join(',');
 
-        // ▼▼▼【修正】URLSearchParamsからstartDateとendDateを削除 ▼▼▼
         const params = new URLSearchParams({
             kanaName: hiraganaToKatakana(kanaNameInput.value),
             dosageForm: dosageFormInput.value,

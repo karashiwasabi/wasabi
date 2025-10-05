@@ -25,30 +25,39 @@ export async function refreshClientMap() {
 	}
 }
 
+// ▼▼▼【ここから修正】▼▼▼
+async function fetchAndPopulateWholesalers() {
+	const res = await fetch('/api/settings/wholesalers');
+	if (!res.ok) {
+		throw new Error('卸業者マスターの読み込みに失敗しました。');
+	}
+	const wholesalers = await res.json();
+	wholesalerMap.clear();
+	if (wholesalers) {
+		wholesalers.forEach(w => wholesalerMap.set(w.code, w.name));
+	}
+}
+
+export async function refreshWholesalerMap() {
+    try {
+        await fetchAndPopulateWholesalers();
+        console.log('卸業者マップを更新しました。');
+    } catch (error) {
+        console.error("卸業者マップの更新に失敗しました:", error);
+        window.showNotification('卸業者リストの更新に失敗しました。', 'error');
+    }
+}
+
 export async function loadMasterData() {
 	try {
-        // ▼▼▼【ここから修正】▼▼▼
-		const results = await Promise.all([
+		await Promise.all([
 			fetchAndPopulateClients(),
-			fetch('/api/settings/wholesalers')
+			fetchAndPopulateWholesalers()
 		]);
-        const wholesalerRes = results[1]; // Promise.allの結果配列から2番目の要素を取得
-        // ▲▲▲【修正ここまで】▲▲▲
-
-		if (!wholesalerRes.ok) {
-			throw new Error('卸業者マスターの読み込みに失敗しました。');
-		}
-
-		const wholesalers = await wholesalerRes.json();
-		wholesalerMap.clear();
-		if (wholesalers) {
-			wholesalers.forEach(w => wholesalerMap.set(w.code, w.name));
-		}
-		
 		console.log('得意先と卸業者のマスターデータを読み込みました。');
-
 	} catch (error) {
 		console.error("マスターデータの読み込み中にエラーが発生しました:", error);
 		window.showNotification('マスターデータの読み込みに失敗しました。', 'error');
 	}
 }
+// ▲▲▲【修正ここまで】▲▲▲

@@ -1,5 +1,3 @@
-// C:\Users\wasab\OneDrive\デスクトップ\WASABI\aggregation\handler.go
-
 package aggregation
 
 import (

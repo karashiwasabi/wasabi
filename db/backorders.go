@@ -133,16 +133,20 @@ func GetAllBackordersMap(conn *sql.DB) (map[string]float64, error) {
  * product_masterテーブルとJOINし、包装仕様の表示に必要な追加情報を取得します。
  */
 func GetAllBackordersList(conn *sql.DB) ([]model.Backorder, error) {
+	// ▼▼▼【ここから修正】▼▼▼
 	const q = `
 		SELECT
 			b.yj_code, b.package_form, b.jan_pack_inner_qty, b.yj_unit_name,
 			b.order_date, b.yj_quantity, b.product_name,
-			pm.yj_pack_unit_qty, pm.jan_pack_unit_qty, pm.jan_unit_code
+			IFNULL(pm.yj_pack_unit_qty, 0), 
+			IFNULL(pm.jan_pack_unit_qty, 0), 
+			IFNULL(pm.jan_unit_code, 0)
 		FROM backorders AS b
 		LEFT JOIN product_master AS pm ON b.yj_code = pm.yj_code
 		GROUP BY b.yj_code, b.package_form, b.jan_pack_inner_qty, b.yj_unit_name
 		ORDER BY b.order_date, b.product_name
 	`
+	// ▲▲▲【修正ここまで】▲▲▲
 	rows, err := conn.Query(q)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query all backorders list: %w", err)

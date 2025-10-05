@@ -1,4 +1,4 @@
-// C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\aggregation.go
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\WASABI\db\aggregation.go
 
 package db
 
@@ -205,11 +205,13 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 				}
 			}
 
-			// 期間内変動と最終在庫を計算
+			// ▼▼▼【ここから全面的に修正】▼▼▼
+			// 期間内変動と最終在庫を計算するロジックを修正
 			var transactionsInPeriod []model.LedgerTransaction
 			var netChange, maxUsage float64
 			runningBalance := startingBalance
 
+			// 期間内の棚卸合計を日付ごとに事前計算
 			periodInventorySums := make(map[string]float64)
 			for _, t := range allTxsForPackage {
 				if t.TransactionDate >= filters.StartDate && t.TransactionDate <= filters.EndDate && t.Flag == 0 {
@@ -220,17 +222,21 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 			lastProcessedDate := ""
 			for _, t := range allTxsForPackage {
 				if t.TransactionDate >= filters.StartDate && t.TransactionDate <= filters.EndDate {
+					// 日付が変わったタイミングで、前の日に棚卸があったなら、その日の最終在庫として残高をリセット
 					if t.TransactionDate != lastProcessedDate && lastProcessedDate != "" {
 						if inventorySum, ok := periodInventorySums[lastProcessedDate]; ok {
 							runningBalance = inventorySum
 						}
 					}
 
+					// 棚卸(flag=0)以外の取引は変動量を加算する。
 					if t.Flag != 0 {
 						runningBalance += t.SignedYjQty()
 					}
 
 					transactionsInPeriod = append(transactionsInPeriod, model.LedgerTransaction{TransactionRecord: *t, RunningBalance: runningBalance})
+
+					// 純変動と最大使用量は全ての取引を対象に計算
 					netChange += t.SignedYjQty()
 					if t.Flag == 3 && t.YjQuantity > maxUsage { // 処方レコード
 						maxUsage = t.YjQuantity
@@ -239,11 +245,13 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 				}
 			}
 
+			// ループ終了後、最終処理日に棚卸があった場合は、その値で最終在庫を確定させる
 			if lastProcessedDate != "" {
 				if inventorySum, ok := periodInventorySums[lastProcessedDate]; ok {
 					runningBalance = inventorySum
 				}
 			}
+			// ▲▲▲【修正ここまで】▲▲▲
 
 			backorderQty := backordersMap[key]
 			effectiveEndingBalance := runningBalance + backorderQty

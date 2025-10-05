@@ -1,5 +1,3 @@
-// C:\Users\wasab\OneDrive\デスクトップ\WASABI\reprocess\handler.go
-
 package reprocess
 
 import (
@@ -68,39 +66,55 @@ func ProcessTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 			}
 
 			for _, rec := range batch {
-				// ▼▼▼【ここからが修正箇所です】▼▼▼
 				master, ok := mastersMap[rec.JanCode]
 				if !ok {
-					// 対応するマスターが見つからない場合はスキップ
 					continue
 				}
 
 				// 1. 最新のマスター情報をレコードにマッピング
 				mappers.MapProductMasterToTransaction(&rec, master)
 
-				// 2. 数量と金額を再計算
-				// YJ数量は「JAN数量 × 最新マスターの内包装数量」で再計算
+				// 2. 数量を再計算
 				if rec.JanQuantity > 0 && master.JanPackInnerQty > 0 {
 					rec.YjQuantity = rec.JanQuantity * master.JanPackInnerQty
-				}
-				// 金額は「新しいYJ数量 × 最新マスターの薬価」で再計算
-				if rec.Flag == 3 { // 処方の場合
-					rec.Subtotal = rec.YjQuantity * master.NhiPrice
+				} else if rec.YjQuantity > 0 && rec.JanQuantity == 0 && master.JanPackInnerQty > 0 {
+					rec.JanQuantity = rec.YjQuantity / master.JanPackInnerQty
 				}
 
-				// 3. 処理ステータスを更新
+				// ▼▼▼【ここから金額再計算ロジックを修正】▼▼▼
+				// 3. 金額を再計算 (取引種別に応じてロジックを分岐)
+				switch rec.Flag {
+				case 0, 3, 4, 5: // 棚卸系(0,4,5)と処方(3)の場合
+					// 常にマスターの薬価(YJ単価)を正として単価と金額を再計算する
+					rec.UnitPrice = master.NhiPrice
+					rec.Subtotal = rec.YjQuantity * rec.UnitPrice
+				default: // その他の取引(納品、返品、入出庫など)
+					var unitPriceToUse float64
+					if rec.UnitPrice > 0 {
+						// 取引時に記録された単価を尊重する
+						unitPriceToUse = rec.UnitPrice
+					} else {
+						// 単価が記録されていない場合のみマスターの薬価を使用する
+						unitPriceToUse = master.NhiPrice
+						rec.UnitPrice = unitPriceToUse // レコードの単価も更新
+					}
+					// 金額は数量の変更を反映するために再計算する
+					rec.Subtotal = rec.YjQuantity * unitPriceToUse
+				}
+				// ▲▲▲【修正ここまで】▲▲▲
+
+				// 4. 処理ステータスを更新
 				if rec.ProcessFlagMA == "PROVISIONAL" && master.Origin == "JCSHMS" {
 					rec.ProcessFlagMA = "COMPLETE"
 				}
 
-				// 4. データベースを更新
+				// 5. データベースを更新
 				if err := db.UpdateFullTransactionInTx(tx, &rec); err != nil {
 					tx.Rollback()
 					http.Error(w, fmt.Sprintf("Failed to update record ID %d: %v", rec.ID, err), http.StatusInternalServerError)
 					return
 				}
 				updatedCount++
-				// ▲▲▲【修正ここまで】▲▲▲
 			}
 
 			if err := tx.Commit(); err != nil {

@@ -1,4 +1,4 @@
-// C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\stock.go
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\WASABI\db\stock.go
 
 package db
 
@@ -9,19 +9,8 @@ import (
 
 /**
  * @brief 指定された単一製品の現在の理論在庫を、棚卸を考慮して正確に計算します。
- * @param executor DBTXインターフェース (*sql.DB または *sql.Tx)
- * @param janCode 在庫を計算する製品のJANコード
- * @return float64 計算されたYJ単位での在庫数量
- * @return error 処理中にエラーが発生した場合
- * @details
- * 1. 最後に実施された棚卸(flag=0)の日付を取得します。
- * 2. その日の棚卸数量を基点在庫(baseStock)とします。
- * 3. 棚卸日以降の全ての入出庫トランザクションを合計し、純変動(netChange)を算出します。
- * 4. 最終在庫は `baseStock + netChange` となります。
- * 5. 棚卸履歴がない場合は、全期間のトランザクションを合計して在庫を算出します。
  */
 func CalculateCurrentStockForProduct(executor DBTX, janCode string) (float64, error) {
-	// 1. 最新の棚卸日を取得
 	var latestInventoryDate sql.NullString
 	err := executor.QueryRow(`
 		SELECT MAX(transaction_date) FROM transaction_records
@@ -35,7 +24,6 @@ func CalculateCurrentStockForProduct(executor DBTX, janCode string) (float64, er
 	var args []interface{}
 
 	if latestInventoryDate.Valid && latestInventoryDate.String != "" {
-		// 2. 最新棚卸日の在庫を合算して基点在庫とする
 		err := executor.QueryRow(`
 			SELECT SUM(yj_quantity) FROM transaction_records
 			WHERE jan_code = ? AND flag = 0 AND transaction_date = ?`,
@@ -44,7 +32,6 @@ func CalculateCurrentStockForProduct(executor DBTX, janCode string) (float64, er
 			return 0, fmt.Errorf("failed to sum inventory for %s on %s: %w", janCode, latestInventoryDate.String, err)
 		}
 
-		// 3. 最新棚卸日以降の変動を計算するクエリを準備
 		netChangeQuery = `
 			SELECT
 				SUM(CASE
@@ -57,7 +44,6 @@ func CalculateCurrentStockForProduct(executor DBTX, janCode string) (float64, er
 		args = []interface{}{janCode, latestInventoryDate.String}
 
 	} else {
-		// 棚卸履歴がない場合、全期間の変動を計算
 		baseStock = 0
 		netChangeQuery = `
 			SELECT
@@ -71,7 +57,6 @@ func CalculateCurrentStockForProduct(executor DBTX, janCode string) (float64, er
 		args = []interface{}{janCode}
 	}
 
-	// 4. 変動を計算
 	var nullNetChange sql.NullFloat64
 	err = executor.QueryRow(netChangeQuery, args...).Scan(&nullNetChange)
 	if err != nil && err != sql.ErrNoRows {
@@ -79,22 +64,13 @@ func CalculateCurrentStockForProduct(executor DBTX, janCode string) (float64, er
 	}
 	netChange := nullNetChange.Float64
 
-	// 5. 最終在庫を計算
 	return baseStock + netChange, nil
 }
 
 /**
  * @brief 全製品の現在庫を効率的に計算し、マップで返します。
- * @param conn データベース接続
- * @return map[string]float64 JANコードをキー、YJ単位での在庫数量を値とするマップ
- * @return error 処理中にエラーが発生した場合
- * @details
- * 全製品の在庫を個別にDB問い合わせすると非常に遅いため、この関数はまず全取引記録をメモリに読み込み、
- * プログラム内部でJANコードごとにグループ化してから在庫計算を行います。
- * これにより、DBへのアクセスを最小限に抑え、パフォーマンスを大幅に向上させています。
  */
 func GetAllCurrentStockMap(conn *sql.DB) (map[string]float64, error) {
-	// 全トランザクションを製品コードと日付でソートして取得
 	rows, err := conn.Query(`
 		SELECT jan_code, transaction_date, flag, yj_quantity 
 		FROM transaction_records 
@@ -113,7 +89,6 @@ func GetAllCurrentStockMap(conn *sql.DB) (map[string]float64, error) {
 	}
 	recordsByJan := make(map[string][]txRecord)
 
-	// まず全レコードをJANコードごとにメモリにグループ化
 	for rows.Next() {
 		var janCode, date string
 		var flag int
@@ -127,12 +102,10 @@ func GetAllCurrentStockMap(conn *sql.DB) (map[string]float64, error) {
 		recordsByJan[janCode] = append(recordsByJan[janCode], txRecord{Date: date, Flag: flag, Qty: qty})
 	}
 
-	// JANコードごとに在庫を計算
 	for janCode, records := range recordsByJan {
 		var latestInvDate string
 		baseStock := 0.0
 
-		// 最新の棚卸日と、その日の在庫合計を検索
 		invStocksOnDate := make(map[string]float64)
 		for _, r := range records {
 			if r.Flag == 0 {
@@ -146,7 +119,6 @@ func GetAllCurrentStockMap(conn *sql.DB) (map[string]float64, error) {
 			baseStock = invStocksOnDate[latestInvDate]
 		}
 
-		// 棚卸以降（または全期間）の変動を計算
 		netChange := 0.0
 		for _, r := range records {
 			startDate := "00000000"
@@ -156,9 +128,9 @@ func GetAllCurrentStockMap(conn *sql.DB) (map[string]float64, error) {
 
 			if r.Date > startDate {
 				switch r.Flag {
-				case 1, 4, 11: // 入庫系
+				case 1, 4, 11:
 					netChange += r.Qty
-				case 2, 3, 5, 12: // 出庫系
+				case 2, 3, 5, 12:
 					netChange -= r.Qty
 				}
 			}
@@ -167,4 +139,63 @@ func GetAllCurrentStockMap(conn *sql.DB) (map[string]float64, error) {
 	}
 
 	return stockMap, nil
+}
+
+/**
+ * @brief 指定された製品の、特定の日付時点での理論在庫を計算します。
+ */
+func CalculateStockOnDate(dbtx DBTX, productCode string, targetDate string) (float64, error) {
+	var latestInventoryDate sql.NullString
+	// 1. 基準日以前の最新の棚卸日を取得
+	err := dbtx.QueryRow(`
+		SELECT MAX(transaction_date) FROM transaction_records
+		WHERE jan_code = ? AND flag = 0 AND transaction_date <= ?`,
+		productCode, targetDate).Scan(&latestInventoryDate)
+	if err != nil && err != sql.ErrNoRows {
+		return 0, fmt.Errorf("failed to get latest inventory date for %s on or before %s: %w", productCode, targetDate, err)
+	}
+
+	if latestInventoryDate.Valid && latestInventoryDate.String != "" {
+		// --- 棚卸履歴がある場合の計算 ---
+		var baseStock float64
+		// 1a. 棚卸日の在庫合計を基点とする
+		err := dbtx.QueryRow(`
+			SELECT SUM(yj_quantity) FROM transaction_records
+			WHERE jan_code = ? AND flag = 0 AND transaction_date = ?`,
+			productCode, latestInventoryDate.String).Scan(&baseStock)
+		if err != nil {
+			return 0, fmt.Errorf("failed to sum inventory for %s on %s: %w", productCode, latestInventoryDate.String, err)
+		}
+
+		// 1b. もし基準日が棚卸日当日なら、棚卸数量のみを返す
+		if latestInventoryDate.String == targetDate {
+			return baseStock, nil
+		}
+
+		// 1c. 棚卸日の翌日から基準日までの変動を計算
+		var netChangeAfterInvDate sql.NullFloat64
+		err = dbtx.QueryRow(`
+			SELECT SUM(CASE WHEN flag IN (1, 4, 11) THEN yj_quantity WHEN flag IN (2, 3, 5, 12) THEN -yj_quantity ELSE 0 END)
+			FROM transaction_records
+			WHERE jan_code = ? AND flag != 0 AND transaction_date > ? AND transaction_date <= ?`,
+			productCode, latestInventoryDate.String, targetDate).Scan(&netChangeAfterInvDate)
+		if err != nil && err != sql.ErrNoRows {
+			return 0, fmt.Errorf("failed to calculate net change after inventory date for %s: %w", productCode, err)
+		}
+
+		return baseStock + netChangeAfterInvDate.Float64, nil
+
+	} else {
+		// --- 棚卸履歴がない場合の計算 ---
+		var totalNetChange sql.NullFloat64
+		err = dbtx.QueryRow(`
+			SELECT SUM(CASE WHEN flag IN (1, 4, 11) THEN yj_quantity WHEN flag IN (2, 3, 5, 12) THEN -yj_quantity ELSE 0 END)
+			FROM transaction_records
+			WHERE jan_code = ? AND flag != 0 AND transaction_date <= ?`,
+			productCode, targetDate).Scan(&totalNetChange)
+		if err != nil && err != sql.ErrNoRows {
+			return 0, fmt.Errorf("failed to calculate total net change for %s: %w", productCode, err)
+		}
+		return totalNetChange.Float64, nil
+	}
 }

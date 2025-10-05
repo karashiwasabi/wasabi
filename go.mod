@@ -2,13 +2,12 @@ module wasabi
 
 go 1.24.3
 
-require golang.org/x/text v0.28.0
-
 require (
-	github.com/chromedp/cdproto v0.0.0-20250724212937-08a3db8b4327
+	github.com/chromedp/cdproto v0.0.0-20250803210736-d308e07a266d
 	github.com/chromedp/chromedp v0.14.1
 	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/xuri/excelize/v2 v2.9.1
+	golang.org/x/text v0.29.0
 )
 
 require (
@@ -24,5 +23,5 @@ require (
 	github.com/xuri/nfp v0.0.1 // indirect
 	golang.org/x/crypto v0.38.0 // indirect
 	golang.org/x/net v0.40.0 // indirect
-	golang.org/x/sys v0.35.0 // indirect
+	golang.org/x/sys v0.34.0 // indirect
 )

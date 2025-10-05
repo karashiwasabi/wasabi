@@ -1,5 +1,3 @@
-// C:\Dev\WASABI\settings\handler.go
-
 package settings
 
 import (
@@ -127,7 +125,6 @@ func ClearTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// ClearMastersHandler は全ての製品マスターデータを削除するリクエストを処理します。
 func ClearMastersHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -135,8 +132,20 @@ func ClearMastersHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		if err := db.ClearAllProductMasters(conn); err != nil {
+		tx, err := conn.Begin()
+		if err != nil {
+			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback()
+
+		if err := db.ClearAllProductMasters(tx); err != nil {
 			http.Error(w, "Failed to clear all product masters: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		if err := tx.Commit(); err != nil {
+			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
 			return
 		}
 

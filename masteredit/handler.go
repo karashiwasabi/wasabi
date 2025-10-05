@@ -11,7 +11,7 @@ import (
 // GetEditableMastersHandler returns a list of editable product masters.
 func GetEditableMastersHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		masters, err := db.GetEditableProductMasters(conn)
+		masters, err := db.GetAllProductMasters(conn)
 		if err != nil {
 			http.Error(w, "Failed to get editable masters", http.StatusInternalServerError)
 			return

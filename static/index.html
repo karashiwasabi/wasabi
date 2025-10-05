@@ -263,6 +263,14 @@
         <fieldset style="margin-top: 20px; border-color: #dc3545;">
             <legend style="color: #dc3545;">データメンテナンス</legend>
             
+            <div style="margin-top: 10px; padding-bottom: 15px; border-bottom: 1px solid #ccc;">
+                <p style="font-size: 11px; margin-bottom: 5px;">
+                    <strong>マスターデータ整理:</strong> 在庫がゼロで、かつ過去3ヶ月間入出庫がなかった製品マスターを削除します。
+                </p>
+                <button id="getCleanupCandidatesBtn" class="btn">整理対象マスターのリストアップ</button>
+                <div id="cleanup-output-container" style="margin-top: 10px;"></div>
+            </div>
+
             <div class="buttons-group" style="margin-top: 20px;">
                 <button id="clearAllTransactionsBtn" class="btn" style="background-color: #dc3545; color: white;">全取引データ削除</button>
  <button id="clearAllMastersBtn" class="btn" style="background-color: #dc3545; color: white;">製品マスター全削除</button>
@@ -302,6 +310,20 @@
         edeサイトに自動ログインするためのMicrosoft Edgeの実行ファイル(msedge.exe)の場所を指定します。
     </p>
 </fieldset>
+
+<fieldset style="margin-top: 20px; border-color: #ffc107;">
+    <legend style="color: #ffc107;">データ移行</legend>
+    <div class="field-group">
+        <label>旧システムからの在庫データ移行</label>
+        <button id="migrateInventoryBtn" class="btn">移行用CSVファイルを選択</button>
+        <input type="file" id="migrateInventoryInput" style="display:none;" accept=".csv">
+    </div>
+    <p style="font-size: 11px; margin-top: 5px;">
+        旧システムの在庫データを一括で棚卸記録として登録します。<br>
+        CSVファイルには `inventory_date`, `product_code`, `quantity` の3列が必要です。
+    </p>
+    <div id="migration-result-container" style="margin-top: 15px; max-height: 400px; overflow-y: auto;"></div>
+    </fieldset>
 
         <div class="buttons-group" style="margin-top: 20px;">
             <button id="saveSettingsBtn" class="btn" style="background-color: #0d6efd; color: white;">設定を保存</button>

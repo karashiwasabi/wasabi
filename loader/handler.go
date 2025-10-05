@@ -1,5 +1,3 @@
-// C:\Dev\WASABI\loader\handler.go
-
 package loader
 
 import (
@@ -30,18 +28,16 @@ func CreateMasterUpdateHandler(conn *sql.DB) http.HandlerFunc {
 		log.Println("新しい要件に基づくJCSHMSマスター更新処理を開始します...")
 
 		// === ステップ1: 必要なデータを全てメモリにロード ===
-		// ▼▼▼【修正点】キーの列インデックスを正しく指定 ▼▼▼
-		newJcshmsData, err := loadCSVToMap("SOU/JCSHMS.CSV", false, 0) // JCSHMSのキーは1列目(インデックス0)
+		newJcshmsData, err := loadCSVToMap("SOU/JCSHMS.CSV", false, 0)
 		if err != nil {
 			http.Error(w, "JCSHMS.CSVの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		newJancodeData, err := loadCSVToMap("SOU/JANCODE.CSV", true, 1) // JANCODEのキーは2列目(インデックス1)
+		newJancodeData, err := loadCSVToMap("SOU/JANCODE.CSV", true, 1)
 		if err != nil {
 			http.Error(w, "JANCODE.CSVの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
 		existingMasters, err := db.GetAllProductMasters(conn)
 		if err != nil {
 			http.Error(w, "既存の製品マスターの取得に失敗しました: "+err.Error(), http.StatusInternalServerError)
@@ -61,7 +57,7 @@ func CreateMasterUpdateHandler(conn *sql.DB) http.HandlerFunc {
 			yj_unit_name=?, yj_pack_unit_qty=?,
 			flag_poison=?, flag_deleterious=?, flag_narcotic=?, flag_psychotropic=?,
 			flag_stimulant=?, flag_stimulant_raw=?, jan_pack_inner_qty=?,
-			jan_unit_code=?, jan_pack_unit_qty=?, nhi_price=?
+			jan_unit_code=?, jan_pack_unit_qty=?, nhi_price=?, specification=?
 		WHERE product_code = ?`
 		updateStmt, err := tx.Prepare(updateQuery)
 		if err != nil {
@@ -88,19 +84,17 @@ func CreateMasterUpdateHandler(conn *sql.DB) http.HandlerFunc {
 				jancodeRow := newJancodeData[master.ProductCode]
 				input := createInputFromCSV(jcshmsRow, jancodeRow)
 
-				// ▼▼▼ [修正点] 以下のifブロックを変更 ▼▼▼
 				if master.Origin == "PROVISIONAL" && input.YjCode == "" {
 					input.Origin = "PROVISIONAL"
 					input.YjCode = master.YjCode // 既存のYJコードを維持する
 				}
-				// ▲▲▲ 修正ここまで ▲▲▲
 
 				_, err := updateStmt.Exec(
 					input.YjCode, input.ProductName, input.Origin, input.KanaName, input.MakerName,
 					input.UsageClassification, input.PackageForm, input.YjUnitName, input.YjPackUnitQty,
 					input.FlagPoison, input.FlagDeleterious, input.FlagNarcotic, input.FlagPsychotropic,
 					input.FlagStimulant, input.FlagStimulantRaw, input.JanPackInnerQty,
-					input.JanUnitCode, input.JanPackUnitQty, input.NhiPrice,
+					input.JanUnitCode, input.JanPackUnitQty, input.NhiPrice, input.Specification,
 					master.ProductCode,
 				)
 				if err != nil {
@@ -138,7 +132,6 @@ func CreateMasterUpdateHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// ▼▼▼【修正点】キーとして使う列のインデックス(keyIndex)を引数に追加 ▼▼▼
 func loadCSVToMap(filepath string, skipHeader bool, keyIndex int) (map[string][]string, error) {
 	f, err := os.Open(filepath)
 	if err != nil {
@@ -164,15 +157,12 @@ func loadCSVToMap(filepath string, skipHeader bool, keyIndex int) (map[string][]
 			}
 			return nil, err
 		}
-		// ▼▼▼【修正点】指定されたインデックスをキーとして使用し、安全チェックを追加 ▼▼▼
 		if len(row) > keyIndex {
 			dataMap[row[keyIndex]] = row
 		}
 	}
 	return dataMap, nil
 }
-
-// ▲▲▲ 修正ここまで ▲▲▲
 
 func createInputFromCSV(jcshmsRow, jancodeRow []string) model.ProductMasterInput {
 	var input model.ProductMasterInput
@@ -190,7 +180,10 @@ func createInputFromCSV(jcshmsRow, jancodeRow []string) model.ProductMasterInput
 
 	input.ProductCode = jcshmsRow[0]
 	input.YjCode = jcshmsRow[9]
-	input.ProductName = jcshmsRow[18]
+	// ▼▼▼【ここが修正箇所】製品名と規格を分離して格納します ▼▼▼
+	input.ProductName = strings.TrimSpace(jcshmsRow[18])
+	input.Specification = strings.TrimSpace(jcshmsRow[20])
+	// ▲▲▲【修正ここまで】▲▲▲
 	input.Origin = "JCSHMS"
 	input.KanaName = jcshmsRow[22]
 	input.MakerName = jcshmsRow[30]
@@ -210,14 +203,13 @@ func createInputFromCSV(jcshmsRow, jancodeRow []string) model.ProductMasterInput
 		input.UsageClassification = "他"
 	}
 
-	// 9列未満のチェックを撤廃し、各項目を安全に読み込む
-	if len(jancodeRow) > 6 { // JA006 (7列目) が存在すれば転記
+	if len(jancodeRow) > 6 {
 		input.JanPackInnerQty, _ = strconv.ParseFloat(jancodeRow[6], 64)
 	}
-	if len(jancodeRow) > 7 { // JA007 (8列目) が存在すれば転記
+	if len(jancodeRow) > 7 {
 		input.JanUnitCode, _ = strconv.Atoi(jancodeRow[7])
 	}
-	if len(jancodeRow) > 8 { // JA008 (9列目) が存在すれば転記
+	if len(jancodeRow) > 8 {
 		input.JanPackUnitQty, _ = strconv.ParseFloat(jancodeRow[8], 64)
 	}
 	return input

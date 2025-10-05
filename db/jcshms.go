@@ -1,5 +1,3 @@
-// C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\jcshms.go
-
 package db
 
 import (
@@ -7,7 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"wasabi/model"
+	"wasabi/model" //
 )
 
 /**
@@ -16,10 +14,6 @@ import (
  * @param jans 検索対象のJANコードのスライス
  * @return map[string]*model.JCShms JANコードをキーとしたJCSHMS情報のマップ
  * @return error 処理中にエラーが発生した場合
- * @details
- * N+1問題を避けるため、IN句を用いてjcshmsテーブルとjancodeテーブルにそれぞれ1回ずつクエリを発行します。
- * これにより、多数のJANコードに対するマスター情報を効率的に取得できます。
- * DATファイルの処理などで、未知のJANコードの詳細情報をまとめて取得する際に使用されます。
  */
 func GetJcshmsByCodesMap(tx *sql.Tx, jans []string) (map[string]*model.JCShms, error) {
 	if len(jans) == 0 {
@@ -30,15 +24,14 @@ func GetJcshmsByCodesMap(tx *sql.Tx, jans []string) (map[string]*model.JCShms, e
 	args := make([]interface{}, len(jans))
 	for i, jan := range jans {
 		args[i] = jan
-		// 後続の処理でnilポインタエラーが発生しないように、マップのエントリを初期化
 		results[jan] = &model.JCShms{}
 	}
 
 	inClause := `(?` + strings.Repeat(",?", len(jans)-1) + `)`
 
-	// jcshmsテーブルへのクエリ
-	q1 := `SELECT JC000, JC009, JC013, JC018, JC022, JC030, JC037, JC039, JC044, JC050,
-	              JC061, JC062, JC063, JC064, JC065, JC066
+	// JCSHMSテーブルへのクエリ (JC020:規格, JC122:GS1コード を追加)
+	q1 := `SELECT JC000, JC009, JC013, JC018, JC020, JC022, JC030, JC037, JC039, JC044, JC050,
+	              JC061, JC062, JC063, JC064, JC065, JC066, JC122
 	       FROM jcshms WHERE JC000 IN ` + inClause
 	rows1, err := tx.Query(q1, args...)
 	if err != nil {
@@ -51,18 +44,19 @@ func GetJcshmsByCodesMap(tx *sql.Tx, jans []string) (map[string]*model.JCShms, e
 		var jcshmsPart model.JCShms
 		var jc050 sql.NullString
 
-		if err := rows1.Scan(&jan, &jcshmsPart.JC009, &jcshmsPart.JC013, &jcshmsPart.JC018, &jcshmsPart.JC022, &jcshmsPart.JC030,
+		if err := rows1.Scan(&jan, &jcshmsPart.JC009, &jcshmsPart.JC013, &jcshmsPart.JC018, &jcshmsPart.JC020, &jcshmsPart.JC022, &jcshmsPart.JC030,
 			&jcshmsPart.JC037, &jcshmsPart.JC039, &jcshmsPart.JC044, &jc050,
-			&jcshmsPart.JC061, &jcshmsPart.JC062, &jcshmsPart.JC063, &jcshmsPart.JC064, &jcshmsPart.JC065, &jcshmsPart.JC066,
+			&jcshmsPart.JC061, &jcshmsPart.JC062, &jcshmsPart.JC063, &jcshmsPart.JC064, &jcshmsPart.JC065, &jcshmsPart.JC066, &jcshmsPart.JC122,
 		); err != nil {
 			return nil, err
 		}
 
 		res := results[jan]
-		res.JC009, res.JC013, res.JC018, res.JC022 = jcshmsPart.JC009, jcshmsPart.JC013, jcshmsPart.JC018, jcshmsPart.JC022
+		res.JC009, res.JC013, res.JC018, res.JC020, res.JC022 = jcshmsPart.JC009, jcshmsPart.JC013, jcshmsPart.JC018, jcshmsPart.JC020, jcshmsPart.JC022
 		res.JC030, res.JC037, res.JC039 = jcshmsPart.JC030, jcshmsPart.JC037, jcshmsPart.JC039
 		res.JC044 = jcshmsPart.JC044
 		res.JC061, res.JC062, res.JC063, res.JC064, res.JC065, res.JC066 = jcshmsPart.JC061, jcshmsPart.JC062, jcshmsPart.JC063, jcshmsPart.JC064, jcshmsPart.JC065, jcshmsPart.JC066
+		res.JC122 = jcshmsPart.JC122
 
 		val, err := strconv.ParseFloat(jc050.String, 64)
 		if err != nil {
@@ -72,7 +66,7 @@ func GetJcshmsByCodesMap(tx *sql.Tx, jans []string) (map[string]*model.JCShms, e
 		}
 	}
 
-	// jancodeテーブルへのクエリ
+	// jancodeテーブルへのクエリ (変更なし)
 	q2 := `SELECT JA001, JA006, JA007, JA008 FROM jancode WHERE JA001 IN ` + inClause
 	rows2, err := tx.Query(q2, args...)
 	if err != nil {
@@ -97,3 +91,50 @@ func GetJcshmsByCodesMap(tx *sql.Tx, jans []string) (map[string]*model.JCShms, e
 
 	return results, nil
 }
+
+// ▼▼▼【ここから修正】▼▼▼
+/**
+ * @brief 単一のJANコードに対応するJCSHMSおよびJANCODEマスター情報を取得します。
+ * @param tx SQLトランザクションオブジェクト
+ * @param jan 検索対象のJANコード
+ * @return *model.JCShms JCSHMS情報
+ * @return error 処理中にエラーが発生した場合
+ */
+func GetJcshmsRecordByJan(tx *sql.Tx, jan string) (*model.JCShms, error) {
+	jcshms := &model.JCShms{}
+	var jc050 sql.NullString
+
+	// JCSHMSテーブルへのクエリ
+	q1 := `SELECT JC009, JC013, JC018, JC020, JC022, JC030, JC037, JC039, JC044, JC050,
+				  JC061, JC062, JC063, JC064, JC065, JC066, JC122
+		   FROM jcshms WHERE JC000 = ?`
+	err := tx.QueryRow(q1, jan).Scan(
+		&jcshms.JC009, &jcshms.JC013, &jcshms.JC018, &jcshms.JC020, &jcshms.JC022, &jcshms.JC030,
+		&jcshms.JC037, &jcshms.JC039, &jcshms.JC044, &jc050,
+		&jcshms.JC061, &jcshms.JC062, &jcshms.JC063, &jcshms.JC064, &jcshms.JC065, &jcshms.JC066, &jcshms.JC122,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, err
+		}
+		return nil, fmt.Errorf("jcshms single search failed for jan %s: %w", jan, err)
+	}
+
+	val, err := strconv.ParseFloat(jc050.String, 64)
+	if err != nil {
+		jcshms.JC050 = 0
+	} else {
+		jcshms.JC050 = val
+	}
+
+	// jancodeテーブルへのクエリ
+	q2 := `SELECT JA006, JA007, JA008 FROM jancode WHERE JA001 = ?`
+	err = tx.QueryRow(q2, jan).Scan(&jcshms.JA006, &jcshms.JA007, &jcshms.JA008)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("jancode single search failed for jan %s: %w", jan, err)
+	}
+
+	return jcshms, nil
+}
+
+// ▲▲▲【修正ここまで】▲▲▲

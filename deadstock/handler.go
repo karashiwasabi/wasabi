@@ -1,5 +1,3 @@
-// C:\Users\wasab\OneDrive\デスクトップ\WASABI\deadstock\handler.go
-
 package deadstock
 
 import (
@@ -9,10 +7,14 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"time" // time パッケージをインポート
+	"strings"
+	"time"
 	"wasabi/config"
 	"wasabi/db"
 	"wasabi/model"
+
+	"golang.org/x/text/encoding/japanese"
+	"golang.org/x/text/transform"
 )
 
 func GetDeadStockHandler(conn *sql.DB) http.HandlerFunc {
@@ -23,20 +25,16 @@ func GetDeadStockHandler(conn *sql.DB) http.HandlerFunc {
 			coefficient = 1.5
 		}
 
-		// ▼▼▼【ここから修正】▼▼▼
-		// 設定ファイルから集計日数を読み込む
 		cfg, err := config.LoadConfig()
 		if err != nil {
 			http.Error(w, "設定ファイルの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		// 日数から期間を動的に計算
 		now := time.Now()
-		endDate := "99991231" // 終了日は無制限
+		endDate := "99999999"
 		startDate := now.AddDate(0, 0, -cfg.CalculationPeriodDays)
 
-		// フィルタ構造体に計算した値を使用する
 		filters := model.DeadStockFilters{
 			StartDate:        startDate.Format("20060102"),
 			EndDate:          endDate,
@@ -45,16 +43,8 @@ func GetDeadStockHandler(conn *sql.DB) http.HandlerFunc {
 			KanaName:         q.Get("kanaName"),
 			DosageForm:       q.Get("dosageForm"),
 		}
-		// ▲▲▲【修正ここまで】▲▲▲
 
-		tx, err := conn.Begin()
-		if err != nil {
-			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
-			return
-		}
-		defer tx.Rollback()
-
-		results, err := db.GetDeadStockList(tx, filters)
+		results, err := db.GetDeadStockList(conn, filters)
 		if err != nil {
 			http.Error(w, "Failed to get dead stock list: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -80,7 +70,25 @@ func SaveDeadStockHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer tx.Rollback()
 
-		if err := db.UpsertDeadStockRecordsInTx(tx, payload); err != nil {
+		productCodesMap := make(map[string]struct{})
+		for _, rec := range payload {
+			if rec.ProductCode != "" {
+				productCodesMap[rec.ProductCode] = struct{}{}
+			}
+		}
+		var productCodes []string
+		for code := range productCodesMap {
+			productCodes = append(productCodes, code)
+		}
+
+		if len(productCodes) > 0 {
+			if err := db.DeleteDeadStockByProductCodesInTx(tx, productCodes); err != nil {
+				http.Error(w, "Failed to delete old dead stock records: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+
+		if err := db.SaveDeadStockListInTx(tx, payload); err != nil {
 			http.Error(w, "Failed to save dead stock records: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -95,7 +103,6 @@ func SaveDeadStockHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// ImportDeadStockHandler handles importing dead stock records from a CSV file.
 func ImportDeadStockHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		file, _, err := r.FormFile("file")
@@ -105,12 +112,55 @@ func ImportDeadStockHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer file.Close()
 
-		csvReader := csv.NewReader(file)
+		reader := transform.NewReader(file, japanese.ShiftJIS.NewDecoder())
+		csvReader := csv.NewReader(reader)
 		csvReader.LazyQuotes = true
-		records, err := csvReader.ReadAll()
+		rows, err := csvReader.ReadAll()
 		if err != nil {
-			http.Error(w, "Failed to parse CSV file", http.StatusBadRequest)
+			http.Error(w, "Failed to parse CSV file: "+err.Error(), http.StatusBadRequest)
 			return
+		}
+
+		var payload []model.DeadStockRecord
+		productCodesMap := make(map[string]struct{})
+
+		for i, row := range rows {
+			if i == 0 || len(row) < 9 {
+				continue
+			}
+
+			quantity, _ := strconv.ParseFloat(row[3], 64)
+			if quantity <= 0 {
+				continue
+			}
+			janPackInnerQty, _ := strconv.ParseFloat(row[8], 64)
+			productCode := strings.Trim(strings.TrimSpace(row[1]), `="`)
+
+			rec := model.DeadStockRecord{
+				YjCode:           strings.Trim(strings.TrimSpace(row[0]), `="`),
+				ProductCode:      productCode,
+				StockQuantityJan: quantity,
+				YjUnitName:       strings.TrimSpace(row[4]),
+				ExpiryDate:       strings.TrimSpace(row[5]),
+				LotNumber:        strings.TrimSpace(row[6]),
+				PackageForm:      strings.TrimSpace(row[7]),
+				JanPackInnerQty:  janPackInnerQty,
+			}
+			payload = append(payload, rec)
+			if productCode != "" {
+				productCodesMap[productCode] = struct{}{}
+			}
+		}
+
+		if len(payload) == 0 {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"message": "インポートする有効なデータがありませんでした。"})
+			return
+		}
+
+		var productCodes []string
+		for code := range productCodesMap {
+			productCodes = append(productCodes, code)
 		}
 
 		tx, err := conn.Begin()
@@ -120,39 +170,15 @@ func ImportDeadStockHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer tx.Rollback()
 
-		var deadStockRecords []model.DeadStockRecord
-		var importedCount int
-		for i, row := range records {
-			if i == 0 { // Skip header
-				continue
+		if len(productCodes) > 0 {
+			if err := db.DeleteDeadStockByProductCodesInTx(tx, productCodes); err != nil {
+				http.Error(w, "Failed to delete old dead stock records: "+err.Error(), http.StatusInternalServerError)
+				return
 			}
-			if len(row) < 9 {
-				continue
-			}
-
-			quantity, _ := strconv.ParseFloat(row[3], 64)
-			janPackInnerQty, _ := strconv.ParseFloat(row[8], 64)
-
-			if quantity <= 0 {
-				continue
-			}
-
-			dsRecord := model.DeadStockRecord{
-				YjCode:           row[0],
-				ProductCode:      row[1],
-				StockQuantityJan: quantity,
-				YjUnitName:       row[4],
-				ExpiryDate:       row[5],
-				LotNumber:        row[6],
-				PackageForm:      row[7],
-				JanPackInnerQty:  janPackInnerQty,
-			}
-			deadStockRecords = append(deadStockRecords, dsRecord)
-			importedCount++
 		}
 
-		if err := db.UpsertDeadStockRecordsInTx(tx, deadStockRecords); err != nil {
-			http.Error(w, "Failed to save dead stock records: "+err.Error(), http.StatusInternalServerError)
+		if err := db.SaveDeadStockListInTx(tx, payload); err != nil {
+			http.Error(w, "Failed to save imported dead stock records: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
@@ -163,7 +189,7 @@ func ImportDeadStockHandler(conn *sql.DB) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
-			"message": fmt.Sprintf("%d件のデッドストック情報をインポートしました。", importedCount),
+			"message": fmt.Sprintf("%d件のロット・期限情報をインポートしました。", len(payload)),
 		})
 	}
 }

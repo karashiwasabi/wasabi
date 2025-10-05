@@ -1,5 +1,3 @@
-// C:\Dev\WASABI\inventory\manual_handler.go
-
 package inventory
 
 import (
@@ -15,26 +13,23 @@ import (
 // ListInventoryProductsHandler returns all product masters with their last inventory date.
 func ListInventoryProductsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// 全ての製品マスターを取得
 		products, err := db.GetAllProductMasters(conn)
 		if err != nil {
 			http.Error(w, "Failed to get product list: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		// 全ての製品の最終棚卸日マップを取得
 		dateMap, err := db.GetLastInventoryDateMap(conn)
 		if err != nil {
 			http.Error(w, "Failed to get last inventory dates: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		// 製品マスターと最終棚卸日を結合して、画面用の新しいデータ構造を作成
 		var result []model.InventoryProductView
 		for _, p := range products {
 			result = append(result, model.InventoryProductView{
 				ProductMaster:     *p,
-				LastInventoryDate: dateMap[p.ProductCode], // マップから日付を取得
+				LastInventoryDate: dateMap[p.ProductCode],
 			})
 		}
 
@@ -77,13 +72,10 @@ func SaveManualInventoryHandler(conn *sql.DB) http.HandlerFunc {
 		var productCodes []string
 		recordsMap := make(map[string]float64)
 		for _, rec := range payload.Records {
-			// ▼▼▼ [修正点] 数量が0の場合も処理対象とするため、if文を削除 ▼▼▼
 			productCodes = append(productCodes, rec.ProductCode)
 			recordsMap[rec.ProductCode] = rec.YjQuantity
-			// ▲▲▲ 修正ここまで ▲▲▲
 		}
 
-		// 指定された日付の、入力があった品目の古い棚卸データ「のみ」を削除する
 		if len(productCodes) > 0 {
 			if err := db.DeleteTransactionsByFlagAndDateAndCodes(tx, 0, payload.Date, productCodes); err != nil {
 				http.Error(w, "Failed to clear old inventory data for specified products", http.StatusInternalServerError)
@@ -132,6 +124,11 @@ func SaveManualInventoryHandler(conn *sql.DB) http.HandlerFunc {
 			}
 
 			mappers.MapProductMasterToTransaction(&tr, master)
+
+			// ▼▼▼【修正】Subtotalを計算する処理を追加 ▼▼▼
+			tr.Subtotal = tr.YjQuantity * tr.UnitPrice
+			// ▲▲▲【修正ここまで】▲▲▲
+
 			finalRecords = append(finalRecords, tr)
 		}
 

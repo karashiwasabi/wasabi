@@ -1,5 +1,3 @@
-// C:\Users\wasab\OneDrive\デスクトップ\WASABI\main.go
-
 package main
 
 import (
@@ -14,6 +12,7 @@ import (
 	"wasabi/aggregation"
 	"wasabi/backorder"
 	"wasabi/backup"
+	"wasabi/cleanup" // 👈 cleanupパッケージをインポート
 	"wasabi/client"
 	"wasabi/config"
 	"wasabi/dat"
@@ -75,6 +74,10 @@ func main() {
 	mux := http.NewServeMux()
 
 	// ... (これ以降のAPIエンドポイントの登録処理は変更なし) ...
+	// ▼▼▼【ここに追加】▼▼▼
+	mux.HandleFunc("/api/masters/cleanup/candidates", cleanup.GetCandidatesHandler(conn))
+	mux.HandleFunc("/api/masters/cleanup/execute", cleanup.ExecuteCleanupHandler(conn))
+	// ▲▲▲【追加ここまで】▲▲▲
 	mux.HandleFunc("/api/clients", client.GetAllClientsHandler(conn))
 	mux.HandleFunc("/api/products/search", search.SearchJcshmsByNameHandler(conn))
 	mux.HandleFunc("/api/masters/search_all", search.SearchAllMastersHandler(conn))
@@ -87,6 +90,7 @@ func main() {
 	mux.HandleFunc("/api/inventory/upload", inventory.UploadInventoryHandler(conn))
 	mux.HandleFunc("/api/inventory/list", inventory.ListInventoryProductsHandler(conn))
 	mux.HandleFunc("/api/inventory/save_manual", inventory.SaveManualInventoryHandler(conn))
+	mux.HandleFunc("/api/inventory/migrate", inventory.MigrateInventoryHandler(conn))
 	mux.HandleFunc("/api/aggregation", aggregation.GetAggregationHandler(conn))
 	mux.HandleFunc("/api/units/map", units.GetTaniMapHandler())
 	mux.HandleFunc("/api/receipts", transaction.GetReceiptsHandler(conn))

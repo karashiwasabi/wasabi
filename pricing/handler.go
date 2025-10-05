@@ -3,6 +3,7 @@
 package pricing
 
 import (
+	"bufio"
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
@@ -17,8 +18,6 @@ import (
 	"wasabi/units"
 )
 
-// ▼▼▼ [ここから修正] GetExportDataHandler内のフィルタリングロジックを変更 ▼▼▼
-// GetExportDataHandler generates a CSV file for price quotation requests (template).
 func GetExportDataHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		wholesalerName := r.URL.Query().Get("wholesalerName")
@@ -36,20 +35,17 @@ func GetExportDataHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// --- ここからが新しいフィルタリング処理 ---
 		var mastersToProcess []*model.ProductMaster
 		for _, p := range allMasters {
-			// product_codeが'99999'で始まり、かつ長さが13文字を超える仮コードは除外する
 			if strings.HasPrefix(p.ProductCode, "99999") && len(p.ProductCode) > 13 {
-				continue // スキップ
+				continue
 			}
 			mastersToProcess = append(mastersToProcess, p)
 		}
-		// --- フィルタリング処理ここまで ---
 
 		var dataToExport []*model.ProductMaster
 		if unregisteredOnly {
-			for _, p := range mastersToProcess { // allMastersの代わりにフィルタ済みのmastersToProcessを使用
+			for _, p := range mastersToProcess {
 				if p.SupplierWholesale == "" {
 					uc := p.UsageClassification
 					if uc == "機" || uc == "他" || ((uc == "内" || uc == "外" || uc == "歯" || uc == "注") && p.Origin == "JCSHMS") {
@@ -62,7 +58,7 @@ func GetExportDataHandler(conn *sql.DB) http.HandlerFunc {
 				return
 			}
 		} else {
-			dataToExport = mastersToProcess // allMastersの代わりにフィルタ済みのmastersToProcessを使用
+			dataToExport = mastersToProcess
 		}
 
 		dateStr := r.URL.Query().Get("date")
@@ -74,7 +70,10 @@ func GetExportDataHandler(conn *sql.DB) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "text/csv")
 		w.Header().Set("Content-Disposition", "attachment; filename="+fileName)
-		w.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM
+
+		// ▼▼▼【ここを修正】BOMを書き込む行を削除 ▼▼▼
+		// w.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM
+		// ▲▲▲【修正ここまで】▲▲▲
 
 		csvWriter := csv.NewWriter(w)
 		defer csvWriter.Flush()
@@ -105,8 +104,6 @@ func GetExportDataHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// ▲▲▲ [修正ここまで] ▲▲▲
-
 type QuoteDataWithSpec struct {
 	model.ProductMaster
 	FormattedPackageSpec string             `json:"formattedPackageSpec"`
@@ -118,7 +115,6 @@ type UploadResponse struct {
 	WholesalerOrder []string            `json:"wholesalerOrder"`
 }
 
-// UploadQuotesHandler handles uploading quote CSV files from wholesalers.
 func UploadQuotesHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseMultipartForm(32 << 20); err != nil {
@@ -150,7 +146,15 @@ func UploadQuotesHandler(conn *sql.DB) http.HandlerFunc {
 			}
 			defer file.Close()
 
-			csvReader := csv.NewReader(file)
+			// ▼▼▼【ここから修正】BOMを自動的にスキップする処理を追加 ▼▼▼
+			br := bufio.NewReader(file)
+			bom, err := br.Peek(3)
+			if err == nil && bom[0] == 0xef && bom[1] == 0xbb && bom[2] == 0xbf {
+				br.Read(make([]byte, 3)) // BOMを読み飛ばす
+			}
+			csvReader := csv.NewReader(br)
+			// ▲▲▲【修正ここまで】▲▲▲
+
 			csvReader.LazyQuotes = true
 			rows, err := csvReader.ReadAll()
 			if err != nil || len(rows) < 1 {
@@ -300,7 +304,15 @@ func DirectImportHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer file.Close()
 
-		csvReader := csv.NewReader(file)
+		// ▼▼▼【ここから修正】BOMを自動的にスキップする処理を追加 ▼▼▼
+		br := bufio.NewReader(file)
+		bom, err := br.Peek(3)
+		if err == nil && bom[0] == 0xef && bom[1] == 0xbb && bom[2] == 0xbf {
+			br.Read(make([]byte, 3)) // BOMを読み飛ばす
+		}
+		csvReader := csv.NewReader(br)
+		// ▲▲▲【修正ここまで】▲▲▲
+
 		csvReader.LazyQuotes = true
 		rows, err := csvReader.ReadAll()
 		if err != nil {
@@ -310,10 +322,10 @@ func DirectImportHandler(conn *sql.DB) http.HandlerFunc {
 
 		var updates []model.PriceUpdate
 		for i, row := range rows {
-			if i == 0 { // Skip header
+			if i == 0 {
 				continue
 			}
-			if len(row) < 6 { // Expecting at least 6 columns
+			if len(row) < 6 {
 				continue
 			}
 
@@ -366,7 +378,6 @@ func DirectImportHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// BackupExportHandler exports the current purchase prices and wholesalers as a backup CSV.
 func BackupExportHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		allMasters, err := db.GetAllProductMasters(conn)
@@ -379,7 +390,10 @@ func BackupExportHandler(conn *sql.DB) http.HandlerFunc {
 		fileName := fmt.Sprintf("納入価・卸バックアップ_%s.csv", now.Format("20060102_150405"))
 		w.Header().Set("Content-Type", "text/csv")
 		w.Header().Set("Content-Disposition", "attachment; filename="+fileName)
-		w.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM
+
+		// ▼▼▼【ここを修正】BOMを書き込む行を削除 ▼▼▼
+		// w.Write([]byte{0xEF, 0xBB, 0xBF})
+		// ▲▲▲【修正ここまで】▲▲▲
 
 		csvWriter := csv.NewWriter(w)
 		defer csvWriter.Flush()

@@ -1,63 +1,80 @@
-// C:\Dev\WASABI\model\types.go
-
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\model\types.go
 package model
 
 import "database/sql"
 
-// (ProductMaster, ProductMasterInput, JCShms, ValuationPackageDetail, TransactionRecord は変更なし)
+// ProductMaster は製品マスターの完全なデータ構造です。(tkrから移植)
 type ProductMaster struct {
 	ProductCode         string  `json:"productCode"`
 	YjCode              string  `json:"yjCode"`
 	ProductName         string  `json:"productName"`
-	Origin              string  `json:"origin"`
 	KanaName            string  `json:"kanaName"`
 	MakerName           string  `json:"makerName"`
-	UsageClassification string  `json:"usageClassification"`
+	Gs1Code             string  `json:"gs1Code"`
 	PackageForm         string  `json:"packageForm"`
+	Specification       string  `json:"specification"`
+	UsageClassification string  `json:"usageClassification"`
 	YjUnitName          string  `json:"yjUnitName"`
 	YjPackUnitQty       float64 `json:"yjPackUnitQty"`
+	JanPackInnerQty     float64 `json:"janPackInnerQty"`
+	JanUnitCode         int     `json:"janUnitCode"`
+	JanPackUnitQty      float64 `json:"janPackUnitQty"`
+	Origin              string  `json:"origin"`
+	NhiPrice            float64 `json:"nhiPrice"`
+	PurchasePrice       float64 `json:"purchasePrice"`
 	FlagPoison          int     `json:"flagPoison"`
 	FlagDeleterious     int     `json:"flagDeleterious"`
 	FlagNarcotic        int     `json:"flagNarcotic"`
 	FlagPsychotropic    int     `json:"flagPsychotropic"`
 	FlagStimulant       int     `json:"flagStimulant"`
 	FlagStimulantRaw    int     `json:"flagStimulantRaw"`
-	JanPackInnerQty     float64 `json:"janPackInnerQty"`
-	JanUnitCode         int     `json:"janUnitCode"`
-	JanPackUnitQty      float64 `json:"janPackUnitQty"`
-	NhiPrice            float64 `json:"nhiPrice"`
-	PurchasePrice       float64 `json:"purchasePrice"`
+	IsOrderStopped      int     `json:"isOrderStopped"`
 	SupplierWholesale   string  `json:"supplierWholesale"`
+	GroupCode           string  `json:"groupCode"`
+	ShelfNumber         string  `json:"shelfNumber"`
+	Category            string  `json:"category"`
+	UserNotes           string  `json:"userNotes"`
 }
 
+// ProductMasterInput は製品マスターを登録・更新する際の入力データ構造です。(tkrから移植)
 type ProductMasterInput struct {
 	ProductCode         string  `json:"productCode"`
 	YjCode              string  `json:"yjCode"`
 	ProductName         string  `json:"productName"`
-	Origin              string  `json:"origin"`
 	KanaName            string  `json:"kanaName"`
 	MakerName           string  `json:"makerName"`
-	UsageClassification string  `json:"usageClassification"`
+	Gs1Code             string  `json:"gs1Code"`
 	PackageForm         string  `json:"packageForm"`
+	Specification       string  `json:"specification"`
+	UsageClassification string  `json:"usageClassification"`
 	YjUnitName          string  `json:"yjUnitName"`
 	YjPackUnitQty       float64 `json:"yjPackUnitQty"`
+	JanPackInnerQty     float64 `json:"janPackInnerQty"`
+	JanUnitCode         int     `json:"janUnitCode"`
+	JanPackUnitQty      float64 `json:"janPackUnitQty"`
+	Origin              string  `json:"origin"`
+	NhiPrice            float64 `json:"nhiPrice"`
+	PurchasePrice       float64 `json:"purchasePrice"`
 	FlagPoison          int     `json:"flagPoison"`
 	FlagDeleterious     int     `json:"flagDeleterious"`
 	FlagNarcotic        int     `json:"flagNarcotic"`
 	FlagPsychotropic    int     `json:"flagPsychotropic"`
 	FlagStimulant       int     `json:"flagStimulant"`
 	FlagStimulantRaw    int     `json:"flagStimulantRaw"`
-	JanPackInnerQty     float64 `json:"janPackInnerQty"`
-	JanUnitCode         int     `json:"janUnitCode"`
-	JanPackUnitQty      float64 `json:"janPackUnitQty"`
-	NhiPrice            float64 `json:"nhiPrice"`
-	PurchasePrice       float64 `json:"purchasePrice"`
+	IsOrderStopped      int     `json:"isOrderStopped"`
 	SupplierWholesale   string  `json:"supplierWholesale"`
+	GroupCode           string  `json:"groupCode"`
+	ShelfNumber         string  `json:"shelfNumber"`
+	Category            string  `json:"category"`
+	UserNotes           string  `json:"userNotes"`
 }
+
+// (以下はWASABIに元々あった型定義)
 type JCShms struct {
 	JC009 string
 	JC013 string
 	JC018 string
+	JC020 string
 	JC022 string
 	JC030 string
 	JC037 string
@@ -70,6 +87,7 @@ type JCShms struct {
 	JC064 int
 	JC065 int
 	JC066 int
+	JC122 string // この行を追加
 	JA006 sql.NullFloat64
 	JA007 sql.NullString
 	JA008 sql.NullFloat64
@@ -134,6 +152,7 @@ func (t *TransactionRecord) SignedYjQty() float64 {
 		return 0
 	}
 }
+
 func (t *TransactionRecord) ToProductMaster() *ProductMaster {
 	return &ProductMaster{
 		ProductCode:         t.JanCode,
@@ -147,7 +166,6 @@ func (t *TransactionRecord) ToProductMaster() *ProductMaster {
 	}
 }
 
-// (ProductMasterView, InventoryProductView, Client, AggregationFilters, ValuationFilters, StockLedgerYJGroup, StockLedgerPackageGroup, LedgerTransaction は変更なし)
 type ProductMasterView struct {
 	ProductMaster
 	FormattedPackageSpec string `json:"formattedPackageSpec"`
@@ -194,6 +212,7 @@ type StockLedgerYJGroup struct {
 	TotalBaseReorderPoint float64                   `json:"totalBaseReorderPoint"`
 	TotalPrecompounded    float64                   `json:"totalPrecompounded"`
 }
+
 type StockLedgerPackageGroup struct {
 	PackageKey             string              `json:"packageKey"`
 	JanUnitName            string              `json:"janUnitName"`
@@ -210,12 +229,12 @@ type StockLedgerPackageGroup struct {
 	PrecompoundedTotal     float64             `json:"precompoundedTotal"`
 	DeliveryHistory        []TransactionRecord `json:"deliveryHistory,omitempty"`
 }
+
 type LedgerTransaction struct {
 	TransactionRecord
 	RunningBalance float64 `json:"runningBalance"`
 }
 
-// (UnifiedInputRecord, DeadStockGroup, DeadStockPackageGroup, DeadStockProduct, DeadStockRecord, DeadStockFilters, PreCompoundingRecord, Wholesaler, Backorder, PriceUpdate, QuoteData, ValuationDetailRow は変更なし)
 type UnifiedInputRecord struct {
 	Date            string  `json:"date"`
 	JanCode         string  `json:"janCode"`
@@ -254,6 +273,9 @@ type DeadStockProduct struct {
 	ProductMaster
 	CurrentStock float64           `json:"currentStock"`
 	SavedRecords []DeadStockRecord `json:"savedRecords"`
+	// ▼▼▼【ここに追加】▼▼▼
+	LastUsageDate string `json:"lastUsageDate"`
+	// ▲▲▲【追加ここまで】▲▲▲
 }
 
 type DeadStockRecord struct {
@@ -267,6 +289,7 @@ type DeadStockRecord struct {
 	ExpiryDate       string  `json:"expiryDate"`
 	LotNumber        string  `json:"lotNumber"`
 }
+
 type DeadStockFilters struct {
 	StartDate        string
 	EndDate          string
@@ -275,6 +298,7 @@ type DeadStockFilters struct {
 	KanaName         string
 	DosageForm       string
 }
+
 type PreCompoundingRecord struct {
 	ID            int     `json:"id"`
 	PatientNumber string  `json:"patientNumber"`
@@ -282,10 +306,12 @@ type PreCompoundingRecord struct {
 	Quantity      float64 `json:"quantity"`
 	CreatedAt     string  `json:"createdAt"`
 }
+
 type Wholesaler struct {
 	Code string `json:"code"`
 	Name string `json:"name"`
 }
+
 type Backorder struct {
 	YjCode          string  `json:"yjCode"`
 	PackageForm     string  `json:"packageForm"`
