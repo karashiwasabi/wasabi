@@ -122,7 +122,19 @@ func GetProductMasterByCode(dbtx DBTX, code string) (*model.ProductMaster, error
 
 // GetAllProductMasters は、product_masterテーブルの全レコードを取得します。
 func GetAllProductMasters(dbtx DBTX) ([]*model.ProductMaster, error) {
-	q := `SELECT ` + SelectColumns + ` FROM product_master ORDER BY kana_name`
+	// ▼▼▼【ここから修正】▼▼▼
+	q := `SELECT ` + SelectColumns + ` FROM product_master ORDER BY
+		CASE
+			WHEN TRIM(usage_classification) = '内' OR TRIM(usage_classification) = '1' THEN 1
+			WHEN TRIM(usage_classification) = '外' OR TRIM(usage_classification) = '2' THEN 2
+			WHEN TRIM(usage_classification) = '注' OR TRIM(usage_classification) = '3' THEN 3
+			WHEN TRIM(usage_classification) = '歯' OR TRIM(usage_classification) = '4' THEN 4
+			WHEN TRIM(usage_classification) = '機' OR TRIM(usage_classification) = '5' THEN 5
+			WHEN TRIM(usage_classification) = '他' OR TRIM(usage_classification) = '6' THEN 6
+			ELSE 7
+		END,
+		kana_name`
+	// ▲▲▲【修正ここまで】▲▲▲
 
 	rows, err := dbtx.Query(q)
 	if err != nil {

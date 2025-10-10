@@ -61,7 +61,6 @@ function renderDeadStockList(data) {
                 
                 const spec = formatPackageSpec(prod);
                 const lastUsed = prod.lastUsageDate ? `${prod.lastUsageDate.slice(0,4)}-${prod.lastUsageDate.slice(4,6)}-${prod.lastUsageDate.slice(6,8)}` : '使用履歴なし';
-
                 tableRowsHTML += `
                     <tr>
                         <td class="left" ${rowSpan}>${prod.productName}</td>
@@ -96,8 +95,6 @@ function renderDeadStockList(data) {
             });
         });
         
-        // ▼▼▼【ここから修正】▼▼▼
-        // テーブルヘッダーを1行に修正
         const tableHTML = `<table class="data-table" style="margin-top: 5px;">
             <thead>
                 <tr>
@@ -114,7 +111,6 @@ function renderDeadStockList(data) {
             </thead>
             <tbody>${tableRowsHTML}</tbody>
         </table></div>`;
-        // ▲▲▲【修正ここまで】▲▲▲
         
         return yjHeader + tableHTML;
     }).join('');
@@ -133,9 +129,11 @@ export async function initDeadStock() {
     kanaNameInput = document.getElementById('ds-kanaName');
     dosageFormInput = document.getElementById('ds-dosageForm');
     importBtn = document.getElementById('import-deadstock-btn');
-    
     const printBtn = document.getElementById('print-deadstock-btn');
     const printArea = document.getElementById('deadstock-print-area');
+    // ▼▼▼【ここから追加】▼▼▼
+    const importDeadstockInput = document.getElementById('importDeadstockInput');
+    // ▲▲▲【追加ここまで】▲▲▲
 
     if (printBtn) {
         printBtn.addEventListener('click', () => {
@@ -216,15 +214,51 @@ export async function initDeadStock() {
         }
     }
 
+    // ▼▼▼【ここから修正】▼▼▼
     if (createCsvBtn) {
         createCsvBtn.addEventListener('click', () => {
-            window.showNotification('この機能は現在のレイアウトでは使用できません。', 'error');
+            const params = new URLSearchParams({
+                excludeZeroStock: excludeZeroStockCheckbox.checked,
+                kanaName: hiraganaToKatakana(kanaNameInput.value),
+                dosageForm: dosageFormInput.value,
+            });
+            window.location.href = `/api/deadstock/export?${params.toString()}`;
         });
     }
 
-    if (importBtn) {
+    if (importBtn && importDeadstockInput) {
         importBtn.addEventListener('click', () => {
-             window.showNotification('この機能は現在のレイアウトでは使用できません。', 'error');
+            importDeadstockInput.click();
+        });
+
+        importDeadstockInput.addEventListener('change', async (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            window.showLoading('CSVファイルをインポート中...');
+            try {
+                const res = await fetch('/api/deadstock/import', {
+                    method: 'POST',
+                    body: formData,
+                });
+                const resData = await res.json();
+                if (!res.ok) {
+                    throw new Error(resData.message || 'インポートに失敗しました。');
+                }
+                window.showNotification(resData.message, 'success');
+                // インポート後にリストを再表示
+                view.querySelector('#run-dead-stock-btn').click();
+            } catch (err) {
+                console.error(err);
+                window.showNotification(`エラー: ${err.message}`, 'error');
+            } finally {
+                window.hideLoading();
+                event.target.value = ''; // ファイル入力をリセット
+            }
         });
     }
+    // ▲▲▲【修正ここまで】▲▲▲
 }

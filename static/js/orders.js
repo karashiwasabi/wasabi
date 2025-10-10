@@ -1,8 +1,6 @@
 // C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\orders.js
 
-// ▼▼▼ [修正点] getLocalDateString をインポート ▼▼▼
 import { hiraganaToKatakana, getLocalDateString } from './utils.js';
-// ▲▲▲ 修正ここまで ▲▲▲
 
 function formatBalance(balance) {
     if (typeof balance === 'number') {
@@ -27,7 +25,7 @@ function renderOrderCandidates(data, container, wholesalers) {
                 <span class="product-name">${yjGroup.productName}</span>
                 <span class="balance-info">
                      在庫: ${formatBalance(yjGroup.endingBalance)} | 
-                    発注点: ${formatBalance(yjGroup.totalReorderPoint)} | 
+                     発注点: ${formatBalance(yjGroup.totalReorderPoint)} | 
                     不足数: ${formatBalance(yjShortfall)}
                 </span>
             </div>
@@ -50,10 +48,13 @@ function renderOrderCandidates(data, container, wholesalers) {
                 pkg.masters.forEach(master => {
                     const pkgShortfall = pkg.reorderPoint - (pkg.endingBalance || 0);
                     if (pkgShortfall > 0) {
-                        // ▼▼▼ [ここから修正] ▼▼▼
+                        // 「発注不可」の条件を仮マスターとマスター設定の両方で判定
                         const isProvisional = master.productCode.startsWith('99999') && master.productCode.length > 13;
-                        const rowClass = isProvisional ? 'provisional-order-item' : '';
-                        const disabledAttr = isProvisional ? 'disabled' : '';
+                        const isOrderStopped = master.isOrderStopped === 1;
+                        const isOrderable = !isProvisional && !isOrderStopped;
+
+                        const rowClass = !isOrderable ? 'provisional-order-item' : ''; // 発注不可品にはスタイルを適用
+                        const disabledAttr = !isOrderable ? 'disabled' : '';
 
                         const recommendedOrder = master.yjPackUnitQty > 0 ? Math.ceil(pkgShortfall / master.yjPackUnitQty) : 0;
                         
@@ -63,11 +64,13 @@ function renderOrderCandidates(data, container, wholesalers) {
                             rowWholesalerOptions += `<option value="${w.code}" ${isSelected ? 'selected' : ''}>${w.name}</option>`;
                         });
 
+                        // 「操作」列のボタンを条件によって変更
                         let actionCellHTML = '';
-                        if (isProvisional) {
-                            actionCellHTML = '<td><span style="color: red; font-weight: bold;">発注不可</span></td>';
-                        } else {
+                        if (isOrderable) {
                             actionCellHTML = '<td><button class="remove-order-item-btn btn">除外</button></td>';
+                        } else {
+                            // 発注不可品には「発注に変更」ボタンを表示
+                            actionCellHTML = '<td><button class="change-to-orderable-btn btn">発注に変更</button></td>';
                         }
 
                         html += `
@@ -89,7 +92,6 @@ function renderOrderCandidates(data, container, wholesalers) {
                                 ${actionCellHTML}
                             </tr>
                         `;
-                        // ▲▲▲ [修正ここまで] ▲▲▲
                     }
                 });
             }
@@ -105,17 +107,13 @@ export function initOrders() {
 
     const runBtn = document.getElementById('generate-order-candidates-btn');
     const outputContainer = document.getElementById('order-candidates-output');
-    // ▼▼▼【修正】startDateInput, endDateInput の取得を削除 ▼▼▼
     const kanaNameInput = document.getElementById('order-kanaName');
     const dosageFormInput = document.getElementById('order-dosageForm');
     const coefficientInput = document.getElementById('order-reorder-coefficient');
     const createCsvBtn = document.getElementById('createOrderCsvBtn');
 
-    // ▼▼▼【修正】日付のデフォルト値設定ロジックを削除 ▼▼▼
-
     runBtn.addEventListener('click', async () => {
         window.showLoading();
-        // ▼▼▼【修正】URLSearchParamsからstartDateとendDateを削除 ▼▼▼
         const params = new URLSearchParams({
             kanaName: hiraganaToKatakana(kanaNameInput.value),
             dosageForm: dosageFormInput.value,
@@ -135,7 +133,7 @@ export function initOrders() {
         } catch (err) {
             outputContainer.innerHTML = `<p style="color:red;">エラー: ${err.message}</p>`;
         } finally {
-             window.hideLoading();
+            window.hideLoading();
         }
     });
 
@@ -224,9 +222,25 @@ export function initOrders() {
         }
     });
 
+    // ▼▼▼【ここから修正】▼▼▼
     outputContainer.addEventListener('click', (e) => {
-        if (e.target.classList.contains('remove-order-item-btn')) {
-            const row = e.target.closest('tr');
+        const target = e.target;
+        
+        if (target.classList.contains('change-to-orderable-btn')) {
+            const row = target.closest('tr');
+            if (row) {
+                // スタイルとdisabled属性を解除
+                row.classList.remove('provisional-order-item');
+                row.querySelector('.wholesaler-select').disabled = false;
+                row.querySelector('.order-quantity-input').disabled = false;
+
+                // ボタンを「除外」ボタンに変更
+                target.textContent = '除外';
+                target.classList.remove('change-to-orderable-btn');
+                target.classList.add('remove-order-item-btn');
+            }
+        } else if (target.classList.contains('remove-order-item-btn')) {
+            const row = target.closest('tr');
             const tbody = row.closest('tbody');
             row.remove();
             if (tbody.children.length === 0) {
@@ -236,4 +250,5 @@ export function initOrders() {
             }
         }
     });
+    // ▲▲▲【修正ここまで】▲▲▲
 }

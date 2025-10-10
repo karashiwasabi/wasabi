@@ -26,12 +26,14 @@ function getSignedYjQty(record) {
     }
 }
 
+
+// ▼▼▼【ここから修正】▼▼▼
 /**
- * 最新の棚卸を基点に、在庫を再計算し、日付降順のリストを返す
+ * 最新の棚卸を基点に、在庫を再計算し、日付昇順のリストを返す
  * @param {Array} transactions - サーバーから受け取った昇順の取引リスト
- * @returns {Array} - 在庫を再計算し、降順にソートされた取引リスト
+ * @returns {Array} - 在庫を再計算した、昇順の取引リスト
  */
-function recalculateBalancesForDescendingView(transactions) {
+function recalculateBalancesFromLatestInventory(transactions) {
     if (!transactions || transactions.length === 0) {
         return [];
     }
@@ -68,14 +70,15 @@ function recalculateBalancesForDescendingView(transactions) {
         // ---【B】期間内に棚卸がない場合 ---
         
         // サーバーが計算した最終在庫（昇順での最後のレコード）を基点に、全て過去に遡って逆算する
-        // 最後のレコードの在庫は正しいので、ループは最後から2番目の要素から開始する
-        for (let i = recalculatedTxs.length - 2; i >= 0; i--) {
-            recalculatedTxs[i].runningBalance = recalculatedTxs[i + 1].runningBalance - getSignedYjQty(recalculatedTxs[i + 1]);
+        if (recalculatedTxs.length > 0) {
+            for (let i = recalculatedTxs.length - 2; i >= 0; i--) {
+                recalculatedTxs[i].runningBalance = recalculatedTxs[i + 1].runningBalance - getSignedYjQty(recalculatedTxs[i + 1]);
+            }
         }
     }
 
-    // 表示のために配列を降順に並べ替える
-    return recalculatedTxs.reverse();
+    // 昇順のまま配列を返す
+    return recalculatedTxs;
 }
 
 /**
@@ -87,15 +90,15 @@ function renderLedgerView() {
         return;
     }
 
-    // 新しいロジックで在庫を再計算し、日付降順のリストを取得
-    const descendingTransactions = recalculateBalancesForDescendingView(lastLoadedData.ledgerTransactions);
+    // 新しいロジックで在庫を再計算し、日付昇順のリストを取得
+    const ascendingTransactions = recalculateBalancesFromLatestInventory(lastLoadedData.ledgerTransactions);
 
-    const ledgerHtml = renderLedgerTable(descendingTransactions); // 降順リストでテーブル描画
+    const ledgerHtml = renderLedgerTable(ascendingTransactions); // 昇順リストでテーブル描画
     const precompHtml = renderPrecompDetails(lastLoadedData.precompDetails);
     
     // 最終在庫サマリー（最も新しい取引の在庫）
-    const finalTheoreticalStock = descendingTransactions.length > 0
-        ? descendingTransactions[0].runningBalance // 降順なので最初の要素
+    const finalTheoreticalStock = ascendingTransactions.length > 0
+        ? ascendingTransactions[ascendingTransactions.length - 1].runningBalance // 昇順なので最後の要素
         : 0;
 
     const summaryHtml = `
@@ -109,6 +112,7 @@ function renderLedgerView() {
     outputContainer.innerHTML = ledgerHtml + precompHtml + summaryHtml;
     updateRealStock(); // 初回描画時に実在庫を計算
 }
+// ▲▲▲【修正ここまで】▲▲▲
 
 /**
  * 台帳テーブルのHTMLを生成する

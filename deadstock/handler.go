@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -193,3 +194,94 @@ func ImportDeadStockHandler(conn *sql.DB) http.HandlerFunc {
 		})
 	}
 }
+
+// ▼▼▼【ここから追加】▼▼▼
+// ExportDeadStockHandler は画面のフィルタ条件に基づいて不動在庫リストをCSV形式でエクスポートします。
+func ExportDeadStockHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		cfg, err := config.LoadConfig()
+		if err != nil {
+			http.Error(w, "設定ファイルの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		now := time.Now()
+		startDate := now.AddDate(0, 0, -cfg.CalculationPeriodDays)
+
+		filters := model.DeadStockFilters{
+			StartDate:        startDate.Format("20060102"),
+			EndDate:          "99999999",
+			ExcludeZeroStock: q.Get("excludeZeroStock") == "true",
+			KanaName:         q.Get("kanaName"),
+			DosageForm:       q.Get("dosageForm"),
+		}
+
+		results, err := db.GetDeadStockList(conn, filters)
+		if err != nil {
+			http.Error(w, "Failed to get dead stock list for export: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		fileName := fmt.Sprintf("不動在庫リスト_%s.csv", now.Format("20060102"))
+		w.Header().Set("Content-Type", "text/csv")
+		w.Header().Set("Content-Disposition", `attachment; filename="`+fileName+`"`)
+		w.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM
+
+		csvWriter := csv.NewWriter(w)
+		defer csvWriter.Flush()
+
+		headers := []string{
+			"yj_code", "product_code", "product_name", "stock_quantity",
+			"yj_unit_name", "expiry_date", "lot_number", "package_form", "jan_pack_inner_qty",
+		}
+		if err := csvWriter.Write(headers); err != nil {
+			http.Error(w, "Failed to write CSV header", http.StatusInternalServerError)
+			return
+		}
+
+		for _, group := range results {
+			for _, pkg := range group.PackageGroups {
+				for _, prod := range pkg.Products {
+					// 保存済みのロット・期限情報がある場合は、そのレコードごとに出力
+					if len(prod.SavedRecords) > 0 {
+						for _, rec := range prod.SavedRecords {
+							record := []string{
+								prod.YjCode,
+								fmt.Sprintf("=%q", prod.ProductCode),
+								prod.ProductName,
+								strconv.FormatFloat(rec.StockQuantityJan, 'f', -1, 64),
+								prod.YjUnitName,
+								rec.ExpiryDate,
+								rec.LotNumber,
+								prod.PackageForm,
+								strconv.FormatFloat(prod.JanPackInnerQty, 'f', -1, 64),
+							}
+							if err := csvWriter.Write(record); err != nil {
+								log.Printf("Failed to write dead stock row to CSV (Code: %s): %v", prod.ProductCode, err)
+							}
+						}
+					} else {
+						// 保存済みのロット・期限情報がない場合は、製品情報と現在の理論在庫を出力
+						record := []string{
+							prod.YjCode,
+							fmt.Sprintf("=%q", prod.ProductCode),
+							prod.ProductName,
+							strconv.FormatFloat(prod.CurrentStock, 'f', -1, 64),
+							prod.YjUnitName,
+							"", // expiry_date
+							"", // lot_number
+							prod.PackageForm,
+							strconv.FormatFloat(prod.JanPackInnerQty, 'f', -1, 64),
+						}
+						if err := csvWriter.Write(record); err != nil {
+							log.Printf("Failed to write dead stock row to CSV (Code: %s): %v", prod.ProductCode, err)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// ▲▲▲【追加ここまで】▲▲▲

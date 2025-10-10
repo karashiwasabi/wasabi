@@ -22,6 +22,7 @@ import (
  * アプリ内にまだ存在しない公式の医薬品マスターを探すために使用されます。
  */
 func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterView, error) {
+	// ▼▼▼【ここから修正】▼▼▼
 	const q = `
 		SELECT
 			j.JC000, j.JC009, j.JC018, j.JC022, j.JC030, j.JC013, j.JC037, j.JC039,
@@ -29,8 +30,20 @@ func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterVi
 			ja.JA006, ja.JA008, ja.JA007
 		FROM jcshms AS j
 		LEFT JOIN jancode AS ja ON j.JC000 = ja.JA001
-		WHERE j.JC018 LIKE ? OR j.JC022 LIKE ? ORDER BY j.JC022
+		WHERE j.JC018 LIKE ? OR j.JC022 LIKE ?
+		ORDER BY
+			CASE
+				WHEN TRIM(j.JC013) = '内' OR TRIM(j.JC013) = '1' THEN 1
+				WHEN TRIM(j.JC013) = '外' OR TRIM(j.JC013) = '2' THEN 2
+				WHEN TRIM(j.JC013) = '注' OR TRIM(j.JC013) = '3' THEN 3
+				WHEN TRIM(j.JC013) = '歯' OR TRIM(j.JC013) = '4' THEN 4
+				WHEN TRIM(j.JC013) = '機' OR TRIM(j.JC013) = '5' THEN 5
+				WHEN TRIM(j.JC013) = '他' OR TRIM(j.JC013) = '6' THEN 6
+				ELSE 7
+			END,
+			j.JC022
 		LIMIT 500`
+	// ▲▲▲【修正ここまで】▲▲▲
 
 	rows, err := conn.Query(q, "%"+nameQuery+"%", "%"+nameQuery+"%")
 	if err != nil {

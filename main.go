@@ -107,6 +107,9 @@ func main() {
 	mux.HandleFunc("/api/deadstock/list", deadstock.GetDeadStockHandler(conn))
 	mux.HandleFunc("/api/deadstock/save", deadstock.SaveDeadStockHandler(conn))
 	mux.HandleFunc("/api/deadstock/import", deadstock.ImportDeadStockHandler(conn))
+	// ▼▼▼【ここに追加】▼▼▼
+	mux.HandleFunc("/api/deadstock/export", deadstock.ExportDeadStockHandler(conn))
+	// ▲▲▲【追加ここまで】▲▲▲
 	mux.HandleFunc("/api/settings/get", settings.GetSettingsHandler(conn))
 	mux.HandleFunc("/api/settings/save", settings.SaveSettingsHandler(conn))
 	mux.HandleFunc("/api/settings/wholesalers", settings.WholesalersHandler(conn))

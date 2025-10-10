@@ -21,7 +21,8 @@ func toHiragana(s string) string { return s }
 
 var kanaVariants = map[rune][]rune{}
 
-// SearchProductsHandler は変更ありません
+// ▼▼▼【ここから修正】▼▼▼
+// 関数の構造を、コンパイラが誤解しない、より明確な形式に書き換えました。
 func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -133,7 +134,17 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 				query += " AND (p.kana_name LIKE ? OR p.product_name LIKE ?)"
 				args = append(args, "%"+searchQuery+"%", "%"+searchQuery+"%")
 			}
-			query += " ORDER BY p.kana_name"
+			query += ` ORDER BY
+				CASE
+					WHEN TRIM(p.usage_classification) = '内' OR TRIM(p.usage_classification) = '1' THEN 1
+					WHEN TRIM(p.usage_classification) = '外' OR TRIM(p.usage_classification) = '2' THEN 2
+					WHEN TRIM(p.usage_classification) = '注' OR TRIM(p.usage_classification) = '3' THEN 3
+					WHEN TRIM(p.usage_classification) = '歯' OR TRIM(p.usage_classification) = '4' THEN 4
+					WHEN TRIM(p.usage_classification) = '機' OR TRIM(p.usage_classification) = '5' THEN 5
+					WHEN TRIM(p.usage_classification) = '他' OR TRIM(p.usage_classification) = '6' THEN 6
+					ELSE 7
+				END,
+				p.kana_name`
 			rows, queryErr := conn.Query(query, args...)
 			if queryErr != nil {
 				http.Error(w, "Failed to search products: "+queryErr.Error(), http.StatusInternalServerError)
@@ -169,13 +180,13 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 	return handler
 }
 
+// ▲▲▲【修正ここまで】▲▲▲
+
 type ProductLedgerResponse struct {
 	LedgerTransactions []model.LedgerTransaction `json:"ledgerTransactions"`
 	PrecompDetails     []model.TransactionRecord `json:"precompDetails"`
 }
 
-// ▼▼▼【ここから修正】▼▼▼
-// GetProductLedgerHandler の在庫計算ロジックを、棚卸を正しく反映するように修正します。
 func GetProductLedgerHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		productCode := strings.TrimPrefix(r.URL.Path, "/api/ledger/product/")
@@ -183,6 +194,8 @@ func GetProductLedgerHandler(conn *sql.DB) http.HandlerFunc {
 			http.Error(w, "Product code is required", http.StatusBadRequest)
 			return
 		}
+
+		// GetStockLedgerのロジックを参考に、単一製品コードに特化した台帳を生成する
 
 		// 1. 対象製品の全期間の取引を取得
 		txRows, err := conn.Query(`SELECT `+db.TransactionColumns+` FROM transaction_records WHERE jan_code = ? ORDER BY transaction_date, id`, productCode)
@@ -287,5 +300,3 @@ func GetProductLedgerHandler(conn *sql.DB) http.HandlerFunc {
 		})
 	}
 }
-
-// ▲▲▲【修正ここまで】▲▲▲
