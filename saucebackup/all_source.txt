@@ -2048,7 +2048,10 @@ INSERT INTO transaction_records (
 		mappers.MapProductMasterToTransaction(&tr, master)
 		tr.ClientCode = ""
 		tr.SupplierWholesale = ""
-		tr.Subtotal = 0
+
+		// ▼▼▼【修正】Subtotalを計算する処理を追加 ▼▼▼
+		tr.Subtotal = tr.YjQuantity * tr.UnitPrice
+		// ▲▲▲【修正ここまで】▲▲▲
 
 		_, err := stmt.Exec(
 			tr.TransactionDate, tr.ClientCode, tr.ReceiptNumber, tr.LineNumber, tr.Flag,
@@ -3646,8 +3649,7 @@ func GetLastInventoryDate(tx *sql.Tx, janCode string) string {
 
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\valuation.go -----
-// C:\Users\wasab\OneDrive\デスクトップ\WASABI\WASABI\db\valuation.go
-
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\valuation.go
 package db
 
 import (
@@ -3744,23 +3746,23 @@ func GetInventoryValuation(conn *sql.DB, filters model.ValuationFilters) ([]Valu
 		}
 		spec := units.FormatPackageSpec(&tempJcshms)
 
-		// 薬価・納入価を計算
-		var unitNhiPrice float64
-		if repMaster.YjPackUnitQty > 0 {
-			// DBのnhi_priceは包装薬価なので、ここで単価を計算
-			unitNhiPrice = repMaster.NhiPrice / repMaster.YjPackUnitQty
-		}
+		// ▼▼▼【ここから修正】▼▼▼
+		// repMaster.NhiPrice は既にYJ単位あたりの単価として保存されているため、そのまま使用します。
+		unitNhiPrice := repMaster.NhiPrice
 
-		// totalNhiValueは「総在庫数(YJ単位) × 単価」で計算
+		// totalNhiValue(薬価金額)は「総在庫数(YJ単位) × YJ単価」で計算します。
 		totalNhiValue := totalStockForPackage * unitNhiPrice
-		// packageNhiPriceはDBから取得した包装薬価をそのまま使う
-		packageNhiPrice := repMaster.NhiPrice
 
+		// packageNhiPrice(包装薬価)は「YJ単価 × YJ包装数量」で逆算して表示します。
+		packageNhiPrice := unitNhiPrice * repMaster.YjPackUnitQty
+
+		// repMaster.PurchasePrice は包装単位の納入価として保存されているため、YJ単位の単価を計算します。
 		var totalPurchaseValue float64
 		if repMaster.YjPackUnitQty > 0 {
 			unitPurchasePrice := repMaster.PurchasePrice / repMaster.YjPackUnitQty
 			totalPurchaseValue = totalStockForPackage * unitPurchasePrice
 		}
+		// ▲▲▲【修正ここまで】▲▲▲
 
 		detailRows = append(detailRows, model.ValuationDetailRow{
 			YjCode:               repMaster.YjCode,
@@ -4746,8 +4748,6 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\inventory\handler.go -----
-// C:\Dev\WASABI\inventory\handler.go
-
 package inventory
 
 import (
@@ -4816,9 +4816,6 @@ func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 
 		recordsToProcess := parsedData.Records
 
-		// ▼▼▼【ここからロジックを全面的に修正】▼▼▼
-
-		// Step 1: ファイルから読み込んだJANコードのリストを作成
 		janCodesFromFile := make([]string, 0, len(recordsToProcess))
 		for _, rec := range recordsToProcess {
 			if rec.JanCode != "" {
@@ -4826,7 +4823,6 @@ func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 			}
 		}
 
-		// Step 2: ファイルに存在するJANコードの、該当日の古い棚卸データ「のみ」を削除する
 		if len(janCodesFromFile) > 0 {
 			if err := db.DeleteTransactionsByFlagAndDateAndCodes(tx, 0, date, janCodesFromFile); err != nil {
 				http.Error(w, "Failed to clear old inventory data for specified products: "+err.Error(), http.StatusInternalServerError)
@@ -4834,7 +4830,6 @@ func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 			}
 		}
 
-		// Step 3: もしファイルに処理すべきレコードがなければ、ここで終了
 		if len(recordsToProcess) == 0 {
 			if err := tx.Commit(); err != nil {
 				http.Error(w, "Failed to commit transaction: "+err.Error(), http.StatusInternalServerError)
@@ -4848,9 +4843,6 @@ func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// ▲▲▲【修正ここまで】▲▲▲
-
-		// Step 4: Process the actual inventory records from the uploaded file.
 		for i := range recordsToProcess {
 			recordsToProcess[i].YjQuantity = recordsToProcess[i].JanQuantity * recordsToProcess[i].JanPackInnerQty
 		}
@@ -4876,7 +4868,7 @@ func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 
 		mastersMap, err := db.GetProductMastersByCodesMap(tx, keyList)
 		if err != nil {
-			tx.Rollback() // Rollback is already deferred, but being explicit is fine.
+			tx.Rollback()
 			http.Error(w, "Failed to pre-fetch product masters", http.StatusInternalServerError)
 			return
 		}
@@ -4916,6 +4908,10 @@ func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 				tr.JanQuantity = tr.YjQuantity / master.JanPackInnerQty
 			}
 			mappers.MapProductMasterToTransaction(&tr, master)
+
+			// ▼▼▼【修正】Subtotalを計算する処理を追加 ▼▼▼
+			tr.Subtotal = tr.YjQuantity * tr.UnitPrice
+			// ▲▲▲【修正ここまで】▲▲▲
 
 			if master.Origin == "JCSHMS" {
 				tr.ProcessFlagMA = "COMPLETE"
@@ -4976,8 +4972,6 @@ func UploadInventoryHandler(conn *sql.DB) http.HandlerFunc {
 
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\inventory\manual_handler.go -----
-// C:\Dev\WASABI\inventory\manual_handler.go
-
 package inventory
 
 import (
@@ -4993,26 +4987,23 @@ import (
 // ListInventoryProductsHandler returns all product masters with their last inventory date.
 func ListInventoryProductsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// 全ての製品マスターを取得
 		products, err := db.GetAllProductMasters(conn)
 		if err != nil {
 			http.Error(w, "Failed to get product list: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		// 全ての製品の最終棚卸日マップを取得
 		dateMap, err := db.GetLastInventoryDateMap(conn)
 		if err != nil {
 			http.Error(w, "Failed to get last inventory dates: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		// 製品マスターと最終棚卸日を結合して、画面用の新しいデータ構造を作成
 		var result []model.InventoryProductView
 		for _, p := range products {
 			result = append(result, model.InventoryProductView{
 				ProductMaster:     *p,
-				LastInventoryDate: dateMap[p.ProductCode], // マップから日付を取得
+				LastInventoryDate: dateMap[p.ProductCode],
 			})
 		}
 
@@ -5055,13 +5046,10 @@ func SaveManualInventoryHandler(conn *sql.DB) http.HandlerFunc {
 		var productCodes []string
 		recordsMap := make(map[string]float64)
 		for _, rec := range payload.Records {
-			// ▼▼▼ [修正点] 数量が0の場合も処理対象とするため、if文を削除 ▼▼▼
 			productCodes = append(productCodes, rec.ProductCode)
 			recordsMap[rec.ProductCode] = rec.YjQuantity
-			// ▲▲▲ 修正ここまで ▲▲▲
 		}
 
-		// 指定された日付の、入力があった品目の古い棚卸データ「のみ」を削除する
 		if len(productCodes) > 0 {
 			if err := db.DeleteTransactionsByFlagAndDateAndCodes(tx, 0, payload.Date, productCodes); err != nil {
 				http.Error(w, "Failed to clear old inventory data for specified products", http.StatusInternalServerError)
@@ -5110,6 +5098,11 @@ func SaveManualInventoryHandler(conn *sql.DB) http.HandlerFunc {
 			}
 
 			mappers.MapProductMasterToTransaction(&tr, master)
+
+			// ▼▼▼【修正】Subtotalを計算する処理を追加 ▼▼▼
+			tr.Subtotal = tr.YjQuantity * tr.UnitPrice
+			// ▲▲▲【修正ここまで】▲▲▲
+
 			finalRecords = append(finalRecords, tr)
 		}
 
@@ -5154,6 +5147,7 @@ type MigrationResultRow struct {
 	MasterCreated string                   `json:"masterCreated"` // "JCSHMS", "PROVISIONAL", "EXISTED"
 	ResultRecord  *model.TransactionRecord `json:"resultRecord"`
 	Error         string                   `json:"error"`
+	IsZeroFill    bool                     `json:"isZeroFill,omitempty"`
 }
 
 // MigrateInventoryHandler は在庫移行用のCSVアップロードを処理します
@@ -5224,12 +5218,12 @@ func MigrateInventoryHandler(conn *sql.DB) http.HandlerFunc {
 		var totalImported int
 
 		for date, recs := range recordsByDate {
-			dateResults := make([]MigrationResultRow, len(recs))
+			var dateResults []MigrationResultRow
 			for i := range recs {
-				dateResults[i] = MigrationResultRow{
+				dateResults = append(dateResults, MigrationResultRow{
 					OriginalRow:  originalRowsByDate[date][i],
 					ParsedRecord: recs[i],
-				}
+				})
 			}
 
 			tx, err := conn.Begin()
@@ -5241,13 +5235,15 @@ func MigrateInventoryHandler(conn *sql.DB) http.HandlerFunc {
 				continue
 			}
 
-			// ▼▼▼【ここから修正】▼▼▼
 			var productCodes []string
+			csvProductCodesMap := make(map[string]struct{})
 			for _, rec := range recs {
-				productCodes = append(productCodes, rec.JanCode)
+				if _, exists := csvProductCodesMap[rec.JanCode]; !exists {
+					productCodes = append(productCodes, rec.JanCode)
+					csvProductCodesMap[rec.JanCode] = struct{}{}
+				}
 			}
 
-			// --- エラーハンドリング修正 1 ---
 			mastersMap, err := db.GetProductMastersByCodesMap(tx, productCodes)
 			if err != nil {
 				tx.Rollback()
@@ -5259,8 +5255,7 @@ func MigrateInventoryHandler(conn *sql.DB) http.HandlerFunc {
 			}
 
 			for i, rec := range recs {
-				_, exists := mastersMap[rec.JanCode]
-				if !exists {
+				if _, exists := mastersMap[rec.JanCode]; !exists {
 					masterStatus := ""
 					jcshms, errJcshms := db.GetJcshmsRecordByJan(tx, rec.JanCode)
 					if errJcshms == nil && jcshms != nil {
@@ -5286,7 +5281,6 @@ func MigrateInventoryHandler(conn *sql.DB) http.HandlerFunc {
 				}
 			}
 
-			// --- エラーハンドリング修正 2 ---
 			mastersMap, err = db.GetProductMastersByCodesMap(tx, productCodes)
 			if err != nil {
 				tx.Rollback()
@@ -5296,9 +5290,15 @@ func MigrateInventoryHandler(conn *sql.DB) http.HandlerFunc {
 				finalResults = append(finalResults, dateResults...)
 				continue
 			}
-			// ▲▲▲【修正ここまで】▲▲▲
 
-			db.DeleteTransactionsByFlagAndDateAndCodes(tx, 0, date, productCodes)
+			if err := db.DeleteTransactionsByFlagAndDate(tx, 0, date); err != nil {
+				tx.Rollback()
+				for i := range dateResults {
+					dateResults[i].Error = "古い棚卸データの削除に失敗: " + err.Error()
+				}
+				finalResults = append(finalResults, dateResults...)
+				continue
+			}
 
 			for i, rec := range recs {
 				master, ok := mastersMap[rec.JanCode]
@@ -5317,6 +5317,10 @@ func MigrateInventoryHandler(conn *sql.DB) http.HandlerFunc {
 				mappers.MapProductMasterToTransaction(&tr, master)
 				tr.ProcessFlagMA = "COMPLETE"
 
+				// ▼▼▼【修正】Subtotalを計算する処理を追加 ▼▼▼
+				tr.Subtotal = tr.YjQuantity * tr.UnitPrice
+				// ▲▲▲【修正ここまで】▲▲▲
+
 				if err := db.PersistTransactionRecordsInTx(tx, []model.TransactionRecord{tr}); err != nil {
 					dateResults[i].Error = "レコード登録に失敗: " + err.Error()
 					continue
@@ -5325,11 +5329,74 @@ func MigrateInventoryHandler(conn *sql.DB) http.HandlerFunc {
 				totalImported++
 			}
 
+			allMasters, err := db.GetAllProductMasters(tx)
+			if err != nil {
+				tx.Rollback()
+				errorMsg := "ゼロフィル対象の全マスター取得に失敗: " + err.Error()
+				for j := range dateResults {
+					if dateResults[j].Error == "" {
+						dateResults[j].Error = errorMsg
+					}
+				}
+				finalResults = append(finalResults, dateResults...)
+				continue
+			}
+
+			var zeroFillRecords []model.TransactionRecord
+			var zeroFillResults []MigrationResultRow
+			receiptNumber := fmt.Sprintf("MIGRATE-%s", date)
+			zeroFillCounter := 0
+
+			for _, master := range allMasters {
+				if _, existsInCsv := csvProductCodesMap[master.ProductCode]; !existsInCsv {
+					zeroFillCounter++
+					tr := model.TransactionRecord{
+						TransactionDate: date,
+						Flag:            0,
+						JanCode:         master.ProductCode,
+						YjQuantity:      0,
+						JanQuantity:     0,
+						ReceiptNumber:   receiptNumber,
+						LineNumber:      fmt.Sprintf("Z%d", zeroFillCounter),
+						ProcessFlagMA:   "COMPLETE",
+						UnitPrice:       0, // 金額も0なので単価も0
+						Subtotal:        0,
+					}
+					mappers.MapProductMasterToTransaction(&tr, master)
+					tr.UnitPrice = master.NhiPrice // ただし単価は記録しておく
+					zeroFillRecords = append(zeroFillRecords, tr)
+
+					zeroFillResults = append(zeroFillResults, MigrationResultRow{
+						OriginalRow:   []string{"- (ゼロフィル対象) -"},
+						ParsedRecord:  model.UnifiedInputRecord{JanCode: master.ProductCode, YjQuantity: 0},
+						MasterCreated: "EXISTED",
+						ResultRecord:  &tr,
+						IsZeroFill:    true,
+					})
+				}
+			}
+
+			if len(zeroFillRecords) > 0 {
+				if err := db.PersistTransactionRecordsInTx(tx, zeroFillRecords); err != nil {
+					tx.Rollback()
+					errorMsg := "ゼロフィルレコードのDB保存に失敗: " + err.Error()
+					for j := range dateResults {
+						if dateResults[j].Error == "" {
+							dateResults[j].Error = errorMsg
+						}
+					}
+					finalResults = append(finalResults, dateResults...)
+					continue
+				}
+				totalImported += len(zeroFillRecords)
+			}
+
+			finalResults = append(finalResults, dateResults...)
+			finalResults = append(finalResults, zeroFillResults...)
+
 			if err := tx.Commit(); err != nil {
-				// Commitエラーのハンドリング（今回はシンプルにログ出力）
 				log.Printf("Failed to commit transaction for date %s: %v", date, err)
 			}
-			finalResults = append(finalResults, dateResults...)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -5372,18 +5439,16 @@ func CreateMasterUpdateHandler(conn *sql.DB) http.HandlerFunc {
 		log.Println("新しい要件に基づくJCSHMSマスター更新処理を開始します...")
 
 		// === ステップ1: 必要なデータを全てメモリにロード ===
-		// ▼▼▼【修正点】キーの列インデックスを正しく指定 ▼▼▼
-		newJcshmsData, err := loadCSVToMap("SOU/JCSHMS.CSV", false, 0) // JCSHMSのキーは1列目(インデックス0)
+		newJcshmsData, err := loadCSVToMap("SOU/JCSHMS.CSV", false, 0)
 		if err != nil {
 			http.Error(w, "JCSHMS.CSVの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		newJancodeData, err := loadCSVToMap("SOU/JANCODE.CSV", true, 1) // JANCODEのキーは2列目(インデックス1)
+		newJancodeData, err := loadCSVToMap("SOU/JANCODE.CSV", true, 1)
 		if err != nil {
 			http.Error(w, "JANCODE.CSVの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// ▲▲▲ 修正ここまで ▲▲▲
 		existingMasters, err := db.GetAllProductMasters(conn)
 		if err != nil {
 			http.Error(w, "既存の製品マスターの取得に失敗しました: "+err.Error(), http.StatusInternalServerError)
@@ -5403,7 +5468,7 @@ func CreateMasterUpdateHandler(conn *sql.DB) http.HandlerFunc {
 			yj_unit_name=?, yj_pack_unit_qty=?,
 			flag_poison=?, flag_deleterious=?, flag_narcotic=?, flag_psychotropic=?,
 			flag_stimulant=?, flag_stimulant_raw=?, jan_pack_inner_qty=?,
-			jan_unit_code=?, jan_pack_unit_qty=?, nhi_price=?
+			jan_unit_code=?, jan_pack_unit_qty=?, nhi_price=?, specification=?
 		WHERE product_code = ?`
 		updateStmt, err := tx.Prepare(updateQuery)
 		if err != nil {
@@ -5430,19 +5495,17 @@ func CreateMasterUpdateHandler(conn *sql.DB) http.HandlerFunc {
 				jancodeRow := newJancodeData[master.ProductCode]
 				input := createInputFromCSV(jcshmsRow, jancodeRow)
 
-				// ▼▼▼ [修正点] 以下のifブロックを変更 ▼▼▼
 				if master.Origin == "PROVISIONAL" && input.YjCode == "" {
 					input.Origin = "PROVISIONAL"
 					input.YjCode = master.YjCode // 既存のYJコードを維持する
 				}
-				// ▲▲▲ 修正ここまで ▲▲▲
 
 				_, err := updateStmt.Exec(
 					input.YjCode, input.ProductName, input.Origin, input.KanaName, input.MakerName,
 					input.UsageClassification, input.PackageForm, input.YjUnitName, input.YjPackUnitQty,
 					input.FlagPoison, input.FlagDeleterious, input.FlagNarcotic, input.FlagPsychotropic,
 					input.FlagStimulant, input.FlagStimulantRaw, input.JanPackInnerQty,
-					input.JanUnitCode, input.JanPackUnitQty, input.NhiPrice,
+					input.JanUnitCode, input.JanPackUnitQty, input.NhiPrice, input.Specification,
 					master.ProductCode,
 				)
 				if err != nil {
@@ -5480,7 +5543,6 @@ func CreateMasterUpdateHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// ▼▼▼【修正点】キーとして使う列のインデックス(keyIndex)を引数に追加 ▼▼▼
 func loadCSVToMap(filepath string, skipHeader bool, keyIndex int) (map[string][]string, error) {
 	f, err := os.Open(filepath)
 	if err != nil {
@@ -5506,15 +5568,12 @@ func loadCSVToMap(filepath string, skipHeader bool, keyIndex int) (map[string][]
 			}
 			return nil, err
 		}
-		// ▼▼▼【修正点】指定されたインデックスをキーとして使用し、安全チェックを追加 ▼▼▼
 		if len(row) > keyIndex {
 			dataMap[row[keyIndex]] = row
 		}
 	}
 	return dataMap, nil
 }
-
-// ▲▲▲ 修正ここまで ▲▲▲
 
 func createInputFromCSV(jcshmsRow, jancodeRow []string) model.ProductMasterInput {
 	var input model.ProductMasterInput
@@ -5532,8 +5591,9 @@ func createInputFromCSV(jcshmsRow, jancodeRow []string) model.ProductMasterInput
 
 	input.ProductCode = jcshmsRow[0]
 	input.YjCode = jcshmsRow[9]
-	// ▼▼▼【ここを修正】製品名と規格(JC020)を連結します。インデックスを19から20に変更 ▼▼▼
-	input.ProductName = strings.TrimSpace(jcshmsRow[18]) + strings.TrimSpace(jcshmsRow[20])
+	// ▼▼▼【ここが修正箇所】製品名と規格を分離して格納します ▼▼▼
+	input.ProductName = strings.TrimSpace(jcshmsRow[18])
+	input.Specification = strings.TrimSpace(jcshmsRow[20])
 	// ▲▲▲【修正ここまで】▲▲▲
 	input.Origin = "JCSHMS"
 	input.KanaName = jcshmsRow[22]
@@ -5554,14 +5614,13 @@ func createInputFromCSV(jcshmsRow, jancodeRow []string) model.ProductMasterInput
 		input.UsageClassification = "他"
 	}
 
-	// 9列未満のチェックを撤廃し、各項目を安全に読み込む
-	if len(jancodeRow) > 6 { // JA006 (7列目) が存在すれば転記
+	if len(jancodeRow) > 6 {
 		input.JanPackInnerQty, _ = strconv.ParseFloat(jancodeRow[6], 64)
 	}
-	if len(jancodeRow) > 7 { // JA007 (8列目) が存在すれば転記
+	if len(jancodeRow) > 7 {
 		input.JanUnitCode, _ = strconv.Atoi(jancodeRow[7])
 	}
-	if len(jancodeRow) > 8 { // JA008 (9列目) が存在すれば転記
+	if len(jancodeRow) > 8 {
 		input.JanPackUnitQty, _ = strconv.ParseFloat(jancodeRow[8], 64)
 	}
 	return input
@@ -5687,6 +5746,7 @@ func LoadCSV(db *sql.DB, filepath, tablename string, columns int, skipHeader boo
 }
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\mappers\jcshms_to_master.go -----
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\mappers\jcshms_to_master.go
 package mappers
 
 import (
@@ -5701,10 +5761,10 @@ func JcshmsToProductMasterInput(jcshms *model.JCShms, janCode string) model.Prod
 		ProductCode:         janCode,
 		YjCode:              jcshms.JC009,
 		Gs1Code:             jcshms.JC122,
-		ProductName:         strings.TrimSpace(jcshms.JC018),
-		KanaName:            strings.TrimSpace(jcshms.JC020),
+		ProductName:         strings.TrimSpace(jcshms.JC018), // JC018: 商品名
+		KanaName:            strings.TrimSpace(jcshms.JC022), // JC022: 商品名カナ
 		MakerName:           strings.TrimSpace(jcshms.JC030),
-		Specification:       strings.TrimSpace(jcshms.JC022),
+		Specification:       strings.TrimSpace(jcshms.JC020), // JC020: 規格容量
 		UsageClassification: strings.TrimSpace(jcshms.JC013),
 		PackageForm:         strings.TrimSpace(jcshms.JC037),
 		YjUnitName:          strings.TrimSpace(jcshms.JC039),
@@ -7825,8 +7885,10 @@ func toHiragana(s string) string { return s }
 
 var kanaVariants = map[rune][]rune{}
 
+// ▼▼▼【ここから修正】▼▼▼
+// 関数の構造を、コンパイラが誤解しない、より明確な形式に書き換えました。
 func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		dosageForm := q.Get("dosageForm")
 		kanaInitial := q.Get("kanaInitial")
@@ -7857,7 +7919,6 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 				http.Error(w, "Failed to get dead stock list: "+dsErr.Error(), http.StatusInternalServerError)
 				return
 			}
-			// ▼▼▼【ここからが修正箇所です】▼▼▼
 			seenYjCodes := make(map[string]bool)
 			for _, group := range deadStockGroups {
 				for _, pkg := range group.PackageGroups {
@@ -7883,7 +7944,6 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 					}
 				}
 			}
-			// ▲▲▲【修正ここまで】▲▲▲
 		} else {
 			query := `SELECT ` + db.SelectColumns + ` FROM product_master p WHERE p.yj_code != ''`
 			var args []interface{}
@@ -7971,7 +8031,10 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(results)
 	}
+	return handler
 }
+
+// ▲▲▲【修正ここまで】▲▲▲
 
 type ProductLedgerResponse struct {
 	LedgerTransactions []model.LedgerTransaction `json:"ledgerTransactions"`
@@ -7985,20 +8048,61 @@ func GetProductLedgerHandler(conn *sql.DB) http.HandlerFunc {
 			http.Error(w, "Product code is required", http.StatusBadRequest)
 			return
 		}
-		txs, err := db.GetAllTransactionsForProductAfterDate(conn, productCode, "20000101")
+
+		// 1. productCodeから製品マスターを取得し、YJコードを得る
+		master, err := db.GetProductMasterByCode(conn, productCode)
 		if err != nil {
-			http.Error(w, "Failed to get transaction history: "+err.Error(), http.StatusInternalServerError)
+			http.Error(w, "Failed to get product master: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		var ledgerTxs []model.LedgerTransaction
-		var runningBalance float64
-		for _, tx := range txs {
-			runningBalance += tx.SignedYjQty()
-			ledgerTxs = append(ledgerTxs, model.LedgerTransaction{
-				TransactionRecord: tx,
-				RunningBalance:    runningBalance,
+		if master == nil {
+			// 製品マスターが存在しない場合は空のデータを返す
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(ProductLedgerResponse{
+				LedgerTransactions: []model.LedgerTransaction{},
+				PrecompDetails:     []model.TransactionRecord{},
 			})
+			return
 		}
+
+		// 2. GetStockLedgerを呼び出すためのフィルタを作成
+		//    全期間を対象とするため、開始日を過去、終了日を未来に設定
+		filters := model.AggregationFilters{
+			StartDate: "20000101",
+			EndDate:   "99991231",
+			YjCode:    master.YjCode,
+		}
+
+		// 3. 実績のある在庫計算ロジック(GetStockLedger)を呼び出す
+		results, err := db.GetStockLedger(conn, filters)
+		if err != nil {
+			http.Error(w, "Failed to get stock ledger: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		var ledgerTxs []model.LedgerTransaction
+
+		// 4. 結果から目的の製品の台帳データだけを抽出する
+	OuterLoop:
+		for _, yjGroup := range results {
+			if yjGroup.YjCode == master.YjCode {
+				for _, pkgGroup := range yjGroup.PackageLedgers {
+					for _, m := range pkgGroup.Masters {
+						if m.ProductCode == productCode {
+							ledgerTxs = pkgGroup.Transactions
+							break OuterLoop
+						}
+					}
+				}
+			}
+		}
+
+		if ledgerTxs == nil {
+			// GetStockLedgerでデータが見つからなかった場合（取引が全くないなど）
+			// 空のスライスを初期化
+			ledgerTxs = []model.LedgerTransaction{}
+		}
+
 		precomps, err := db.GetPreCompoundingDetailsByProductCodes(conn, []string{productCode})
 		if err != nil {
 			http.Error(w, "Failed to get precomp details: "+err.Error(), http.StatusInternalServerError)
@@ -8090,27 +8194,41 @@ func ProcessTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 				// 1. 最新のマスター情報をレコードにマッピング
 				mappers.MapProductMasterToTransaction(&rec, master)
 
-				// 2. 数量と金額を再計算
-				// YJ数量は「JAN数量 × 最新マスターの内包装数量」で再計算
+				// 2. 数量を再計算
 				if rec.JanQuantity > 0 && master.JanPackInnerQty > 0 {
 					rec.YjQuantity = rec.JanQuantity * master.JanPackInnerQty
-				}
-				// 金額は「新しいYJ数量 × 単価」で再計算
-				if rec.Flag == 3 { // 処方の場合
-					var unitNhiPrice float64
-					if master.YjPackUnitQty > 0 {
-						// DBのnhi_priceは包装薬価なので、ここで単価を計算
-						unitNhiPrice = master.NhiPrice / master.YjPackUnitQty
-					}
-					rec.Subtotal = rec.YjQuantity * unitNhiPrice
+				} else if rec.YjQuantity > 0 && rec.JanQuantity == 0 && master.JanPackInnerQty > 0 {
+					rec.JanQuantity = rec.YjQuantity / master.JanPackInnerQty
 				}
 
-				// 3. 処理ステータスを更新
+				// ▼▼▼【ここから金額再計算ロジックを修正】▼▼▼
+				// 3. 金額を再計算 (取引種別に応じてロジックを分岐)
+				switch rec.Flag {
+				case 0, 3, 4, 5: // 棚卸系(0,4,5)と処方(3)の場合
+					// 常にマスターの薬価(YJ単価)を正として単価と金額を再計算する
+					rec.UnitPrice = master.NhiPrice
+					rec.Subtotal = rec.YjQuantity * rec.UnitPrice
+				default: // その他の取引(納品、返品、入出庫など)
+					var unitPriceToUse float64
+					if rec.UnitPrice > 0 {
+						// 取引時に記録された単価を尊重する
+						unitPriceToUse = rec.UnitPrice
+					} else {
+						// 単価が記録されていない場合のみマスターの薬価を使用する
+						unitPriceToUse = master.NhiPrice
+						rec.UnitPrice = unitPriceToUse // レコードの単価も更新
+					}
+					// 金額は数量の変更を反映するために再計算する
+					rec.Subtotal = rec.YjQuantity * unitPriceToUse
+				}
+				// ▲▲▲【修正ここまで】▲▲▲
+
+				// 4. 処理ステータスを更新
 				if rec.ProcessFlagMA == "PROVISIONAL" && master.Origin == "JCSHMS" {
 					rec.ProcessFlagMA = "COMPLETE"
 				}
 
-				// 4. データベースを更新
+				// 5. データベースを更新
 				if err := db.UpdateFullTransactionInTx(tx, &rec); err != nil {
 					tx.Rollback()
 					http.Error(w, fmt.Sprintf("Failed to update record ID %d: %v", rec.ID, err), http.StatusInternalServerError)
@@ -9531,37 +9649,30 @@ export function initBackupButtons() {
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\common_table.js -----
 import { clientMap, wholesalerMap } from './master_data.js';
-// ▼▼▼ [修正点] getLocalDateString をインポート ▼▼▼
 import { getLocalDateString } from './utils.js';
-// ▲▲▲ 修正ここまで ▲▲▲
 
-export const transactionTypeMap = { 
-    0: "棚卸", 1: "納品", 2: "返品", 3: "処方", 4: "棚卸増", 
-    5: "棚卸減", 11: "入庫", 12: "出庫", 30: "月末", 
+export const transactionTypeMap = {
+	0: "棚卸", 1: "納品", 2: "返品", 3: "処方", 4: "棚卸増",
+	5: "棚卸減", 11: "入庫", 12: "出庫", 30: "月末",
 };
 
-function getClientOrWholesalerName(rec) { 
-    if (!rec.clientCode) return '';
-    if (rec.flag === 1 || rec.flag === 2) { 
-        return wholesalerMap.get(rec.clientCode) || rec.clientCode;
-    }
-    return clientMap.get(rec.clientCode) || rec.clientCode;
+function getClientOrWholesalerName(rec) {
+	if (!rec.clientCode) return '';
+	if (rec.flag === 1 || rec.flag === 2) {
+		return wholesalerMap.get(rec.clientCode) || rec.clientCode;
+	}
+	return clientMap.get(rec.clientCode) || rec.clientCode;
 }
 
-/**
- * [修正点]
- * 汎用性を高めるため、tbodyの中身を空にして返すように変更。
- * 呼び出し元で中身を結合して使用する。
- */
-export function createUploadTableHTML(tableId) { 
-  const colgroup = `
+export function createUploadTableHTML(tableId) {
+	const colgroup = `
     <colgroup>
       <col class="col-1"><col class="col-2"><col class="col-3"><col class="col-4"><col class="col-5">
       <col class="col-6"><col class="col-7"><col class="col-8"><col class="col-9"><col class="col-10">
       <col class="col-11"><col class="col-12"><col class="col-13"><col class="col-14">
     </colgroup>
   `;
-  const header = `
+	const header = `
     <thead>
       <tr>
         <th rowspan="2">－</th>
@@ -9576,39 +9687,31 @@ export function createUploadTableHTML(tableId) {
       </tr>
     </thead>
   `;
-  // 中身が空のtbodyを持つテーブルの骨格を返す
-  return `<table id="${tableId}" class="data-table">${colgroup}${header}<tbody></tbody></table>`;
+	return `<table id="${tableId}" class="data-table">${colgroup}${header}<tbody></tbody></table>`;
 }
 
-/**
- * [修正点]
- * DOMを直接操作するのをやめ、テーブルの中身となるHTML文字列を生成して返すように変更。
- * 引数からtableIdを削除。
- * @param {Array} records - 表示する取引記録の配列
- * @returns {string} 生成された <tr>...</tr> のHTML文字列
- */
 export function renderUploadTableRows(records) {
-  if (!records || records.length === 0) { 
-    return `<tr><td colspan="14">対象データがありません。</td></tr>`;
-  }
-  
-  const getTxClass = (flag) => {
-    switch (flag) {
-      case 2:
-        return 'tx-return';
-      case 0:
-      case 4:
-      case 5:
-        return 'tx-inventory';
-      default:
-        return '';
-    }
-  };
+	if (!records || records.length === 0) {
+		return `<tr><td colspan="14">対象データがありません。</td></tr>`;
+	}
 
-  let html = "";
-  records.forEach(rec => {
-    const rowClass = getTxClass(rec.flag);
-    html += `
+	const getTxClass = (flag) => {
+		switch (flag) {
+			case 2:
+				return 'tx-return';
+			case 0:
+			case 4:
+			case 5:
+				return 'tx-inventory';
+			default:
+				return '';
+		}
+	};
+
+	let html = "";
+	records.forEach(rec => {
+		const rowClass = getTxClass(rec.flag);
+		html += `
       <tr class="${rowClass}">
         <td rowspan="2"></td>
         <td>${rec.transactionDate || ""}</td>
@@ -9618,7 +9721,7 @@ export function renderUploadTableRows(records) {
         <td class="right">${rec.yjQuantity?.toFixed(2) || ""}</td>
         <td class="right">${rec.yjPackUnitQty || ""}</td>
         <td>${rec.yjUnitName || ""}</td>
-        <td class="right">${rec.unitPrice?.toFixed(4) || ""}</td>
+        <td class="right">${rec.unitPrice?.toFixed(2) || ""}</td>
         <td class="right">${rec.taxAmount?.toFixed(2) || ""}</td>
         <td>${rec.expiryDate || ""}</td>
         <td class="left">${getClientOrWholesalerName(rec)}</td>
@@ -9640,39 +9743,36 @@ export function renderUploadTableRows(records) {
         <td class="left">${rec.processFlagMA || ""}</td>
       </tr>
     `;
-  });
-  
-  // DOM操作の代わりにHTML文字列を返す
-  return html;
+	});
+
+	return html;
 }
 
-export function setupDateDropdown(inputEl) { 
-  if (!inputEl) return; 
-  inputEl.value = new Date().toISOString().slice(0, 10);
+export function setupDateDropdown(inputEl) {
+	if (!inputEl) return;
+	inputEl.value = new Date().toISOString().slice(0, 10);
 }
 
-export async function setupClientDropdown(selectEl) { 
-  // ▼▼▼ [修正点] 関数内の変数がすべて正しい `selectEl` を参照していることを確認 ▼▼▼
-  if (!selectEl) return; 
-  const preservedOptions = Array.from(selectEl.querySelectorAll('option[value=""]')); 
-  selectEl.innerHTML = ''; 
-  preservedOptions.forEach(opt => selectEl.appendChild(opt));
-  try { 
-    const res = await fetch('/api/clients'); 
-    if (!res.ok) throw new Error('Failed to fetch clients');
-    const clients = await res.json();
-    if (clients) { 
-      clients.forEach(c => { 
-        const opt = document.createElement('option'); 
-        opt.value = c.code; 
-        opt.textContent = `${c.code}:${c.name}`; 
-        selectEl.appendChild(opt); 
-      });
-    }
-  } catch (err) { 
-    console.error("得意先リストの取得に失敗:", err);
-  }
-  // ▲▲▲ 修正ここまで ▲▲▲
+export async function setupClientDropdown(selectEl) {
+	if (!selectEl) return;
+	const preservedOptions = Array.from(selectEl.querySelectorAll('option[value=""]'));
+	selectEl.innerHTML = '';
+	preservedOptions.forEach(opt => selectEl.appendChild(opt));
+	try {
+		const res = await fetch('/api/clients');
+		if (!res.ok) throw new Error('Failed to fetch clients');
+		const clients = await res.json();
+		if (clients) {
+			clients.forEach(c => {
+				const opt = document.createElement('option');
+				opt.value = c.code;
+				opt.textContent = `${c.code}:${c.name}`;
+				selectEl.appendChild(opt);
+			});
+		}
+	} catch (err) {
+		console.error("得意先リストの取得に失敗:", err);
+	}
 }
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\dat.js -----

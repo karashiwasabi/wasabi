@@ -229,8 +229,12 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 						}
 					}
 
-					// 棚卸(flag=0)以外の取引は変動量を加算する。
-					if t.Flag != 0 {
+					// 棚卸(flag=0)の場合はその日の棚卸合計値で残高を上書きし、それ以外は変動量を加算する
+					if t.Flag == 0 {
+						if inventorySum, ok := periodInventorySums[t.TransactionDate]; ok {
+							runningBalance = inventorySum
+						}
+					} else {
 						runningBalance += t.SignedYjQty()
 					}
 
@@ -242,13 +246,6 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 						maxUsage = t.YjQuantity
 					}
 					lastProcessedDate = t.TransactionDate
-				}
-			}
-
-			// ループ終了後、最終処理日に棚卸があった場合は、その値で最終在庫を確定させる
-			if lastProcessedDate != "" {
-				if inventorySum, ok := periodInventorySums[lastProcessedDate]; ok {
-					runningBalance = inventorySum
 				}
 			}
 			// ▲▲▲【修正ここまで】▲▲▲

@@ -21,8 +21,9 @@ func toHiragana(s string) string { return s }
 
 var kanaVariants = map[rune][]rune{}
 
+// SearchProductsHandler は変更ありません
 func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		dosageForm := q.Get("dosageForm")
 		kanaInitial := q.Get("kanaInitial")
@@ -53,7 +54,6 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 				http.Error(w, "Failed to get dead stock list: "+dsErr.Error(), http.StatusInternalServerError)
 				return
 			}
-			// ▼▼▼【ここからが修正箇所です】▼▼▼
 			seenYjCodes := make(map[string]bool)
 			for _, group := range deadStockGroups {
 				for _, pkg := range group.PackageGroups {
@@ -79,7 +79,6 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 					}
 				}
 			}
-			// ▲▲▲【修正ここまで】▲▲▲
 		} else {
 			query := `SELECT ` + db.SelectColumns + ` FROM product_master p WHERE p.yj_code != ''`
 			var args []interface{}
@@ -167,6 +166,7 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(results)
 	}
+	return handler
 }
 
 type ProductLedgerResponse struct {
@@ -174,6 +174,8 @@ type ProductLedgerResponse struct {
 	PrecompDetails     []model.TransactionRecord `json:"precompDetails"`
 }
 
+// ▼▼▼【ここから修正】▼▼▼
+// GetProductLedgerHandler の在庫計算ロジックを、棚卸を正しく反映するように修正します。
 func GetProductLedgerHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		productCode := strings.TrimPrefix(r.URL.Path, "/api/ledger/product/")
@@ -181,25 +183,103 @@ func GetProductLedgerHandler(conn *sql.DB) http.HandlerFunc {
 			http.Error(w, "Product code is required", http.StatusBadRequest)
 			return
 		}
-		txs, err := db.GetAllTransactionsForProductAfterDate(conn, productCode, "20000101")
+
+		// 1. 対象製品の全期間の取引を取得
+		txRows, err := conn.Query(`SELECT `+db.TransactionColumns+` FROM transaction_records WHERE jan_code = ? ORDER BY transaction_date, id`, productCode)
 		if err != nil {
-			http.Error(w, "Failed to get transaction history: "+err.Error(), http.StatusInternalServerError)
+			http.Error(w, "Failed to get transactions for product: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		var ledgerTxs []model.LedgerTransaction
-		var runningBalance float64
-		for _, tx := range txs {
-			runningBalance += tx.SignedYjQty()
-			ledgerTxs = append(ledgerTxs, model.LedgerTransaction{
-				TransactionRecord: tx,
-				RunningBalance:    runningBalance,
-			})
+		defer txRows.Close()
+
+		var allTxsForProduct []*model.TransactionRecord
+		for txRows.Next() {
+			t, err := db.ScanTransactionRecord(txRows)
+			if err != nil {
+				http.Error(w, "Failed to scan transaction record: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			allTxsForProduct = append(allTxsForProduct, t)
 		}
+
+		// 2. 表示期間を設定（直近30日間とする）
+		endDate := time.Now()
+		startDate := endDate.AddDate(0, 0, -30)
+		startDateStr := startDate.Format("20060102")
+		endDateStr := endDate.Format("20060102")
+
+		// 3. 期間前在庫（繰越在庫）を計算
+		var startingBalance float64
+		latestInventoryDateBeforePeriod := ""
+		txsBeforePeriod := []*model.TransactionRecord{}
+		inventorySumsByDate := make(map[string]float64)
+
+		for _, t := range allTxsForProduct {
+			if t.TransactionDate < startDateStr {
+				txsBeforePeriod = append(txsBeforePeriod, t)
+				if t.Flag == 0 { // 棚卸レコード
+					inventorySumsByDate[t.TransactionDate] += t.YjQuantity
+					if t.TransactionDate > latestInventoryDateBeforePeriod {
+						latestInventoryDateBeforePeriod = t.TransactionDate
+					}
+				}
+			}
+		}
+
+		if latestInventoryDateBeforePeriod != "" {
+			startingBalance = inventorySumsByDate[latestInventoryDateBeforePeriod]
+			for _, t := range txsBeforePeriod {
+				if t.TransactionDate > latestInventoryDateBeforePeriod {
+					startingBalance += t.SignedYjQty()
+				}
+			}
+		} else {
+			for _, t := range txsBeforePeriod {
+				startingBalance += t.SignedYjQty()
+			}
+		}
+
+		// 4. 期間内の変動と残高を計算
+		var ledgerTxs []model.LedgerTransaction
+		runningBalance := startingBalance
+
+		periodInventorySums := make(map[string]float64)
+		for _, t := range allTxsForProduct {
+			if t.TransactionDate >= startDateStr && t.TransactionDate <= endDateStr && t.Flag == 0 {
+				periodInventorySums[t.TransactionDate] += t.YjQuantity
+			}
+		}
+
+		lastProcessedDate := ""
+		for _, t := range allTxsForProduct {
+			if t.TransactionDate >= startDateStr && t.TransactionDate <= endDateStr {
+				if t.TransactionDate != lastProcessedDate && lastProcessedDate != "" {
+					if inventorySum, ok := periodInventorySums[lastProcessedDate]; ok {
+						runningBalance = inventorySum
+					}
+				}
+
+				// 棚卸(flag=0)の場合はその日の棚卸合計値で残高を上書きし、それ以外は変動量を加算する
+				if t.Flag == 0 {
+					if inventorySum, ok := periodInventorySums[t.TransactionDate]; ok {
+						runningBalance = inventorySum
+					}
+				} else {
+					runningBalance += t.SignedYjQty()
+				}
+
+				ledgerTxs = append(ledgerTxs, model.LedgerTransaction{TransactionRecord: *t, RunningBalance: runningBalance})
+				lastProcessedDate = t.TransactionDate
+			}
+		}
+
+		// 5. 関連する予製引当を取得
 		precomps, err := db.GetPreCompoundingDetailsByProductCodes(conn, []string{productCode})
 		if err != nil {
 			http.Error(w, "Failed to get precomp details: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(ProductLedgerResponse{
 			LedgerTransactions: ledgerTxs,
@@ -207,3 +287,5 @@ func GetProductLedgerHandler(conn *sql.DB) http.HandlerFunc {
 		})
 	}
 }
+
+// ▲▲▲【修正ここまで】▲▲▲

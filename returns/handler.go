@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort" // 👈 インポートを追加
 	"strconv"
 	"strings"
 	"time"
@@ -58,14 +59,6 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// ▼▼▼【修正】発注残の取得処理を削除 ▼▼▼
-		// backordersMap, err := db.GetAllBackordersMap(conn)
-		// if err != nil {
-		// 	http.Error(w, "Failed to get backorders map: "+err.Error(), http.StatusInternalServerError)
-		// 	return
-		// }
-		// ▲▲▲【修正ここまで】▲▲▲
-
 		var returnCandidates []model.StockLedgerYJGroup
 		for _, group := range yjGroups {
 			var returnablePackages []model.StockLedgerPackageGroup
@@ -80,10 +73,7 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 					productCodesInPackage = append(productCodesInPackage, master.ProductCode)
 				}
 
-				// ▼▼▼【修正】有効在庫の計算から発注残(backorderQty)を除外 ▼▼▼
-				// backorderQty := backordersMap[pkg.PackageKey]
-				trueEffectiveBalance := currentStockForPackage // + backorderQty
-				// ▲▲▲【修正ここまで】▲▲▲
+				trueEffectiveBalance := currentStockForPackage
 
 				// ステップ4: 「発注点」と「今現在の有効在庫」を比較する
 				if len(pkg.Masters) > 0 {
@@ -112,6 +102,44 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 				returnCandidates = append(returnCandidates, newGroup)
 			}
 		}
+
+		// ▼▼▼【ここから追加】▼▼▼
+		// 返品候補リストを剤型優先、次にカナ名順でソートする
+		sort.Slice(returnCandidates, func(i, j int) bool {
+			prio := map[string]int{
+				"1": 1, "内": 1, "2": 2, "外": 2, "3": 3, "注": 3,
+				"4": 4, "歯": 4, "5": 5, "機": 5, "6": 6, "他": 6,
+			}
+
+			// 各YJグループから代表のマスターを取得する
+			var masterI, masterJ *model.ProductMaster
+			if len(returnCandidates[i].PackageLedgers) > 0 && len(returnCandidates[i].PackageLedgers[0].Masters) > 0 {
+				masterI = returnCandidates[i].PackageLedgers[0].Masters[0]
+			}
+			if len(returnCandidates[j].PackageLedgers) > 0 && len(returnCandidates[j].PackageLedgers[0].Masters) > 0 {
+				masterJ = returnCandidates[j].PackageLedgers[0].Masters[0]
+			}
+
+			// マスターが取得できなかった場合はYJコードで比較する
+			if masterI == nil || masterJ == nil {
+				return returnCandidates[i].YjCode < returnCandidates[j].YjCode
+			}
+
+			prioI, okI := prio[strings.TrimSpace(masterI.UsageClassification)]
+			if !okI {
+				prioI = 7
+			}
+			prioJ, okJ := prio[strings.TrimSpace(masterJ.UsageClassification)]
+			if !okJ {
+				prioJ = 7
+			}
+
+			if prioI != prioJ {
+				return prioI < prioJ
+			}
+			return masterI.KanaName < masterJ.KanaName
+		})
+		// ▲▲▲【追加ここまで】▲▲▲
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(returnCandidates)

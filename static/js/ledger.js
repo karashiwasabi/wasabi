@@ -27,6 +27,58 @@ function getSignedYjQty(record) {
 }
 
 /**
+ * 最新の棚卸を基点に、在庫を再計算し、日付降順のリストを返す
+ * @param {Array} transactions - サーバーから受け取った昇順の取引リスト
+ * @returns {Array} - 在庫を再計算し、降順にソートされた取引リスト
+ */
+function recalculateBalancesForDescendingView(transactions) {
+    if (!transactions || transactions.length === 0) {
+        return [];
+    }
+
+    // サーバーから来た昇順のデータを深いコピー
+    let recalculatedTxs = JSON.parse(JSON.stringify(transactions));
+
+    // 1. 最新の棚卸レコードのインデックスを探す
+    let latestInventoryIndex = -1;
+    for (let i = recalculatedTxs.length - 1; i >= 0; i--) {
+        if (recalculatedTxs[i].flag === 0) {
+            latestInventoryIndex = i;
+            break;
+        }
+    }
+
+    if (latestInventoryIndex !== -1) {
+        // ---【A】期間内に最新の棚卸がある場合 ---
+
+        // a. 棚卸レコード自体の在庫を、その棚卸数量で確定させる
+        recalculatedTxs[latestInventoryIndex].runningBalance = recalculatedTxs[latestInventoryIndex].yjQuantity;
+
+        // b. 棚卸日より未来の在庫を、棚卸在庫を基点に再計算（昇順）
+        for (let i = latestInventoryIndex + 1; i < recalculatedTxs.length; i++) {
+            recalculatedTxs[i].runningBalance = recalculatedTxs[i - 1].runningBalance + getSignedYjQty(recalculatedTxs[i]);
+        }
+
+        // c. 棚卸日より過去の在庫を、棚卸在庫を基点に再計算（逆算）
+        for (let i = latestInventoryIndex - 1; i >= 0; i--) {
+            recalculatedTxs[i].runningBalance = recalculatedTxs[i + 1].runningBalance - getSignedYjQty(recalculatedTxs[i + 1]);
+        }
+
+    } else {
+        // ---【B】期間内に棚卸がない場合 ---
+        
+        // サーバーが計算した最終在庫（昇順での最後のレコード）を基点に、全て過去に遡って逆算する
+        // 最後のレコードの在庫は正しいので、ループは最後から2番目の要素から開始する
+        for (let i = recalculatedTxs.length - 2; i >= 0; i--) {
+            recalculatedTxs[i].runningBalance = recalculatedTxs[i + 1].runningBalance - getSignedYjQty(recalculatedTxs[i + 1]);
+        }
+    }
+
+    // 表示のために配列を降順に並べ替える
+    return recalculatedTxs.reverse();
+}
+
+/**
  * 予製情報テーブルを含む、台帳ビュー全体のHTMLを生成して描画する
  */
 function renderLedgerView() {
@@ -35,13 +87,16 @@ function renderLedgerView() {
         return;
     }
 
-    const ledgerHtml = renderLedgerTable(lastLoadedData.ledgerTransactions);
+    // 新しいロジックで在庫を再計算し、日付降順のリストを取得
+    const descendingTransactions = recalculateBalancesForDescendingView(lastLoadedData.ledgerTransactions);
+
+    const ledgerHtml = renderLedgerTable(descendingTransactions); // 降順リストでテーブル描画
     const precompHtml = renderPrecompDetails(lastLoadedData.precompDetails);
     
-    // 最終在庫サマリー
-    const finalTheoreticalStock = lastLoadedData.ledgerTransactions.length > 0
-        ? lastLoadedData.ledgerTransactions[lastLoadedData.ledgerTransactions.length - 1].runningBalance
-        : (lastLoadedData.precompDetails.length > 0 ? 0 : 0); // 予備計算
+    // 最終在庫サマリー（最も新しい取引の在庫）
+    const finalTheoreticalStock = descendingTransactions.length > 0
+        ? descendingTransactions[0].runningBalance // 降順なので最初の要素
+        : 0;
 
     const summaryHtml = `
         <div style="text-align: right; margin-top: 20px; padding-top: 10px; border-top: 2px solid #333; font-weight: bold;">
@@ -155,29 +210,27 @@ function updateRealStock() {
         precompTotal += parseFloat(checkbox.dataset.quantity || 0);
     });
 
-    let finalTheoreticalStock = 0;
-    const ledgerRows = outputContainer.querySelectorAll('tr.ledger-row');
-    if (ledgerRows.length > 0) {
-        ledgerRows.forEach(row => {
-            const theoreticalStock = parseFloat(row.dataset.theoreticalStock);
-            const realStock = theoreticalStock - precompTotal;
-            row.querySelector('.real-stock-cell').textContent = realStock.toFixed(2);
-        });
-        finalTheoreticalStock = parseFloat(ledgerRows[ledgerRows.length - 1].dataset.theoreticalStock);
-    } else {
-        // 取引履歴がない場合も最終理論在庫を取得する
-        const finalStockEl = document.getElementById('final-theoretical-stock');
-        if (finalStockEl) {
-            finalTheoreticalStock = parseFloat(finalStockEl.textContent);
-        }
-    }
-    
-    // サマリーを更新
+    // 予製合計サマリーを更新
     const totalPrecompEl = document.getElementById('total-precomp-stock');
-    const finalRealStockEl = document.getElementById('final-real-stock');
     if (totalPrecompEl) totalPrecompEl.textContent = precompTotal.toFixed(2);
-    if (finalRealStockEl) finalRealStockEl.textContent = (finalTheoreticalStock - precompTotal).toFixed(2);
+
+    // 各行の実在庫を更新
+    const ledgerRows = outputContainer.querySelectorAll('tr.ledger-row');
+    ledgerRows.forEach(row => {
+        const theoreticalStock = parseFloat(row.dataset.theoreticalStock);
+        const realStock = theoreticalStock - precompTotal;
+        row.querySelector('.real-stock-cell').textContent = realStock.toFixed(2);
+    });
+
+    // 最終実在庫サマリーを更新
+    const finalRealStockEl = document.getElementById('final-real-stock');
+    if (finalRealStockEl) {
+        const finalTheoreticalStockEl = document.getElementById('final-theoretical-stock');
+        const finalTheoreticalStock = finalTheoreticalStockEl ? parseFloat(finalTheoreticalStockEl.textContent) : 0;
+        finalRealStockEl.textContent = (finalTheoreticalStock - precompTotal).toFixed(2);
+    }
 }
+
 
 /**
  * 指定された製品コードの台帳データをサーバーから取得して描画する
@@ -193,7 +246,10 @@ async function loadLedgerForProduct(productCode) {
             throw new Error(errText || '台帳データの取得に失敗しました。');
         }
         lastLoadedData = await res.json();
+        
+        // 通常のビューを描画する
         renderLedgerView();
+
     } catch (err) {
         outputContainer.innerHTML = `<p style="color:red;">${err.message}</p>`;
     } finally {
