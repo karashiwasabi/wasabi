@@ -1,9 +1,10 @@
-// C:\Dev\WASABI\static\js\inout_modal.js
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\inout_modal.js
 
 import { hiraganaToKatakana } from './utils.js';
 
 let activeCallback = null;
 let activeRowElement = null;
+let skipQueryLengthCheck = false; 
 
 const DEFAULT_SEARCH_API = '/api/products/search';
 const modal = document.getElementById('search-modal');
@@ -13,7 +14,7 @@ const searchBtn = document.getElementById('product-search-btn');
 const searchResultsBody = document.querySelector('#search-results-table tbody');
 
 function hideModal() {
-    if (modal) {
+  if (modal) {
         modal.classList.add('hidden');
         document.body.classList.remove('modal-open');
     }
@@ -30,27 +31,21 @@ function handleResultClick(event) {
 }
 
 async function performSearch() {
-  // ▼▼▼ [修正点] 検索実行時にカナ変換 ▼▼▼
   const query = hiraganaToKatakana(searchInput.value.trim());
-  // ▲▲▲ 修正ここまで ▲▲▲
-   // ▼▼▼【ここから修正】▼▼▼
-  // 検索文字が2文字未満の場合はAPIを呼び出さずに処理を中断する
-  if (query.length < 2) {
+  
+  if (!skipQueryLengthCheck && query.length < 2) {
     alert('検索キーワードを2文字以上入力してください。');
-    // 検索結果をクリアしてメッセージを表示
     searchResultsBody.innerHTML = '<tr><td colspan="6" class="center">2文字以上入力して検索してください。</td></tr>';
     return;
   }
-  // ▲▲▲【修正ここまで】▲▲▲
+  
   const searchApi = modal.dataset.searchApi || DEFAULT_SEARCH_API;
   searchResultsBody.innerHTML = '<tr><td colspan="6" class="center">検索中...</td></tr>';
-  
-  // ▼▼▼ [修正点] URLの組み立てロジックを修正 ▼▼▼
+
   try {
     const separator = searchApi.includes('?') ? '&' : '?';
-    const fullUrl = query ? `${searchApi}${separator}q=${encodeURIComponent(query)}` : searchApi;
+    const fullUrl = `${searchApi}${separator}q=${encodeURIComponent(query)}`;
     const res = await fetch(fullUrl);
-  // ▲▲▲ 修正ここまで ▲▲▲
 
     if (!res.ok) {
         throw new Error(`サーバーエラー: ${res.status}`);
@@ -91,7 +86,7 @@ export function initModal() {
     return;
   }
   closeModalBtn.addEventListener('click', hideModal);
-  searchBtn.addEventListener('click', performSearch);
+  searchBtn.addEventListener('click', () => performSearch());
   searchInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -107,16 +102,17 @@ export function showModal(rowElement, callback, options = {}) {
     activeRowElement = rowElement;
     activeCallback = callback; 
     
+    skipQueryLengthCheck = options.skipQueryLengthCheck || false;
+    searchInput.placeholder = skipQueryLengthCheck ? '製品名またはカナ名（絞り込みフィルタ有効）' : '製品名またはカナ名（2文字以上）';
+    
     const searchApi = options.searchApi || DEFAULT_SEARCH_API;
     modal.dataset.searchApi = searchApi;
     
     modal.classList.remove('hidden');
     searchInput.value = '';
-    // ▼▼▼ [修正点] focus()をsetTimeoutで囲む ▼▼▼
     setTimeout(() => {
         searchInput.focus();
     }, 0);
-    // ▲▲▲ 修正ここまで ▲▲▲
 
     if (options.initialResults) {
         renderSearchResults(options.initialResults);

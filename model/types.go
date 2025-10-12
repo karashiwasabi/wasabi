@@ -87,7 +87,7 @@ type JCShms struct {
 	JC064 int
 	JC065 int
 	JC066 int
-	JC122 string // この行を追加
+	JC122 string
 	JA006 sql.NullFloat64
 	JA007 sql.NullString
 	JA008 sql.NullFloat64
@@ -191,6 +191,7 @@ type AggregationFilters struct {
 	Coefficient  float64
 	YjCode       string
 	MovementOnly bool
+	ShelfNumber  string
 }
 
 type ValuationFilters struct {
@@ -271,11 +272,9 @@ type DeadStockPackageGroup struct {
 
 type DeadStockProduct struct {
 	ProductMaster
-	CurrentStock float64           `json:"currentStock"`
-	SavedRecords []DeadStockRecord `json:"savedRecords"`
-	// ▼▼▼【ここに追加】▼▼▼
-	LastUsageDate string `json:"lastUsageDate"`
-	// ▲▲▲【追加ここまで】▲▲▲
+	CurrentStock  float64           `json:"currentStock"`
+	SavedRecords  []DeadStockRecord `json:"savedRecords"`
+	LastUsageDate string            `json:"lastUsageDate"`
 }
 
 type DeadStockRecord struct {
@@ -297,6 +296,7 @@ type DeadStockFilters struct {
 	Coefficient      float64
 	KanaName         string
 	DosageForm       string
+	ShelfNumber      string
 }
 
 type PreCompoundingRecord struct {

@@ -1,3 +1,4 @@
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\orders\handlee.go
 package orders
 
 import (
@@ -13,64 +14,56 @@ import (
 	"wasabi/units"
 )
 
-// OrderCandidatesResponse は発注準備画面へのレスポンスの構造体です。
 type OrderCandidatesResponse struct {
 	Candidates  []OrderCandidateYJGroup `json:"candidates"`
 	Wholesalers []model.Wholesaler      `json:"wholesalers"`
 }
 
-// OrderCandidateYJGroup は表示用に変換されたYJグループです。
 type OrderCandidateYJGroup struct {
 	model.StockLedgerYJGroup
 	PackageLedgers []OrderCandidatePackageGroup `json:"packageLedgers"`
 }
 
-// OrderCandidatePackageGroup は表示用に変換された包装グループです。
 type OrderCandidatePackageGroup struct {
 	model.StockLedgerPackageGroup
 	Masters []model.ProductMasterView `json:"masters"`
 }
 
-// GenerateOrderCandidatesHandler は発注候補を生成して返します。
 func GenerateOrderCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// ▼▼▼【ここから修正】▼▼▼
 		kanaName := r.URL.Query().Get("kanaName")
 		dosageForm := r.URL.Query().Get("dosageForm")
+		shelfNumber := r.URL.Query().Get("shelfNumber")
 		coefficientStr := r.URL.Query().Get("coefficient")
 		coefficient, err := strconv.ParseFloat(coefficientStr, 64)
 		if err != nil {
 			coefficient = 1.3
 		}
 
-		// 設定ファイルから集計日数を読み込む
 		cfg, err := config.LoadConfig()
 		if err != nil {
 			http.Error(w, "設定ファイルの読み込みに失敗しました: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		// 日数から期間を動的に計算
 		now := time.Now()
-		endDate := "99991231" // 終了日は無制限
+		endDate := "99991231"
 		startDate := now.AddDate(0, 0, -cfg.CalculationPeriodDays)
 
-		// パラメータをフィルタ用の構造体にまとめる
 		filters := model.AggregationFilters{
 			StartDate:   startDate.Format("20060102"),
 			EndDate:     endDate,
 			KanaName:    kanaName,
 			DosageForm:  dosageForm,
+			ShelfNumber: shelfNumber,
 			Coefficient: coefficient,
 		}
 
-		// 構造体を使って関数を呼び出す
 		yjGroups, err := db.GetStockLedger(conn, filters)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// ▲▲▲【修正ここまで】▲▲▲
 
 		var candidates []OrderCandidateYJGroup
 		for _, group := range yjGroups {
@@ -107,14 +100,12 @@ func GenerateOrderCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 			}
 		}
 
-		// データベースから全卸業者リストを取得
 		wholesalers, err := db.GetAllWholesalers(conn)
 		if err != nil {
 			http.Error(w, "Failed to get wholesalers", http.StatusInternalServerError)
 			return
 		}
 
-		// 発注候補と卸業者リストをまとめてレスポンスを作成
 		response := OrderCandidatesResponse{
 			Candidates:  candidates,
 			Wholesalers: wholesalers,
@@ -125,7 +116,6 @@ func GenerateOrderCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// PlaceOrderHandler は発注内容を受け取り、発注残テーブルに登録します。
 func PlaceOrderHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var payload []model.Backorder

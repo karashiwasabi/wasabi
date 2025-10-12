@@ -1,3 +1,4 @@
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\deadstock\handler.go
 package deadstock
 
 import (
@@ -36,6 +37,7 @@ func GetDeadStockHandler(conn *sql.DB) http.HandlerFunc {
 		endDate := "99999999"
 		startDate := now.AddDate(0, 0, -cfg.CalculationPeriodDays)
 
+		// ▼▼▼【ここから修正】▼▼▼
 		filters := model.DeadStockFilters{
 			StartDate:        startDate.Format("20060102"),
 			EndDate:          endDate,
@@ -43,7 +45,9 @@ func GetDeadStockHandler(conn *sql.DB) http.HandlerFunc {
 			Coefficient:      coefficient,
 			KanaName:         q.Get("kanaName"),
 			DosageForm:       q.Get("dosageForm"),
+			ShelfNumber:      q.Get("shelfNumber"), // shelfNumber を追加
 		}
+		// ▲▲▲【修正ここまで】▲▲▲
 
 		results, err := db.GetDeadStockList(conn, filters)
 		if err != nil {
@@ -215,6 +219,7 @@ func ExportDeadStockHandler(conn *sql.DB) http.HandlerFunc {
 			ExcludeZeroStock: q.Get("excludeZeroStock") == "true",
 			KanaName:         q.Get("kanaName"),
 			DosageForm:       q.Get("dosageForm"),
+			ShelfNumber:      q.Get("shelfNumber"), // shelfNumber を追加
 		}
 
 		results, err := db.GetDeadStockList(conn, filters)

@@ -100,40 +100,53 @@
 <div id="inventory-adjustment-view" class="hidden inout-view-container">
     <p class="view-title">棚卸調整</p>
     <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
-        <div class="field-group">
-            <label for="ia-dosageForm">1. 剤型で絞り込み</label>
-            <select id="ia-dosageForm">
-                <option value="">すべて</option>
-                <option value="内">内</option>
-                <option value="外">外</option>
-                <option value="歯">歯</option>
-                <option value="注">注</option>
-                <option value="機">機</option>
-                <option value="他">他</option>
-            </select>
-        </div>
-        <div class="field-group">
-            <label for="ia-kanaInitial">2. カナ名 (頭文字)</label>
-            <select id="ia-kanaInitial">
-                <option value="">すべて</option>
-                <option value="ア">ア行</option>
-                <option value="カ">カ行</option>
-                <option value="サ">サ行</option>
-                <option value="タ">タ行</option>
-                <option value="ナ">ナ行</option>
-                <option value="ハ">ハ行</option>
-                <option value="マ">マ行</option>
-                <option value="ヤ">ヤ行</option>
-                <option value="ラ">ラ行</option>
-                <option value="ワ">ワ行</option>
-            </select>
-        </div>
-        <div class="field-group">
-            <label><input type="checkbox" id="ia-dead-stock-only"> デッドリストのみ</label>
-        </div>
-        <div class="field-group">
-            <label>3. 品目を選択</label>
-            <button id="ia-select-product-btn" class="btn">品目を選択...</button>
+        <form id="ia-barcode-form" style="width: 100%; margin-bottom: 15px;">
+            <div class="field-group">
+                <label for="ia-barcode-input" style="font-weight: bold; font-size: 1.1em;">バーコード入力</label>
+                <input type="text" id="ia-barcode-input" inputmode="latin" placeholder="バーコードをスキャンするか、JAN/GS1コードを入力してEnter" style="font-size: 1.2em; padding: 8px; ime-mode: disabled;">
+            </div>
+        </form>
+        
+        <div style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; width: 100%;">
+            <div class="field-group">
+                <label for="ia-dosageForm">1. 剤型で絞り込み</label>
+                <select id="ia-dosageForm">
+                    <option value="">すべて</option>
+                    <option value="内">内</option>
+                    <option value="外">外</option>
+                    <option value="歯">歯</option>
+                    <option value="注">注</option>
+                    <option value="機">機</option>
+                    <option value="他">他</option>
+                </select>
+            </div>
+            <div class="field-group">
+                <label for="ia-kanaInitial">2. カナ名 (頭文字)</label>
+                <select id="ia-kanaInitial">
+                    <option value="">すべて</option>
+                    <option value="ア">ア行</option>
+                    <option value="カ">カ行</option>
+                    <option value="サ">サ行</option>
+                    <option value="タ">タ行</option>
+                    <option value="ナ">ナ行</option>
+                    <option value="ハ">ハ行</option>
+                    <option value="マ">マ行</option>
+                    <option value="ヤ">ヤ行</option>
+                    <option value="ラ">ラ行</option>
+                    <option value="ワ">ワ行</option>
+                </select>
+            </div>
+            <div class="field-group">
+                <label for="ia-shelf-number">棚番</label>
+                <input type="text" id="ia-shelf-number" placeholder="（部分一致）">
+            </div>
+            <div class="field-group">
+                <label><input type="checkbox" id="ia-dead-stock-only"> デッドリストのみ</label>
+            </div>
+            <div class="field-group">
+                <label>3. 品目を選択</label>
+                <button id="ia-select-product-btn" class="btn">品目を選択...</button>
+            </div>
         </div>
     </div>
     <div id="inventory-adjustment-output">
@@ -148,7 +161,7 @@
         <button id="closeModalBtn" class="close-button">&times;</button>
         </div>
         <div style="display: flex; gap: 5px; margin-bottom: 10px;">
-        <input type="text" id="product-search-input" placeholder="製品名またはカナ名（2文字以上）" style="flex-grow: 1; padding: 5px;">
+        <input type="text" id="product-search-input" placeholder="製品名またはカナ名" style="flex-grow: 1; padding: 5px;">
         <button id="product-search-btn" class="btn">検索</button>
         </div>
         <div class="modal-body" id="search-results-container">
@@ -177,6 +190,10 @@
                 <option value="機">機</option>
                 <option value="他">他</option>
             </select>
+        </div>
+        <div class="field-group">
+            <label for="master-edit-shelfNumber">棚番</label>
+            <input type="text" id="master-edit-shelfNumber" placeholder="（部分一致）">
         </div>
         <div class="buttons-group" style="margin-left: auto;">
             <button id="addMasterRowBtn" class="btn">新規行を追加</button>
@@ -222,7 +239,7 @@
             </div>
             <div class="field-group">
                 <label for="emednetPassword">パスワード</label>
-                 <input type="password" id="emednetPassword" style="width: 300px;">
+                <input type="password" id="emednetPassword" style="width: 300px;">
             </div>
         </fieldset>
 
@@ -349,6 +366,10 @@
             </select>
         </div>
         <div class="field-group">
+            <label for="ds-shelf-number">棚番</label>
+            <input type="text" id="ds-shelf-number" placeholder="（部分一致）">
+        </div>
+        <div class="field-group">
             <label><input type="checkbox" id="ds-exclude-zero-stock"> 在庫が0の品目を除外</label>
         </div>
         <div class="buttons-group">
@@ -364,6 +385,12 @@
 
 <div id="order-view" class="hidden">
     <div class="controls-grid" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
+        <form id="order-barcode-form" style="width: 100%; margin-bottom: 10px; border-bottom: 1px solid #ccc; padding-bottom: 10px;">
+            <div class="field-group">
+                <label for="order-barcode-input" style="font-weight: bold;">バーコードで追加</label>
+                <input type="text" id="order-barcode-input" inputmode="latin" placeholder="バーコードをスキャンするか、GS1コードを入力してEnter" style="ime-mode: disabled;">
+            </div>
+        </form>
         <div class="field-group">
             <label for="order-kanaName">薬品名カナ</label>
             <input type="text" id="order-kanaName" placeholder="（前方一致）">
@@ -371,6 +398,10 @@
         <div class="field-group">
             <label for="order-dosageForm">剤形</label>
             <input type="text" id="order-dosageForm" placeholder="（部分一致）">
+        </div>
+        <div class="field-group">
+            <label for="order-shelf-number">棚番</label>
+            <input type="text" id="order-shelf-number" placeholder="（部分一致）">
         </div>
         <div class="field-group">
             <label for="order-reorder-coefficient">発注点係数</label>
@@ -423,7 +454,7 @@
                 <button id="pricing-bulk-update-btn" class="btn" style="background-color: #dc3545; color: white;">一覧の選択内容でマスターを一括更新</button>
             </fieldset>
 
-                        <fieldset style="border: 1px solid #ccc; padding: 10px;">
+            <fieldset style="border: 1px solid #ccc; padding: 10px;">
                 <legend>ステップ4: 納入価一括インポート</legend>
                 <div class="field-group">
                     <label for="pricing-direct-import-input">卸コードと納入価が入力済みのCSVファイルを選択</label>
@@ -451,7 +482,6 @@
 
 <div id="aggregation-view" class="hidden">
     <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
-            
             <div class="field-group">
                 <label for="agg-kanaName">製品名/カナ名</label>
                 <input type="text" id="agg-kanaName" placeholder="（部分一致）">
@@ -524,6 +554,7 @@
                 <button id="export-valuation-btn" class="btn">Excelエクスポート</button>
             </div>
         </div>
+        
         <div id="valuation-output-container">
             <p>評価基準日を指定して「計算実行」を押してください。</p>
         </div>
@@ -546,6 +577,10 @@
                     <option value="機">機</option>
                     <option value="他">他</option>
                 </select>
+            </div>
+            <div class="field-group">
+                <label for="ret-shelf-number">棚番</label>
+                <input type="text" id="ret-shelf-number" placeholder="（部分一致）">
             </div>
             <div class="field-group">
                 <label for="ret-coefficient">係数</label>
@@ -584,6 +619,10 @@
         <div class="field-group">
             <label>品目を選択</label>
             <button id="ledger-select-product-btn" class="btn">検索して選択...</button>
+        </div>
+        <div class="field-group">
+            <label for="ledger-shelf-number">棚番</label>
+            <input type="text" id="ledger-shelf-number" placeholder="（部分一致）">
         </div>
         <div class="field-group">
             <label>薬の種類</label>

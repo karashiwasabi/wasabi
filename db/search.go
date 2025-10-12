@@ -22,7 +22,6 @@ import (
  * アプリ内にまだ存在しない公式の医薬品マスターを探すために使用されます。
  */
 func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterView, error) {
-	// ▼▼▼【ここから修正】▼▼▼
 	const q = `
 		SELECT
 			j.JC000, j.JC009, j.JC018, j.JC022, j.JC030, j.JC013, j.JC037, j.JC039,
@@ -43,7 +42,6 @@ func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterVi
 			END,
 			j.JC022
 		LIMIT 500`
-	// ▲▲▲【修正ここまで】▲▲▲
 
 	rows, err := conn.Query(q, "%"+nameQuery+"%", "%"+nameQuery+"%")
 	if err != nil {
@@ -126,7 +124,19 @@ func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterVi
  */
 func SearchAllProductMastersByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterView, error) {
 	q := `SELECT ` + SelectColumns + ` FROM product_master 
-		  WHERE kana_name LIKE ? OR product_name LIKE ? ORDER BY kana_name LIMIT 500`
+		  WHERE kana_name LIKE ? OR product_name LIKE ? 
+		  ORDER BY
+			CASE
+				WHEN TRIM(usage_classification) = '内' OR TRIM(usage_classification) = '1' THEN 1
+				WHEN TRIM(usage_classification) = '外' OR TRIM(usage_classification) = '2' THEN 2
+				WHEN TRIM(usage_classification) = '注' OR TRIM(usage_classification) = '3' THEN 3
+				WHEN TRIM(usage_classification) = '歯' OR TRIM(usage_classification) = '4' THEN 4
+				WHEN TRIM(usage_classification) = '機' OR TRIM(usage_classification) = '5' THEN 5
+				WHEN TRIM(usage_classification) = '他' OR TRIM(usage_classification) = '6' THEN 6
+				ELSE 7
+			END,
+			kana_name
+		  LIMIT 500`
 
 	rows, err := conn.Query(q, "%"+nameQuery+"%", "%"+nameQuery+"%")
 	if err != nil {

@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort" // 👈 インポートを追加
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -42,6 +42,7 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 			EndDate:     endDate,
 			KanaName:    q.Get("kanaName"),
 			DosageForm:  q.Get("dosageForm"),
+			ShelfNumber: q.Get("shelfNumber"),
 			Coefficient: coefficient,
 		}
 
@@ -78,7 +79,10 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 				// ステップ4: 「発注点」と「今現在の有効在庫」を比較する
 				if len(pkg.Masters) > 0 {
 					yjPackUnitQty := pkg.Masters[0].YjPackUnitQty
-					if pkg.ReorderPoint > 0 && trueEffectiveBalance > (pkg.ReorderPoint+yjPackUnitQty) {
+					// ▼▼▼【ここから修正】▼▼▼
+					// 「発注点 > 0」の条件を削除
+					if trueEffectiveBalance > (pkg.ReorderPoint + yjPackUnitQty) {
+						// ▲▲▲【修正ここまで】▲▲▲
 
 						pkg.EffectiveEndingBalance = trueEffectiveBalance
 
@@ -103,7 +107,6 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 			}
 		}
 
-		// ▼▼▼【ここから追加】▼▼▼
 		// 返品候補リストを剤型優先、次にカナ名順でソートする
 		sort.Slice(returnCandidates, func(i, j int) bool {
 			prio := map[string]int{
@@ -111,7 +114,6 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 				"4": 4, "歯": 4, "5": 5, "機": 5, "6": 6, "他": 6,
 			}
 
-			// 各YJグループから代表のマスターを取得する
 			var masterI, masterJ *model.ProductMaster
 			if len(returnCandidates[i].PackageLedgers) > 0 && len(returnCandidates[i].PackageLedgers[0].Masters) > 0 {
 				masterI = returnCandidates[i].PackageLedgers[0].Masters[0]
@@ -120,7 +122,6 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 				masterJ = returnCandidates[j].PackageLedgers[0].Masters[0]
 			}
 
-			// マスターが取得できなかった場合はYJコードで比較する
 			if masterI == nil || masterJ == nil {
 				return returnCandidates[i].YjCode < returnCandidates[j].YjCode
 			}
@@ -139,7 +140,6 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 			}
 			return masterI.KanaName < masterJ.KanaName
 		})
-		// ▲▲▲【追加ここまで】▲▲▲
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(returnCandidates)

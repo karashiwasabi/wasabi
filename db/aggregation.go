@@ -42,6 +42,7 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 	}
 
 	// ステップ1: フィルターに合致する製品マスターを取得
+	// 検索対象を製品マスター(product_master)に厳密に限定
 	masterQuery := `SELECT ` + SelectColumns + ` FROM product_master p WHERE 1=1 `
 	var masterArgs []interface{}
 
@@ -58,6 +59,11 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 	if filters.DosageForm != "" && filters.DosageForm != "all" {
 		masterQuery += " AND p.usage_classification = ? "
 		masterArgs = append(masterArgs, filters.DosageForm)
+	}
+
+	if filters.ShelfNumber != "" {
+		masterQuery += " AND p.shelf_number LIKE ? "
+		masterArgs = append(masterArgs, "%"+filters.ShelfNumber+"%")
 	}
 
 	if len(filters.DrugTypes) > 0 && filters.DrugTypes[0] != "" {
@@ -104,26 +110,38 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		return []model.StockLedgerYJGroup{}, nil
 	}
 
-	// ステップ2: 関連する全期間のトランザクションを取得
-	var txArgs []interface{}
-	for _, pc := range productCodes {
-		txArgs = append(txArgs, pc)
-	}
-
+	// ステップ2: 関連する全期間のトランザクションを取得 (バッチ処理)
 	transactionsByProductCode := make(map[string][]*model.TransactionRecord)
-	if len(productCodes) > 0 {
-		txQuery := `SELECT ` + TransactionColumns + ` FROM transaction_records WHERE jan_code IN (?` + strings.Repeat(",?", len(productCodes)-1) + `) ORDER BY transaction_date, id`
-		txRows, err := conn.Query(txQuery, txArgs...)
-		if err != nil {
-			return nil, err
+	const batchSize = 500
+
+	for i := 0; i < len(productCodes); i += batchSize {
+		end := i + batchSize
+		if end > len(productCodes) {
+			end = len(productCodes)
 		}
-		defer txRows.Close()
-		for txRows.Next() {
-			t, err := ScanTransactionRecord(txRows)
-			if err != nil {
-				return nil, err
+		batch := productCodes[i:end]
+
+		if len(batch) > 0 {
+			txArgs := make([]interface{}, len(batch))
+			for j, pc := range batch {
+				txArgs[j] = pc
 			}
-			transactionsByProductCode[t.JanCode] = append(transactionsByProductCode[t.JanCode], t)
+
+			txQuery := `SELECT ` + TransactionColumns + ` FROM transaction_records WHERE jan_code IN (?` + strings.Repeat(",?", len(batch)-1) + `) ORDER BY transaction_date, id`
+			txRows, err := conn.Query(txQuery, txArgs...)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get transactions batch: %w", err)
+			}
+
+			for txRows.Next() {
+				t, err := ScanTransactionRecord(txRows)
+				if err != nil {
+					txRows.Close()
+					return nil, err
+				}
+				transactionsByProductCode[t.JanCode] = append(transactionsByProductCode[t.JanCode], t)
+			}
+			txRows.Close()
 		}
 	}
 
@@ -134,7 +152,6 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 			continue
 		}
 
-		// YJグループの代表製品名をJCSHMS由来のものから優先的に選択する
 		var representativeProductName string
 		var representativeYjUnitName string
 		if len(mastersInYjGroup) > 0 {
@@ -174,7 +191,6 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 				return allTxsForPackage[i].ID < allTxsForPackage[j].ID
 			})
 
-			// 期間前在庫（繰越在庫）を計算
 			var startingBalance float64
 			latestInventoryDateBeforePeriod := ""
 			txsBeforePeriod := []*model.TransactionRecord{}
@@ -183,7 +199,7 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 			for _, t := range allTxsForPackage {
 				if t.TransactionDate < filters.StartDate {
 					txsBeforePeriod = append(txsBeforePeriod, t)
-					if t.Flag == 0 { // 棚卸レコード
+					if t.Flag == 0 {
 						inventorySumsByDate[t.TransactionDate] += t.YjQuantity
 						if t.TransactionDate > latestInventoryDateBeforePeriod {
 							latestInventoryDateBeforePeriod = t.TransactionDate
@@ -205,13 +221,10 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 				}
 			}
 
-			// ▼▼▼【ここから全面的に修正】▼▼▼
-			// 期間内変動と最終在庫を計算するロジックを修正
 			var transactionsInPeriod []model.LedgerTransaction
 			var netChange, maxUsage float64
 			runningBalance := startingBalance
 
-			// 期間内の棚卸合計を日付ごとに事前計算
 			periodInventorySums := make(map[string]float64)
 			for _, t := range allTxsForPackage {
 				if t.TransactionDate >= filters.StartDate && t.TransactionDate <= filters.EndDate && t.Flag == 0 {
@@ -222,14 +235,12 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 			lastProcessedDate := ""
 			for _, t := range allTxsForPackage {
 				if t.TransactionDate >= filters.StartDate && t.TransactionDate <= filters.EndDate {
-					// 日付が変わったタイミングで、前の日に棚卸があったなら、その日の最終在庫として残高をリセット
 					if t.TransactionDate != lastProcessedDate && lastProcessedDate != "" {
 						if inventorySum, ok := periodInventorySums[lastProcessedDate]; ok {
 							runningBalance = inventorySum
 						}
 					}
 
-					// 棚卸(flag=0)の場合はその日の棚卸合計値で残高を上書きし、それ以外は変動量を加算する
 					if t.Flag == 0 {
 						if inventorySum, ok := periodInventorySums[t.TransactionDate]; ok {
 							runningBalance = inventorySum
@@ -240,15 +251,13 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 
 					transactionsInPeriod = append(transactionsInPeriod, model.LedgerTransaction{TransactionRecord: *t, RunningBalance: runningBalance})
 
-					// 純変動と最大使用量は全ての取引を対象に計算
 					netChange += t.SignedYjQty()
-					if t.Flag == 3 && t.YjQuantity > maxUsage { // 処方レコード
+					if t.Flag == 3 && t.YjQuantity > maxUsage {
 						maxUsage = t.YjQuantity
 					}
 					lastProcessedDate = t.TransactionDate
 				}
 			}
-			// ▲▲▲【修正ここまで】▲▲▲
 
 			backorderQty := backordersMap[key]
 			effectiveEndingBalance := runningBalance + backorderQty
@@ -310,7 +319,6 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		}
 	}
 
-	// 剤型とカナ名でソート
 	sort.Slice(result, func(i, j int) bool {
 		prio := map[string]int{
 			"1": 1, "内": 1, "2": 2, "外": 2, "3": 3, "注": 3,
@@ -332,14 +340,13 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		return masterI.KanaName < masterJ.KanaName
 	})
 
-	// 「期間内に動きがあった品目のみ」フィルタを適用
 	if filters.MovementOnly {
 		var filteredResult []model.StockLedgerYJGroup
 		for _, yjGroup := range result {
 			hasMovement := false
 			for _, pkg := range yjGroup.PackageLedgers {
 				for _, tx := range pkg.Transactions {
-					if tx.Flag != 0 { // flagが0（棚卸）以外のトランザクション
+					if tx.Flag != 0 {
 						hasMovement = true
 						break
 					}

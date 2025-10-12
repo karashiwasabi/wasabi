@@ -3,7 +3,7 @@
 import { hiraganaToKatakana, getLocalDateString } from './utils.js';
 import { showModal } from './inout_modal.js';
 
-let view, outputContainer, excludeZeroStockCheckbox, createCsvBtn, kanaNameInput, dosageFormInput, importBtn;
+let view, outputContainer, excludeZeroStockCheckbox, createCsvBtn, kanaNameInput, dosageFormInput, importBtn, shelfNumberInput;
 let unitMap = {};
 
 async function fetchUnitMap() {
@@ -17,7 +17,6 @@ async function fetchUnitMap() {
     }
 }
 
-// 包装仕様の文字列を生成するヘルパー関数
 function formatPackageSpec(master) {
     if (!master) return '';
     const yjUnitName = master.yjUnitName || '';
@@ -131,9 +130,8 @@ export async function initDeadStock() {
     importBtn = document.getElementById('import-deadstock-btn');
     const printBtn = document.getElementById('print-deadstock-btn');
     const printArea = document.getElementById('deadstock-print-area');
-    // ▼▼▼【ここから追加】▼▼▼
     const importDeadstockInput = document.getElementById('importDeadstockInput');
-    // ▲▲▲【追加ここまで】▲▲▲
+    shelfNumberInput = document.getElementById('ds-shelf-number');
 
     if (printBtn) {
         printBtn.addEventListener('click', () => {
@@ -201,6 +199,7 @@ export async function initDeadStock() {
                     excludeZeroStock: excludeZeroStockCheckbox.checked,
                     kanaName: hiraganaToKatakana(kanaNameInput.value),
                     dosageForm: dosageFormInput.value,
+                    shelfNumber: shelfNumberInput.value,
                 });
                 fetch(`/api/deadstock/list?${params.toString()}`)
                     .then(res => {
@@ -214,13 +213,13 @@ export async function initDeadStock() {
         }
     }
 
-    // ▼▼▼【ここから修正】▼▼▼
     if (createCsvBtn) {
         createCsvBtn.addEventListener('click', () => {
             const params = new URLSearchParams({
                 excludeZeroStock: excludeZeroStockCheckbox.checked,
                 kanaName: hiraganaToKatakana(kanaNameInput.value),
                 dosageForm: dosageFormInput.value,
+                shelfNumber: shelfNumberInput.value,
             });
             window.location.href = `/api/deadstock/export?${params.toString()}`;
         });
@@ -249,16 +248,14 @@ export async function initDeadStock() {
                     throw new Error(resData.message || 'インポートに失敗しました。');
                 }
                 window.showNotification(resData.message, 'success');
-                // インポート後にリストを再表示
                 view.querySelector('#run-dead-stock-btn').click();
             } catch (err) {
                 console.error(err);
                 window.showNotification(`エラー: ${err.message}`, 'error');
             } finally {
                 window.hideLoading();
-                event.target.value = ''; // ファイル入力をリセット
+                event.target.value = '';
             }
         });
     }
-    // ▲▲▲【修正ここまで】▲▲▲
 }

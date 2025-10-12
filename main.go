@@ -1,3 +1,4 @@
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\main.go
 package main
 
 import (
@@ -12,7 +13,7 @@ import (
 	"wasabi/aggregation"
 	"wasabi/backorder"
 	"wasabi/backup"
-	"wasabi/cleanup" // 👈 cleanupパッケージをインポート
+	"wasabi/cleanup"
 	"wasabi/client"
 	"wasabi/config"
 	"wasabi/dat"
@@ -60,11 +61,9 @@ func main() {
 		log.Fatalf("master data initialization failed: %v", err)
 	}
 
-	// ▼▼▼ [追加] データベースマイグレーションを実行 ▼▼▼
 	if err := db.ApplyMigrations(conn); err != nil {
 		log.Fatalf("database migration failed: %v", err)
 	}
-	// ▲▲▲ [追加ここまで] ▲▲▲
 
 	if _, err := units.LoadTANIFile("SOU/TANI.CSV"); err != nil {
 		log.Fatalf("tani master init failed: %v", err)
@@ -73,11 +72,8 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// ... (これ以降のAPIエンドポイントの登録処理は変更なし) ...
-	// ▼▼▼【ここに追加】▼▼▼
 	mux.HandleFunc("/api/masters/cleanup/candidates", cleanup.GetCandidatesHandler(conn))
 	mux.HandleFunc("/api/masters/cleanup/execute", cleanup.ExecuteCleanupHandler(conn))
-	// ▲▲▲【追加ここまで】▲▲▲
 	mux.HandleFunc("/api/clients", client.GetAllClientsHandler(conn))
 	mux.HandleFunc("/api/products/search", search.SearchJcshmsByNameHandler(conn))
 	mux.HandleFunc("/api/masters/search_all", search.SearchAllMastersHandler(conn))
@@ -98,6 +94,9 @@ func main() {
 	mux.HandleFunc("/api/transaction/delete/", transaction.DeleteTransactionHandler(conn))
 	mux.HandleFunc("/api/masters/editable", masteredit.GetEditableMastersHandler(conn))
 	mux.HandleFunc("/api/master/update", masteredit.UpdateMasterHandler(conn))
+	// ▼▼▼【ここに追加】▼▼▼
+	mux.HandleFunc("/api/master/create_provisional", masteredit.CreateProvisionalMasterHandler(conn))
+	// ▲▲▲【追加ここまで】▲▲▲
 	mux.HandleFunc("/api/clients/export", backup.ExportClientsHandler(conn))
 	mux.HandleFunc("/api/clients/import", backup.ImportClientsHandler(conn))
 	mux.HandleFunc("/api/products/export", backup.ExportProductsHandler(conn))
@@ -107,9 +106,7 @@ func main() {
 	mux.HandleFunc("/api/deadstock/list", deadstock.GetDeadStockHandler(conn))
 	mux.HandleFunc("/api/deadstock/save", deadstock.SaveDeadStockHandler(conn))
 	mux.HandleFunc("/api/deadstock/import", deadstock.ImportDeadStockHandler(conn))
-	// ▼▼▼【ここに追加】▼▼▼
 	mux.HandleFunc("/api/deadstock/export", deadstock.ExportDeadStockHandler(conn))
-	// ▲▲▲【追加ここまで】▲▲▲
 	mux.HandleFunc("/api/settings/get", settings.GetSettingsHandler(conn))
 	mux.HandleFunc("/api/settings/save", settings.SaveSettingsHandler(conn))
 	mux.HandleFunc("/api/settings/wholesalers", settings.WholesalersHandler(conn))
@@ -123,11 +120,9 @@ func main() {
 	mux.HandleFunc("/api/precomp/import", precomp.ImportPrecompHandler(conn))
 	mux.HandleFunc("/api/precomp/import_all", precomp.BulkImportPrecompHandler(conn))
 	mux.HandleFunc("/api/precomp/export_all", precomp.ExportAllPrecompHandler(conn))
-	// ▼▼▼【ここに追加】▼▼▼
 	mux.HandleFunc("/api/precomp/suspend", precomp.SuspendPrecompHandler(conn))
 	mux.HandleFunc("/api/precomp/resume", precomp.ResumePrecompHandler(conn))
 	mux.HandleFunc("/api/precomp/status", precomp.GetStatusPrecompHandler(conn))
-	// ▲▲▲【追加ここまで】▲▲▲
 	mux.HandleFunc("/api/orders/candidates", orders.GenerateOrderCandidatesHandler(conn))
 	mux.HandleFunc("/api/orders/place", orders.PlaceOrderHandler(conn))
 	mux.HandleFunc("/api/returns/candidates", returns.GenerateReturnCandidatesHandler(conn))
@@ -146,15 +141,15 @@ func main() {
 	mux.HandleFunc("/api/edge/download", edge.DownloadHandler(conn))
 	mux.HandleFunc("/api/sequence/next/", sequence.GetNextSequenceHandler(conn))
 	mux.HandleFunc("/api/products/search_filtered", product.SearchProductsHandler(conn))
+	// ▼▼▼【ここから修正】▼▼▼
+	// エンドポイントを /api/product/by_gs1 に変更し、新しいハンドラを呼び出す
+	mux.HandleFunc("/api/product/by_gs1", search.GetProductByGS1Handler(conn))
+	// ▲▲▲【修正ここまで】▲▲▲
 	mux.HandleFunc("/api/inventory/adjust/data", guidedinventory.GetInventoryDataHandler(conn))
 	mux.HandleFunc("/api/inventory/adjust/save", guidedinventory.SaveInventoryDataHandler(conn))
-	// ▼▼▼【ここから追加】▼▼▼
 	mux.HandleFunc("/api/inventory/by_date", transaction.GetInventoryByDateHandler(conn))
 	mux.HandleFunc("/api/transaction/delete_by_id/", transaction.DeleteTransactionByIDHandler(conn))
-	// ▲▲▲【追加ここまで】▲▲▲
-	// ▼▼▼【ここに追加】▼▼▼
 	mux.HandleFunc("/api/config/usage_path", settings.GetUsagePathHandler(conn))
-	// ▲▲▲【追加ここまで】▲▲▲
 	mux.HandleFunc("/api/ledger/product/", product.GetProductLedgerHandler(conn))
 	// Serve Frontend
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))

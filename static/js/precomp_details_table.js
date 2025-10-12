@@ -1,3 +1,4 @@
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\precomp_details_table.js
 import { showModal } from './inout_modal.js';
 import { createUploadTableHTML } from './common_table.js';
 import { clientMap } from './master_data.js';
@@ -5,11 +6,7 @@ import { clientMap } from './master_data.js';
 let tableBody, addRowBtn, outputContainer;
 
 function createRowHTML(rec = {}) {
-    // ▼▼▼【修正点1】▼▼▼
-    // 既存データ(janCodeを持つ)と新規データ(productCodeを持つ)を正しく判定する
     const isNew = !rec.janCode && !rec.productCode;
-    // ▲▲▲【修正点1】▲▲▲
-
     const rowId = isNew ? `new-${Date.now()}` : rec.id;
     const productData = isNew ? {} : rec;
     const janQuantity = rec.janQuantity || 1;
@@ -88,18 +85,15 @@ export function getDetailsData() {
 
         const janQuantity = parseFloat(row.nextElementSibling.querySelector('input[name="janQuantity"]').value) || 0;
         if (janQuantity > 0) {
-            // ▼▼▼【修正点2】▼▼▼
-            // 既存データ(janCode)と新規データ(productCode)の両方からコードを取得する
             const productData = JSON.parse(productDataString);
             const code = productData.productCode || productData.janCode; 
 
-            if (code) { // コードが存在する場合のみペイロードに追加
+            if (code) { 
                 records.push({
                     productCode: code,
                     janQuantity: janQuantity,
                 });
             }
-            // ▲▲▲【修正点2】▲▲▲
         }
     });
     return records;
@@ -137,14 +131,14 @@ export function initDetailsTable() {
         }
 
         if (target.classList.contains('insert-row-btn')) {
-    const topRow = target.closest('tr');
-    const bottomRow = topRow.nextElementSibling;
-    // 現在の行（下の行）の直後に新しい空の行を挿入
-    bottomRow.insertAdjacentHTML('afterend', createRowHTML());
-}
+			const topRow = target.closest('tr');
+			const bottomRow = topRow.nextElementSibling;
+			bottomRow.insertAdjacentHTML('afterend', createRowHTML());
+		}
 
         if (target.classList.contains('product-name-cell')) {
             const activeRow = target.closest('tr');
+            // この画面では /api/masters/search_all (製品マスター検索) を使用します
             showModal(activeRow, (selectedProduct, targetRow) => {
                 targetRow.dataset.product = JSON.stringify(selectedProduct);
                 const lowerRow = targetRow.nextElementSibling;

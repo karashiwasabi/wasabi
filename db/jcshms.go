@@ -92,7 +92,6 @@ func GetJcshmsByCodesMap(tx *sql.Tx, jans []string) (map[string]*model.JCShms, e
 	return results, nil
 }
 
-// ▼▼▼【ここから修正】▼▼▼
 /**
  * @brief 単一のJANコードに対応するJCSHMSおよびJANCODEマスター情報を取得します。
  * @param tx SQLトランザクションオブジェクト
@@ -137,4 +136,48 @@ func GetJcshmsRecordByJan(tx *sql.Tx, jan string) (*model.JCShms, error) {
 	return jcshms, nil
 }
 
-// ▲▲▲【修正ここまで】▲▲▲
+/**
+ * @brief 単一のGS1コードに対応するJCSHMSおよびJANCODEマスター情報を取得します。
+ * @param tx SQLトランザクションオブジェクト
+ * @param gs1Code 検索対象のGS1コード
+ * @return *model.JCShms JCSHMS情報
+ * @return string 見つかったJANコード
+ * @return error 処理中にエラーが発生した場合
+ */
+func GetJcshmsRecordByGS1(tx *sql.Tx, gs1Code string) (*model.JCShms, string, error) {
+	jcshms := &model.JCShms{}
+	var jc050 sql.NullString
+	var janCode string
+
+	// JCSHMSテーブルへのクエリ (JC122で検索)
+	q1 := `SELECT JC000, JC009, JC013, JC018, JC020, JC022, JC030, JC037, JC039, JC044, JC050,
+				  JC061, JC062, JC063, JC064, JC065, JC066, JC122
+		   FROM jcshms WHERE JC122 = ?`
+	err := tx.QueryRow(q1, gs1Code).Scan(
+		&janCode, &jcshms.JC009, &jcshms.JC013, &jcshms.JC018, &jcshms.JC020, &jcshms.JC022, &jcshms.JC030,
+		&jcshms.JC037, &jcshms.JC039, &jcshms.JC044, &jc050,
+		&jcshms.JC061, &jcshms.JC062, &jcshms.JC063, &jcshms.JC064, &jcshms.JC065, &jcshms.JC066, &jcshms.JC122,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, "", err
+		}
+		return nil, "", fmt.Errorf("jcshms single search by gs1 failed for gs1 %s: %w", gs1Code, err)
+	}
+
+	val, err := strconv.ParseFloat(jc050.String, 64)
+	if err != nil {
+		jcshms.JC050 = 0
+	} else {
+		jcshms.JC050 = val
+	}
+
+	// jancodeテーブルへのクエリ (取得したjanCodeを使用)
+	q2 := `SELECT JA006, JA007, JA008 FROM jancode WHERE JA001 = ?`
+	err = tx.QueryRow(q2, janCode).Scan(&jcshms.JA006, &jcshms.JA007, &jcshms.JA008)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, "", fmt.Errorf("jancode single search failed for jan %s: %w", janCode, err)
+	}
+
+	return jcshms, janCode, nil
+}

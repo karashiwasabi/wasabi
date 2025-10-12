@@ -120,9 +120,25 @@ func GetProductMasterByCode(dbtx DBTX, code string) (*model.ProductMaster, error
 	return m, nil
 }
 
+// ▼▼▼【ここから追加】▼▼▼
+// GetProductMasterByGS1Code は、単一のGS1コードをキーに製品マスターを取得します。
+func GetProductMasterByGS1Code(dbtx DBTX, gs1Code string) (*model.ProductMaster, error) {
+	q := `SELECT ` + SelectColumns + ` FROM product_master WHERE gs1_code = ?`
+	row := dbtx.QueryRow(q, gs1Code)
+	m, err := ScanProductMaster(row)
+	if err == sql.ErrNoRows {
+		return nil, nil // 見つからない場合はエラーではなく、nilを返す
+	}
+	if err != nil {
+		return nil, fmt.Errorf("GetProductMasterByGS1Code failed for gs1_code %s: %w", gs1Code, err)
+	}
+	return m, nil
+}
+
+// ▲▲▲【追加ここまで】▲▲▲
+
 // GetAllProductMasters は、product_masterテーブルの全レコードを取得します。
 func GetAllProductMasters(dbtx DBTX) ([]*model.ProductMaster, error) {
-	// ▼▼▼【ここから修正】▼▼▼
 	q := `SELECT ` + SelectColumns + ` FROM product_master ORDER BY
 		CASE
 			WHEN TRIM(usage_classification) = '内' OR TRIM(usage_classification) = '1' THEN 1
@@ -134,7 +150,6 @@ func GetAllProductMasters(dbtx DBTX) ([]*model.ProductMaster, error) {
 			ELSE 7
 		END,
 		kana_name`
-	// ▲▲▲【修正ここまで】▲▲▲
 
 	rows, err := dbtx.Query(q)
 	if err != nil {

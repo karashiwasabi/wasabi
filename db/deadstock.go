@@ -60,20 +60,46 @@ func GetDeadStockList(conn *sql.DB, filters model.DeadStockFilters) ([]model.Dea
 		return nil, fmt.Errorf("failed to get masters for dead stock candidates: %w", err)
 	}
 
-	deadStockRecordsMap, err := getDeadStockRecordsByProductCodes(conn, deadStockProductCodes)
+	filteredMastersMap := make(map[string]*model.ProductMaster)
+	for code, master := range mastersMap {
+		keep := true
+		if filters.KanaName != "" {
+			if !strings.Contains(master.ProductName, filters.KanaName) && !strings.Contains(master.KanaName, filters.KanaName) {
+				keep = false
+			}
+		}
+		if filters.DosageForm != "" {
+			if master.UsageClassification != filters.DosageForm {
+				keep = false
+			}
+		}
+		if filters.ShelfNumber != "" {
+			if !strings.Contains(master.ShelfNumber, filters.ShelfNumber) {
+				keep = false
+			}
+		}
+		if keep {
+			filteredMastersMap[code] = master
+		}
+	}
+
+	var filteredProductCodes []string
+	for code := range filteredMastersMap {
+		filteredProductCodes = append(filteredProductCodes, code)
+	}
+
+	if len(filteredProductCodes) == 0 {
+		return []model.DeadStockGroup{}, nil
+	}
+
+	deadStockRecordsMap, err := getDeadStockRecordsByProductCodes(conn, filteredProductCodes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get dead stock records for candidates: %w", err)
 	}
 
-	// Transaction history is no longer needed on the frontend, so we can remove this call.
-	// recentTransactionsMap, err := getRecentTransactions(conn, deadStockProductCodes, filters.StartDate)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("failed to get recent transactions for candidates: %w", err)
-	// }
-
 	groups := make(map[string]*model.DeadStockGroup)
-	for _, productCode := range deadStockProductCodes {
-		master, ok := mastersMap[productCode]
+	for _, productCode := range filteredProductCodes {
+		master, ok := filteredMastersMap[productCode]
 		if !ok {
 			continue
 		}
@@ -100,15 +126,12 @@ func GetDeadStockList(conn *sql.DB, filters model.DeadStockFilters) ([]model.Dea
 			pkgGroup = &group.PackageGroups[len(group.PackageGroups)-1]
 		}
 
-		// ▼▼▼【ここから修正】▼▼▼
-		// 最終使用日をデータに含める
 		dsProduct := model.DeadStockProduct{
 			ProductMaster: *master,
 			CurrentStock:  currentStockMap[productCode],
 			SavedRecords:  deadStockRecordsMap[productCode],
 			LastUsageDate: lastUsageDateMap[productCode],
 		}
-		// ▲▲▲【修正ここまで】▲▲▲
 
 		pkgGroup.Products = append(pkgGroup.Products, dsProduct)
 		pkgGroup.TotalStock += dsProduct.CurrentStock
@@ -121,7 +144,35 @@ func GetDeadStockList(conn *sql.DB, filters model.DeadStockFilters) ([]model.Dea
 	}
 
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].ProductName < result[j].ProductName
+		prio := map[string]int{
+			"1": 1, "内": 1, "2": 2, "外": 2, "3": 3, "注": 3,
+			"4": 4, "歯": 4, "5": 5, "機": 5, "6": 6, "他": 6,
+		}
+
+		var masterI, masterJ *model.ProductMaster
+		if len(result[i].PackageGroups) > 0 && len(result[i].PackageGroups[0].Products) > 0 {
+			masterI = &result[i].PackageGroups[0].Products[0].ProductMaster
+		}
+		if len(result[j].PackageGroups) > 0 && len(result[j].PackageGroups[0].Products) > 0 {
+			masterJ = &result[j].PackageGroups[0].Products[0].ProductMaster
+		}
+
+		if masterI == nil || masterJ == nil {
+			return result[i].YjCode < result[j].YjCode
+		}
+
+		prioI, okI := prio[strings.TrimSpace(masterI.UsageClassification)]
+		if !okI {
+			prioI = 7
+		}
+		prioJ, okJ := prio[strings.TrimSpace(masterJ.UsageClassification)]
+		if !okJ {
+			prioJ = 7
+		}
+		if prioI != prioJ {
+			return prioI < prioJ
+		}
+		return masterI.KanaName < masterJ.KanaName
 	})
 
 	return result, nil
@@ -175,9 +226,6 @@ func getDeadStockRecordsByProductCodes(conn *sql.DB, productCodes []string) (map
 	}
 	return recordsMap, nil
 }
-
-// Transaction history is no longer needed, so this function can be removed or left unused.
-// func getRecentTransactions(...)
 
 func SaveDeadStockListInTx(tx *sql.Tx, records []model.DeadStockRecord) error {
 	const q = `

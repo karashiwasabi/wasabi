@@ -1,9 +1,7 @@
 // C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\returns.js
 
 import { createUploadTableHTML, renderUploadTableRows } from './common_table.js';
-// ▼▼▼ [修正点] getLocalDateString をインポート ▼▼▼
 import { hiraganaToKatakana, getLocalDateString } from './utils.js';
-// ▲▲▲ 修正ここまで ▲▲▲
 
 
 function formatBalance(balance) {
@@ -13,19 +11,12 @@ function formatBalance(balance) {
     return balance;
 }
 
-/**
- * [修正点]
- * 描画ロジックを方針書に沿って1段階プロセスに変更。
- * HTML文字列を一度で完全に組み立ててからDOMにセットします。
- */
 function renderReturnCandidates(data, container) {
     if (!data || data.length === 0) {
         container.innerHTML = "<p>返品可能な品目はありませんでした。</p>";
         return;
     }
 
-    // ▼▼▼【ここからが修正箇所です】▼▼▼
-    // 1回のループで、納品履歴テーブルまで含んだ完全なHTML文字列を生成する
     let html = data.map((yjGroup, yjIndex) => {
         const yjHeader = `
             <div class="agg-yj-header" style="background-color: #0d6efd; color: white;">
@@ -47,15 +38,12 @@ function renderReturnCandidates(data, container) {
                 </div>
             `;
 
-            // 納品履歴が存在する場合、その場でテーブルのHTMLを生成する
             if (pkg.deliveryHistory && pkg.deliveryHistory.length > 0) {
                 const tableId = `delivery-history-${yjIndex}-${pkgIndex}`;
                 
-                // テーブルの枠と中身のHTML文字列をそれぞれ取得
                 const tableShell = createUploadTableHTML(tableId);
                 const tableBodyContent = renderUploadTableRows(pkg.deliveryHistory);
                 
-                // 文字列を結合して完全なテーブルHTMLを生成
                 const fullTableHtml = tableShell.replace('<tbody></tbody>', `<tbody>${tableBodyContent}</tbody>`);
                 
                 pkgHeader += `<div id="${tableId}-container" style="padding: 0 10px 10px 10px;">${fullTableHtml}</div>`;
@@ -66,11 +54,7 @@ function renderReturnCandidates(data, container) {
         return yjHeader + packagesHtml;
     }).join('');
 
-    // 完成したHTMLを一度だけDOMに書き込む
     container.innerHTML = html;
-
-    // 以前ここにあった、DOM描画後に納品履歴を埋め込むための2番目のループは不要になったため削除
-    // ▲▲▲【修正ここまで】▲▲▲
 }
 
 export function initReturnsView() {
@@ -78,20 +62,18 @@ export function initReturnsView() {
     if (!view) return;
     const runBtn = document.getElementById('run-returns-list-btn');
     const outputContainer = document.getElementById('returns-list-output-container');
-    // ▼▼▼【修正】startDateInput, endDateInput の取得を削除 ▼▼▼
     const kanaNameInput = document.getElementById('ret-kanaName');
     const dosageFormInput = document.getElementById('ret-dosageForm');
     const coefficientInput = document.getElementById('ret-coefficient');
     const printBtn = document.getElementById('print-returns-list-btn');
-
-    // ▼▼▼【修正】日付のデフォルト値設定ロジックを削除 ▼▼▼
+    const shelfNumberInput = document.getElementById('ret-shelf-number');
 
     runBtn.addEventListener('click', async () => {
         window.showLoading();
-        // ▼▼▼【修正】URLSearchParamsからstartDateとendDateを削除 ▼▼▼
         const params = new URLSearchParams({
             kanaName: hiraganaToKatakana(kanaNameInput.value),
             dosageForm: dosageFormInput.value,
+            shelfNumber: shelfNumberInput.value,
             coefficient: coefficientInput.value,
         });
 

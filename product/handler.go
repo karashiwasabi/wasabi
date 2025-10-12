@@ -1,3 +1,4 @@
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\product\handler.go
 package product
 
 import (
@@ -13,16 +14,52 @@ import (
 	"wasabi/units"
 )
 
-// (kanaRowMap, toKatakana, toHiragana, kanaVariants はファイル内に存在するものとします)
-var kanaRowMap = map[string][]string{}
+var kanaRowMap = map[string][]string{
+	"ア": {"ア", "イ", "ウ", "エ", "オ"},
+	"カ": {"カ", "キ", "ク", "ケ", "コ"},
+	"サ": {"サ", "シ", "ス", "セ", "ソ"},
+	"タ": {"タ", "チ", "ツ", "テ", "ト"},
+	"ナ": {"ナ", "ニ", "ヌ", "ネ", "ノ"},
+	"ハ": {"ハ", "ヒ", "フ", "ヘ", "ホ"},
+	"マ": {"マ", "ミ", "ム", "メ", "モ"},
+	"ヤ": {"ヤ", "ユ", "ヨ"},
+	"ラ": {"ラ", "リ", "ル", "レ", "ロ"},
+	"ワ": {"ワ", "ヰ", "ヱ", "ヲ", "ン"},
+}
 
-func toKatakana(s string) string { return s }
-func toHiragana(s string) string { return s }
+func toKatakana(s string) string {
+	var res string
+	for _, r := range s {
+		if r >= 'ぁ' && r <= 'ゔ' {
+			res += string(r + 0x60)
+		} else {
+			res += string(r)
+		}
+	}
+	return res
+}
+func toHiragana(s string) string {
+	var res string
+	for _, r := range s {
+		if r >= 'ァ' && r <= 'ヴ' {
+			res += string(r - 0x60)
+		} else {
+			res += string(r)
+		}
+	}
+	return res
+}
 
-var kanaVariants = map[rune][]rune{}
+var kanaVariants = map[rune][]rune{
+	'ア': {'ァ'}, 'イ': {'ィ'}, 'ウ': {'ゥ'}, 'エ': {'ェ'}, 'オ': {'ォ'},
+	'カ': {'ガ'}, 'キ': {'ギ'}, 'ク': {'グ'}, 'ケ': {'ゲ'}, 'コ': {'ゴ'},
+	'サ': {'ザ'}, 'シ': {'ジ'}, 'ス': {'ズ'}, 'セ': {'ゼ'}, 'ソ': {'ゾ'},
+	'タ': {'ダ'}, 'チ': {'ヂ'}, 'ツ': {'ッ', 'ヅ'}, 'テ': {'デ'}, 'ト': {'ド'},
+	'ハ': {'バ', 'パ'}, 'ヒ': {'ビ', 'ピ'}, 'フ': {'ブ', 'プ'}, 'ヘ': {'ベ', 'ペ'}, 'ホ': {'ボ', 'ポ'},
+	'ヤ': {'ャ'}, 'ユ': {'ュ'}, 'ヨ': {'ョ'},
+	'ワ': {'ヮ'},
+}
 
-// ▼▼▼【ここから修正】▼▼▼
-// 関数の構造を、コンパイラが誤解しない、より明確な形式に書き換えました。
 func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -31,6 +68,7 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 		searchQuery := q.Get("q")
 		isDeadStockOnly := q.Get("deadStockOnly") == "true"
 		drugTypesParam := q.Get("drugTypes")
+		shelfNumber := q.Get("shelfNumber")
 		var results []model.ProductMasterView
 
 		if isDeadStockOnly {
@@ -46,8 +84,9 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 				StartDate:        startDate.Format("20060102"),
 				EndDate:          endDate,
 				ExcludeZeroStock: true,
-				KanaName:         kanaInitial,
+				KanaName:         searchQuery,
 				DosageForm:       dosageForm,
+				ShelfNumber:      shelfNumber,
 			}
 
 			deadStockGroups, dsErr := db.GetDeadStockList(conn, filters)
@@ -134,6 +173,10 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 				query += " AND (p.kana_name LIKE ? OR p.product_name LIKE ?)"
 				args = append(args, "%"+searchQuery+"%", "%"+searchQuery+"%")
 			}
+			if shelfNumber != "" {
+				query += " AND p.shelf_number LIKE ?"
+				args = append(args, "%"+shelfNumber+"%")
+			}
 			query += ` ORDER BY
 				CASE
 					WHEN TRIM(p.usage_classification) = '内' OR TRIM(p.usage_classification) = '1' THEN 1
@@ -179,8 +222,6 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 	}
 	return handler
 }
-
-// ▲▲▲【修正ここまで】▲▲▲
 
 type ProductLedgerResponse struct {
 	LedgerTransactions []model.LedgerTransaction `json:"ledgerTransactions"`

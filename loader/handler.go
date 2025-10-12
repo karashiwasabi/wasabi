@@ -1,3 +1,4 @@
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\loader\handler.go
 package loader
 
 import (
@@ -21,6 +22,7 @@ import (
 type UpdatedProductView struct {
 	ProductCode string `json:"productCode"`
 	ProductName string `json:"productName"`
+	Status      string `json:"status"` // "UPDATED", "ORPHANED", "NEW"
 }
 
 func CreateMasterUpdateHandler(conn *sql.DB) http.HandlerFunc {
@@ -51,71 +53,101 @@ func CreateMasterUpdateHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer tx.Rollback()
 
-		const updateQuery = `UPDATE product_master SET
-			yj_code=?, product_name=?, origin=?, kana_name=?, maker_name=?,
-			usage_classification=?, package_form=?, 
-			yj_unit_name=?, yj_pack_unit_qty=?,
-			flag_poison=?, flag_deleterious=?, flag_narcotic=?, flag_psychotropic=?,
-			flag_stimulant=?, flag_stimulant_raw=?, jan_pack_inner_qty=?,
-			jan_unit_code=?, jan_pack_unit_qty=?, nhi_price=?, specification=?
-		WHERE product_code = ?`
-		updateStmt, err := tx.Prepare(updateQuery)
-		if err != nil {
-			http.Error(w, "更新用SQLステートメントの準備に失敗しました: "+err.Error(), http.StatusInternalServerError)
-			return
+		var updatedProducts, orphanedProducts, newlyAddedProducts []UpdatedProductView
+
+		existingMastersMap := make(map[string]*model.ProductMaster)
+		for _, m := range existingMasters {
+			existingMastersMap[m.ProductCode] = m
 		}
-		defer updateStmt.Close()
 
-		const orphanQuery = `UPDATE product_master SET origin = ?, product_name = ?
-		WHERE product_code = ?`
-		orphanStmt, err := tx.Prepare(orphanQuery)
-		if err != nil {
-			http.Error(w, "PROVISIONAL化用SQLステートメントの準備に失敗しました: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer orphanStmt.Close()
-
-		var updatedProducts, orphanedProducts []UpdatedProductView
-
+		// --- 既存マスターの更新と孤立化処理 ---
 		for _, master := range existingMasters {
 			jcshmsRow, matchFound := newJcshmsData[master.ProductCode]
-
 			if matchFound {
 				jancodeRow := newJancodeData[master.ProductCode]
+				// ProductMasterInputへの変換ロジックを createInputFromCSV に集約
 				input := createInputFromCSV(jcshmsRow, jancodeRow)
-
 				if master.Origin == "PROVISIONAL" && input.YjCode == "" {
 					input.Origin = "PROVISIONAL"
-					input.YjCode = master.YjCode // 既存のYJコードを維持する
+					input.YjCode = master.YjCode
 				}
+				// 既存のユーザー設定項目を維持する
+				input.PurchasePrice = master.PurchasePrice
+				input.SupplierWholesale = master.SupplierWholesale
+				input.GroupCode = master.GroupCode
+				input.ShelfNumber = master.ShelfNumber
+				input.Category = master.Category
+				input.UserNotes = master.UserNotes
 
-				_, err := updateStmt.Exec(
-					input.YjCode, input.ProductName, input.Origin, input.KanaName, input.MakerName,
-					input.UsageClassification, input.PackageForm, input.YjUnitName, input.YjPackUnitQty,
-					input.FlagPoison, input.FlagDeleterious, input.FlagNarcotic, input.FlagPsychotropic,
-					input.FlagStimulant, input.FlagStimulantRaw, input.JanPackInnerQty,
-					input.JanUnitCode, input.JanPackUnitQty, input.NhiPrice, input.Specification,
-					master.ProductCode,
-				)
-				if err != nil {
+				if err := db.UpsertProductMasterInTx(tx, input); err != nil {
 					http.Error(w, fmt.Sprintf("マスターの上書き更新に失敗 (JAN: %s): %v", master.ProductCode, err), http.StatusInternalServerError)
 					return
 				}
-				updatedProducts = append(updatedProducts, UpdatedProductView{ProductCode: master.ProductCode, ProductName: input.ProductName})
-
-			} else {
+				updatedProducts = append(updatedProducts, UpdatedProductView{ProductCode: master.ProductCode, ProductName: input.ProductName, Status: "UPDATED"})
+			} else if master.Origin == "JCSHMS" {
+				// JCSHMS由来のマスターがCSVから消えた場合、PROVISIONAL化する
 				newProductName := master.ProductName
 				if !strings.HasPrefix(master.ProductName, "◆") {
 					newProductName = "◆" + newProductName
 				}
-				_, err := orphanStmt.Exec("PROVISIONAL", newProductName, master.ProductCode)
-				if err != nil {
+				master.Origin = "PROVISIONAL"
+				master.ProductName = newProductName
+				// 更新用のInputを作成
+				input := model.ProductMasterInput{
+					ProductCode:         master.ProductCode,
+					YjCode:              master.YjCode,
+					Gs1Code:             master.Gs1Code,
+					ProductName:         master.ProductName,
+					KanaName:            master.KanaName,
+					MakerName:           master.MakerName,
+					Specification:       master.Specification,
+					UsageClassification: master.UsageClassification,
+					PackageForm:         master.PackageForm,
+					YjUnitName:          master.YjUnitName,
+					YjPackUnitQty:       master.YjPackUnitQty,
+					JanPackInnerQty:     master.JanPackInnerQty,
+					JanUnitCode:         master.JanUnitCode,
+					JanPackUnitQty:      master.JanPackUnitQty,
+					Origin:              master.Origin,
+					NhiPrice:            master.NhiPrice,
+					PurchasePrice:       master.PurchasePrice,
+					FlagPoison:          master.FlagPoison,
+					FlagDeleterious:     master.FlagDeleterious,
+					FlagNarcotic:        master.FlagNarcotic,
+					FlagPsychotropic:    master.FlagPsychotropic,
+					FlagStimulant:       master.FlagStimulant,
+					FlagStimulantRaw:    master.FlagStimulantRaw,
+					IsOrderStopped:      master.IsOrderStopped,
+					SupplierWholesale:   master.SupplierWholesale,
+					GroupCode:           master.GroupCode,
+					ShelfNumber:         master.ShelfNumber,
+					Category:            master.Category,
+					UserNotes:           master.UserNotes,
+				}
+				if err := db.UpsertProductMasterInTx(tx, input); err != nil {
 					http.Error(w, fmt.Sprintf("マスターのPROVISIONAL化に失敗 (JAN: %s): %v", master.ProductCode, err), http.StatusInternalServerError)
 					return
 				}
-				orphanedProducts = append(orphanedProducts, UpdatedProductView{ProductCode: master.ProductCode, ProductName: newProductName})
+				orphanedProducts = append(orphanedProducts, UpdatedProductView{ProductCode: master.ProductCode, ProductName: newProductName, Status: "ORPHANED"})
 			}
 		}
+
+		// --- 新規マスターの追加処理 ---
+		// ▼▼▼【ご指示により、JCSHMSマスターにしか存在しない新規品目を自動で追加する機能を削除】▼▼▼
+		/*
+			for productCode, jcshmsRow := range newJcshmsData {
+				if _, exists := existingMastersMap[productCode]; !exists {
+					jancodeRow := newJancodeData[productCode]
+					input := createInputFromCSV(jcshmsRow, jancodeRow)
+					if err := db.UpsertProductMasterInTx(tx, input); err != nil {
+						http.Error(w, fmt.Sprintf("新規マスターの追加に失敗 (JAN: %s): %v", productCode, err), http.StatusInternalServerError)
+						return
+					}
+					newlyAddedProducts = append(newlyAddedProducts, UpdatedProductView{ProductCode: productCode, ProductName: input.ProductName, Status: "NEW"})
+				}
+			}
+		*/
+		// ▲▲▲【削除ここまで】▲▲▲
 
 		if err := tx.Commit(); err != nil {
 			http.Error(w, "トランザクションのコミットに失敗しました", http.StatusInternalServerError)
@@ -125,9 +157,10 @@ func CreateMasterUpdateHandler(conn *sql.DB) http.HandlerFunc {
 		log.Println("新しい要件に基づくJCSHMSマスター更新処理が正常に完了しました。")
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"message":          "指定の要件で製品マスターの更新が完了しました。",
-			"updatedProducts":  updatedProducts,
-			"orphanedProducts": orphanedProducts,
+			"message":            "指定の要件で製品マスターの更新が完了しました。",
+			"updatedProducts":    updatedProducts,
+			"orphanedProducts":   orphanedProducts,
+			"newlyAddedProducts": newlyAddedProducts,
 		})
 	}
 }
@@ -180,10 +213,8 @@ func createInputFromCSV(jcshmsRow, jancodeRow []string) model.ProductMasterInput
 
 	input.ProductCode = jcshmsRow[0]
 	input.YjCode = jcshmsRow[9]
-	// ▼▼▼【ここが修正箇所】製品名と規格を分離して格納します ▼▼▼
 	input.ProductName = strings.TrimSpace(jcshmsRow[18])
 	input.Specification = strings.TrimSpace(jcshmsRow[20])
-	// ▲▲▲【修正ここまで】▲▲▲
 	input.Origin = "JCSHMS"
 	input.KanaName = jcshmsRow[22]
 	input.MakerName = jcshmsRow[30]

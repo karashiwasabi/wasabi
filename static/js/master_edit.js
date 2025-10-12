@@ -4,7 +4,7 @@ import { showModal } from './inout_modal.js';
 import { hiraganaToKatakana } from './utils.js';
 import { wholesalerMap } from './master_data.js';
 
-let view, tableContainer, refreshBtn, addRowBtn, kanaNameInput, dosageFormInput;
+let view, tableContainer, refreshBtn, addRowBtn, kanaNameInput, dosageFormInput, shelfNumberInput;
 let allMasters = []; // サーバーから取得した全マスターデータを保持する配列
 let unitMap = {};
 
@@ -60,7 +60,6 @@ function createMasterRowHTML(master = {}) {
     const isProtected = master.origin === 'JCSHMS';
     const disabledAttr = isProtected ? 'disabled' : '';
 
-    // --- Row 1: Basic Info ---
     const row1 = `
         <tr class="data-row-top">
             <td colspan="2"><div class="field-group"><label>1. JAN</label><input type="text" name="productCode" value="${master.productCode || ''}" placeholder="製品コード(JAN)" ${!isNew ? 'readonly' : ''}></div></td>
@@ -70,7 +69,6 @@ function createMasterRowHTML(master = {}) {
             <td colspan="3"><div class="field-group"><label>5. カナ</label><input type="text" name="kanaName" value="${master.kanaName || ''}" ${disabledAttr}></div></td>
         </tr>`;
 
-    // --- Row 2: Spec & Maker ---
     const row2 = `
         <tr class="data-row-middle">
             <td colspan="3"><div class="field-group"><label>6. メーカー</label><input type="text" name="makerName" value="${master.makerName || ''}" ${disabledAttr}></div></td>
@@ -79,7 +77,6 @@ function createMasterRowHTML(master = {}) {
             <td colspan="4"><div class="field-group"><label>9. 包装</label><input type="text" name="packageForm" value="${master.packageForm || ''}" ${disabledAttr}></div></td>
         </tr>`;
     
-    // --- Row 3: Units, Prices, Flags ---
     let janUnitOptions = '<option value="0">YJ単位と同じ</option>';
     for (const [code, name] of Object.entries(unitMap)) {
         if (code !== '0') janUnitOptions += `<option value="${code}" ${code == (master.janUnitCode || 0) ? 'selected' : ''}>${name}</option>`;
@@ -106,7 +103,6 @@ function createMasterRowHTML(master = {}) {
             <td colspan="5"><div class="flags-container">${flagSelectorsHTML}</div></td>
         </tr>`;
 
-    // --- Row 4: User Data & Actions ---
     let wholesalerOptions = '<option value="">--- 選択 ---</option>';
     wholesalerMap.forEach((name, code) => {
         wholesalerOptions += `<option value="${code}" ${code === master.supplierWholesale ? 'selected' : ''}>${name}</option>`;
@@ -144,6 +140,7 @@ function renderMasters(mastersToRender) {
 function applyFiltersAndRender() {
     const kanaFilter = hiraganaToKatakana(kanaNameInput.value).toLowerCase();
     const dosageFilter = dosageFormInput.value;
+    const shelfFilter = shelfNumberInput ? shelfNumberInput.value.trim().toLowerCase() : '';
     let filteredMasters = allMasters;
 
     if (kanaFilter) {
@@ -158,12 +155,19 @@ function applyFiltersAndRender() {
             p.usageClassification && p.usageClassification.trim() === dosageFilter
         );
     }
+
+    if (shelfFilter) {
+        filteredMasters = filteredMasters.filter(p =>
+            p.shelfNumber && p.shelfNumber.toLowerCase().includes(shelfFilter)
+        );
+    }
     
     renderMasters(filteredMasters);
 }
 
 async function loadAndRenderMasters() {
     tableContainer.innerHTML = `<p>読み込み中...</p>`;
+    window.showLoading();
     try {
         const res = await fetch('/api/masters/editable');
         if (!res.ok) throw new Error('マスターの読み込みに失敗しました。');
@@ -171,6 +175,8 @@ async function loadAndRenderMasters() {
         applyFiltersAndRender();
     } catch (err) {
         tableContainer.innerHTML = `<p style="color:red;">${err.message}</p>`;
+    } finally {
+        window.hideLoading();
     }
 }
 
@@ -206,6 +212,7 @@ export async function initMasterEdit() {
     addRowBtn = document.getElementById('addMasterRowBtn');
     kanaNameInput = document.getElementById('master-edit-kanaName');
     dosageFormInput = document.getElementById('master-edit-dosageForm');
+    shelfNumberInput = document.getElementById('master-edit-shelfNumber');
 
     await fetchUnitMap();
 
@@ -239,6 +246,7 @@ export async function initMasterEdit() {
 
     kanaNameInput.addEventListener('input', applyFiltersAndRender);
     dosageFormInput.addEventListener('change', applyFiltersAndRender);
+    shelfNumberInput.addEventListener('input', applyFiltersAndRender);
     
     tableContainer.addEventListener('input', (e) => {
         const tbody = e.target.closest('tbody[data-record-id]');
@@ -254,7 +262,6 @@ export async function initMasterEdit() {
 
         if (target.classList.contains('save-master-btn')) {
             const data = {};
-            // ▼▼▼【ここから修正】▼▼▼
             tbody.querySelectorAll('input, select, textarea').forEach(el => {
                 if(el.name){
                     const name = el.name;
@@ -273,7 +280,6 @@ export async function initMasterEdit() {
                     }
                 }
             });
-            // ▲▲▲【修正ここまで】▲▲▲
       
             data.origin = data.origin || "PROVISIONAL";
 
@@ -292,11 +298,9 @@ export async function initMasterEdit() {
                 if (!res.ok) {
                     let errorMsg = `保存に失敗しました (HTTP ${res.status})`;
                     try {
-                        // Try to parse JSON error from backend first
                         const errData = await res.json();
                         errorMsg = errData.message || errorMsg;
                     } catch (jsonError) {
-                        // If that fails, the error is likely plain text
                         const errText = await res.text();
                         errorMsg = errText || errorMsg;
                     }
@@ -323,6 +327,7 @@ export function resetMasterEditView() {
     if (tableContainer) {
         if(kanaNameInput) kanaNameInput.value = '';
         if(dosageFormInput) dosageFormInput.value = '';
+        if(shelfNumberInput) shelfNumberInput.value = '';
         loadAndRenderMasters();
     }
 }
