@@ -153,6 +153,35 @@ th { text-align: center; background-color: #f0f0f0; }
 .btn-orange:hover { background-color: #d96c00; }
 /* ▲▲▲ [追加ここまで] ▲▲▲ */
 
+/* ▼▼▼【ここに追加】▼▼▼ */
+#scanned-items-list {
+    background-color: #f8f9fa;
+}
+.scanned-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 8px;
+    border-bottom: 1px solid #e9ecef;
+}
+.scanned-item:last-child {
+    border-bottom: none;
+}
+.scanned-item-name {
+    flex-grow: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-right: 10px;
+}
+.scanned-item-count {
+    font-weight: bold;
+}
+.processing-indicator:not(.hidden) {
+    display: block !important;
+}
+/* ▲▲▲【追加ここまで】▲▲▲ */
+
+
 /* ▼▼▼ [修正点] 印刷用CSSを汎用的な仕組みに全面的に書き換え ▼▼▼ */
 @media print {
   /* ページ設定: A4横向き */

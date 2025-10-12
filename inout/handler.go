@@ -170,12 +170,12 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 
 			yjQuantity := rec.JanQuantity * master.JanPackInnerQty
 
-			var unitNhiPrice float64
-			if master.YjPackUnitQty > 0 {
-				// DBのnhi_priceは包装薬価なので、ここで単価を計算
-				unitNhiPrice = master.NhiPrice / master.YjPackUnitQty
-			}
-			subtotal := yjQuantity * unitNhiPrice
+			// ▼▼▼【ここから修正】▼▼▼
+			// 単価にはマスターの薬価（YJ単位）を使用
+			unitPrice := master.NhiPrice
+			// 金額を「YJ数量 × YJ単位薬価」で計算
+			subtotal := yjQuantity * unitPrice
+			// ▲▲▲【修正ここまで】▲▲▲
 
 			tr := model.TransactionRecord{
 				TransactionDate: dateStr,
@@ -187,7 +187,7 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 				JanQuantity:     rec.JanQuantity,
 				DatQuantity:     rec.DatQuantity,
 				YjQuantity:      yjQuantity,
-				Subtotal:        subtotal,
+				Subtotal:        subtotal, // 正しく計算された金額を設定
 				ExpiryDate:      rec.ExpiryDate,
 				LotNumber:       rec.LotNumber,
 			}
@@ -198,6 +198,7 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 				tr.ProcessFlagMA = "PROVISIONAL"
 			}
 
+			// マッピング関数を呼ぶ（この中でUnitPriceが設定される）
 			mappers.MapProductMasterToTransaction(&tr, master)
 			finalRecords = append(finalRecords, tr)
 		}

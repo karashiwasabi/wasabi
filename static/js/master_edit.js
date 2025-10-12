@@ -18,6 +18,16 @@ style.innerHTML = `
     .master-edit-table .flags-container { display: flex; gap: 5px; }
     .master-edit-table .flags-container .field-group { flex: 1; }
     .master-edit-table input:read-only, .master-edit-table select:disabled, .master-edit-table input:disabled { background-color: #e9ecef; color: #6c757d; cursor: not-allowed; }
+    
+    /* ▼▼▼【ここに追加】▼▼▼ */
+    .save-success {
+        animation: flash-green 1.5s ease-out;
+    }
+    @keyframes flash-green {
+        0% { background-color: #d1e7dd; }
+        100% { background-color: transparent; }
+    }
+    /* ▲▲▲【追加ここまで】▲▲▲ */
 `;
 document.head.appendChild(style);
 
@@ -261,6 +271,7 @@ export async function initMasterEdit() {
         if (!tbody) return;
 
         if (target.classList.contains('save-master-btn')) {
+            const isNew = tbody.dataset.recordId.startsWith('new-');
             const data = {};
             tbody.querySelectorAll('input, select, textarea').forEach(el => {
                 if(el.name){
@@ -309,7 +320,37 @@ export async function initMasterEdit() {
 
                 const resData = await res.json();
                 window.showNotification(resData.message, 'success');
-                loadAndRenderMasters();
+
+                // ▼▼▼【ここから修正】▼▼▼
+                // loadAndRenderMasters(); を削除し、以下の処理に置き換え
+
+                // 1. メモリ上のデータを更新
+                const masterIndex = allMasters.findIndex(m => m.productCode === data.productCode);
+                if (masterIndex > -1) {
+                    // 既存マスターの更新
+                    allMasters[masterIndex] = { ...allMasters[masterIndex], ...data };
+                } else {
+                    // 新規マスターの追加
+                    allMasters.push(data);
+                }
+
+                // 2. DOMを直接更新
+                if (isNew) {
+                    const productCodeInput = tbody.querySelector('input[name="productCode"]');
+                    productCodeInput.readOnly = true;
+                    tbody.dataset.recordId = data.productCode;
+                    const originInput = tbody.querySelector('input[name="origin"]');
+                    originInput.value = data.origin;
+                }
+                
+                // 3. 視覚的なフィードバック
+                tbody.querySelectorAll('tr').forEach(row => {
+                    row.classList.remove('save-success'); // アニメーションを再実行可能にするため一旦削除
+                    void row.offsetWidth; // リフローを強制
+                    row.classList.add('save-success'); // アニメーションクラスを追加
+                });
+                // ▲▲▲【修正ここまで】▲▲▲
+
             } catch (err) {
                 window.showNotification(err.message, 'error');
             } finally {

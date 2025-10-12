@@ -20,7 +20,9 @@ func ProcessTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 			http.Error(w, "Failed to fetch all product masters: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		// ▼▼▼【ここを修正】▼▼▼
 		mastersMap := make(map[string]*model.ProductMaster)
+		// ▲▲▲【修正ここまで】▲▲▲
 		for _, m := range allMasters {
 			mastersMap[m.ProductCode] = m
 		}
@@ -81,27 +83,31 @@ func ProcessTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 					rec.JanQuantity = rec.YjQuantity / master.JanPackInnerQty
 				}
 
-				// ▼▼▼【ここから金額再計算ロジックを修正】▼▼▼
 				// 3. 金額を再計算 (取引種別に応じてロジックを分岐)
 				switch rec.Flag {
-				case 0, 3, 4, 5: // 棚卸系(0,4,5)と処方(3)の場合
-					// 常にマスターの薬価(YJ単価)を正として単価と金額を再計算する
-					rec.UnitPrice = master.NhiPrice
-					rec.Subtotal = rec.YjQuantity * rec.UnitPrice
-				default: // その他の取引(納品、返品、入出庫など)
-					var unitPriceToUse float64
-					if rec.UnitPrice > 0 {
-						// 取引時に記録された単価を尊重する
-						unitPriceToUse = rec.UnitPrice
-					} else {
-						// 単価が記録されていない場合のみマスターの薬価を使用する
-						unitPriceToUse = master.NhiPrice
-						rec.UnitPrice = unitPriceToUse // レコードの単価も更新
+				case 1: // 納品
+					// rec.PurchasePriceには「取引時点での包装納入価」が保存されているはず。
+					// もしそれが0で、rec.UnitPriceに古い箱単価が入っている場合はそれを使用する。
+					packagePurchasePrice := rec.PurchasePrice
+					if packagePurchasePrice <= 0 && rec.UnitPrice > 0 {
+						packagePurchasePrice = rec.UnitPrice
 					}
-					// 金額は数量の変更を反映するために再計算する
-					rec.Subtotal = rec.YjQuantity * unitPriceToUse
+
+					// 正しいYJ単位の単価を再計算
+					if master.YjPackUnitQty > 0 && packagePurchasePrice > 0 {
+						rec.UnitPrice = packagePurchasePrice / master.YjPackUnitQty
+					}
+					// 金額を再計算
+					rec.Subtotal = rec.YjQuantity * rec.UnitPrice
+
+				case 0, 3, 4, 5: // 棚卸、処方など
+					rec.UnitPrice = master.NhiPrice // 薬価を単価とする
+					rec.Subtotal = rec.YjQuantity * rec.UnitPrice
+
+				default: // その他
+					// 数量の変更を反映するため金額は再計算するが、単価は維持する
+					rec.Subtotal = rec.YjQuantity * rec.UnitPrice
 				}
-				// ▲▲▲【修正ここまで】▲▲▲
 
 				// 4. 処理ステータスを更新
 				if rec.ProcessFlagMA == "PROVISIONAL" && master.Origin == "JCSHMS" {

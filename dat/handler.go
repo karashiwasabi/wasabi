@@ -1,5 +1,4 @@
-// C:\Users\wasab\OneDrive\デス-
-// WASABI/dat/handler.go
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\dat\handler.go (全体)
 
 package dat
 
@@ -192,8 +191,8 @@ func ProcessDatFile(conn *sql.DB, filePath string) ([]model.TransactionRecord, e
 		ar := model.TransactionRecord{
 			TransactionDate: rec.Date, ClientCode: rec.ClientCode, ReceiptNumber: rec.ReceiptNumber,
 			LineNumber: rec.LineNumber, Flag: rec.Flag, JanCode: rec.JanCode,
-			ProductName: rec.ProductName, DatQuantity: rec.DatQuantity, UnitPrice: rec.UnitPrice,
-			Subtotal: rec.Subtotal, ExpiryDate: rec.ExpiryDate, LotNumber: rec.LotNumber,
+			ProductName: rec.ProductName, DatQuantity: rec.DatQuantity,
+			ExpiryDate: rec.ExpiryDate, LotNumber: rec.LotNumber,
 		}
 
 		master, err := mastermanager.FindOrCreate(tx, rec.JanCode, rec.ProductName, mastersMap, jcshmsMap)
@@ -201,12 +200,38 @@ func ProcessDatFile(conn *sql.DB, filePath string) ([]model.TransactionRecord, e
 			return nil, fmt.Errorf("mastermanager failed for jan %s: %w", rec.JanCode, err)
 		}
 
+		// ▼▼▼【ここから修正】▼▼▼
+		// 1. YJ数量とJAN数量を計算
 		if master.YjPackUnitQty > 0 {
 			ar.YjQuantity = ar.DatQuantity * master.YjPackUnitQty
 		}
 		if master.JanPackUnitQty > 0 {
 			ar.JanQuantity = ar.DatQuantity * master.JanPackUnitQty
 		}
+
+		// 2. DATファイルから読み取った「包装あたりの納入価」を取得
+		//    DATファイルに価格情報がない場合のみ、マスターの納入価をフォールバックとして使用
+		packagePurchasePrice := rec.UnitPrice
+		if packagePurchasePrice <= 0 && master.PurchasePrice > 0 {
+			packagePurchasePrice = master.PurchasePrice
+		}
+
+		// 3. YJ単位の単価（仮の単価）を計算し、取引レコードの「UnitPrice」として設定
+		if master.YjPackUnitQty > 0 && packagePurchasePrice > 0 {
+			ar.UnitPrice = packagePurchasePrice / master.YjPackUnitQty
+		} else {
+			// 包装数量が不明な場合などは、DATの単価をそのまま使用せざるを得ない
+			ar.UnitPrice = rec.UnitPrice
+		}
+
+		// 4. 金額を「YJ数量 × YJ単位単価」で再計算
+		//    DATファイルに記録されているSubtotalは参照しない
+		ar.Subtotal = ar.YjQuantity * ar.UnitPrice
+
+		// 5. 取引レコードのPurchasePriceには、計算の元となった「包装あたりの納入価」を記録として保存
+		ar.PurchasePrice = packagePurchasePrice
+
+		// ▲▲▲【修正ここまで】▲▲▲
 
 		mappers.MapProductMasterToTransaction(&ar, master)
 		ar.ProcessFlagMA = "COMPLETE"
@@ -229,8 +254,6 @@ func ProcessDatFile(conn *sql.DB, filePath string) ([]model.TransactionRecord, e
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("transaction commit error (final): %w", err)
 	}
-
-	// (backorder reconciliation logic is omitted as in tkr)
 
 	return finalRecords, nil
 }

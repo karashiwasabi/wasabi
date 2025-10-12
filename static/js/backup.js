@@ -36,32 +36,34 @@ async function handleFileUpload(event, url) {
  */
 export function initBackupButtons() {
     // DOM要素を取得
-    const exportClientsBtn = document.getElementById('exportClientsBtn');
-    const importClientsBtn = document.getElementById('importClientsBtn');
-    const importClientsInput = document.getElementById('importClientsInput');
+    // ▼▼▼【ここから修正】▼▼▼
+    const exportCustomersBtn = document.getElementById('exportCustomersBtn');
+    const importCustomersBtn = document.getElementById('importCustomersBtn');
+    const importCustomersInput = document.getElementById('importCustomersInput');
+    // ▲▲▲【修正ここまで】▲▲▲
     const exportProductsBtn = document.getElementById('exportProductsBtn');
     const importProductsBtn = document.getElementById('importProductsBtn');
     const importProductsInput = document.getElementById('importProductsInput');
-        // ▼▼▼【ここに追加】▼▼▼
     const exportPricingBtn = document.getElementById('exportPricingBtn');
-    // ▲▲▲【追加ここまで】▲▲▲
 
-    // 得意先エクスポート
-    if (exportClientsBtn) {
-        exportClientsBtn.addEventListener('click', () => {
-            window.location.href = '/api/clients/export';
+    // ▼▼▼【ここから修正】▼▼▼
+    // 得意先・卸業者（顧客マスター）エクスポート
+    if (exportCustomersBtn) {
+        exportCustomersBtn.addEventListener('click', () => {
+            window.location.href = '/api/customers/export';
         });
     }
 
-    // 得意先インポート
-    if (importClientsBtn && importClientsInput) {
-        importClientsBtn.addEventListener('click', () => {
-            importClientsInput.click();
+    // 得意先・卸業者（顧客マスター）インポート
+    if (importCustomersBtn && importCustomersInput) {
+        importCustomersBtn.addEventListener('click', () => {
+            importCustomersInput.click();
         });
-        importClientsInput.addEventListener('change', (event) => {
-            handleFileUpload(event, '/api/clients/import');
+        importCustomersInput.addEventListener('change', (event) => {
+            handleFileUpload(event, '/api/customers/import');
         });
     }
+    // ▲▲▲【修正ここまで】▲▲▲
 
     // 製品エクスポート
     if (exportProductsBtn) {
@@ -80,12 +82,10 @@ export function initBackupButtons() {
         });
     }
 
-        // ▼▼▼【ここに追加】▼▼▼
     // 価格情報バックアップ
     if (exportPricingBtn) {
         exportPricingBtn.addEventListener('click', () => {
             window.location.href = '/api/pricing/backup_export';
         });
     }
-    // ▲▲▲【追加ここまで】▲▲▲
 }

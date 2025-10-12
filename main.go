@@ -97,6 +97,12 @@ func main() {
 	// ▼▼▼【ここに追加】▼▼▼
 	mux.HandleFunc("/api/master/create_provisional", masteredit.CreateProvisionalMasterHandler(conn))
 	// ▲▲▲【追加ここまで】▲▲▲
+	// ▼▼▼【ここから修正】▼▼▼
+	// 古い得意先のエンドポイントを新しい顧客マスターのエンドポイントに置き換える
+	mux.HandleFunc("/api/customers/export", backup.ExportCustomersHandler(conn))
+	mux.HandleFunc("/api/customers/import", backup.ImportCustomersHandler(conn))
+	// ▲▲▲【修正ここまで】▲▲▲
+
 	mux.HandleFunc("/api/clients/export", backup.ExportClientsHandler(conn))
 	mux.HandleFunc("/api/clients/import", backup.ImportClientsHandler(conn))
 	mux.HandleFunc("/api/products/export", backup.ExportProductsHandler(conn))

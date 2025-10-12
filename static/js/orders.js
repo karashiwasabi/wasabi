@@ -2,6 +2,14 @@
 import { hiraganaToKatakana, getLocalDateString, toHalfWidth } from './utils.js';
 import { wholesalerMap } from './master_data.js';
 
+// ▼▼▼【ここから追加】▼▼▼
+// 連続スキャン用のグローバル変数
+let continuousOrderModal, continuousOrderBtn, closeContinuousModalBtn;
+let continuousBarcodeForm, continuousBarcodeInput, scannedItemsList, scannedItemsCount, processingIndicator;
+let scanQueue = [];
+let isProcessingQueue = false;
+// ▲▲▲【追加ここまで】▲▲▲
+
 function formatBalance(balance) {
     if (typeof balance === 'number') {
         return balance.toFixed(2);
@@ -9,26 +17,70 @@ function formatBalance(balance) {
     return balance;
 }
 
-function renderOrderCandidates(data, container, wholesalers) {
-    if (!data || data.length === 0) {
-        container.innerHTML = "<p>発注が必要な品目はありませんでした。</p>";
+// ▼▼▼【ここから修正】▼▼▼
+/**
+ * 発注リストに品目を追加、または既に存在する場合は数量を更新する関数
+ * @param {object} productMaster - 追加する製品のマスターデータ
+ */
+function addOrUpdateOrderItem(productMaster) {
+    const outputContainer = document.getElementById('order-candidates-output');
+    const productCode = productMaster.productCode;
+    const yjCode = productMaster.yjCode;
+
+    // 1. 既に同じJANコードの行が存在するかチェック
+    const existingRow = outputContainer.querySelector(`tr[data-jan-code="${productCode}"]`);
+    if (existingRow) {
+        // 存在する場合、数量を1増やす
+        const quantityInput = existingRow.querySelector('.order-quantity-input');
+        if (quantityInput) {
+            quantityInput.value = parseInt(quantityInput.value, 10) + 1;
+            window.showNotification(`「${productMaster.productName}」の数量を1増やしました。`, 'success');
+        }
         return;
     }
 
-    let html = '';
-    data.forEach(yjGroup => {
-        const yjShortfall = yjGroup.totalReorderPoint - (yjGroup.endingBalance || 0);
+    // 2. 新しい行のHTMLを生成
+    let wholesalerOptions = '<option value="">--- 選択 ---</option>';
+    wholesalerMap.forEach((name, code) => {
+        const isSelected = (code === productMaster.supplierWholesale);
+        wholesalerOptions += `<option value="${code}" ${isSelected ? 'selected' : ''}>${name}</option>`;
+    });
 
-        html += `
-            <div class="agg-yj-header" style="background-color: #ff0015ff;">
-                <span>YJ: ${yjGroup.yjCode}</span>
-                <span class="product-name">${yjGroup.productName}</span>
-                <span class="balance-info">
-                    在庫: ${formatBalance(yjGroup.endingBalance)} | 
-                    発注点: ${formatBalance(yjGroup.totalReorderPoint)} | 
-                    不足数: ${formatBalance(yjShortfall)}
-                </span>
-            </div>
+    const newRowHTML = `
+        <tr data-jan-code="${productMaster.productCode}" 
+            data-yj-code="${productMaster.yjCode}"
+            data-product-name="${productMaster.productName}"
+            data-package-form="${productMaster.packageForm}"
+            data-jan-pack-inner-qty="${productMaster.janPackInnerQty}"
+            data-yj-unit-name="${productMaster.yjUnitName}"
+            data-yj-pack-unit-qty="${productMaster.yjPackUnitQty}"
+            data-order-multiplier="${productMaster.yjPackUnitQty}"> 
+            <td class="left">${productMaster.productName}</td>
+            <td class="left">${productMaster.makerName || ''}</td>
+            <td class="left">${productMaster.formattedPackageSpec}</td>
+            <td><select class="wholesaler-select" style="width: 100%;">${wholesalerOptions}</select></td>
+            <td>1包装 (${productMaster.yjPackUnitQty} ${productMaster.yjUnitName})</td>
+            <td><input type="number" value="1" class="order-quantity-input" style="width: 80px;"></td>
+            <td><button class="remove-order-item-btn btn">除外</button></td>
+        </tr>
+    `;
+
+    // 3. 対応するYJコードのグループを探す
+    let yjGroupWrapper = outputContainer.querySelector(`.order-yj-group-wrapper[data-yj-code="${yjCode}"]`);
+
+    if (yjGroupWrapper) {
+        // 4a. 既存のYJグループに新しい行を追加
+        const tbody = yjGroupWrapper.querySelector('tbody');
+        tbody.insertAdjacentHTML('beforeend', newRowHTML);
+    } else {
+        // 4b. YJグループが存在しない場合、新しいグループ全体を作成
+        const yjHeaderHTML = `
+            <div class="agg-yj-header">
+                <span>YJ: ${yjCode}</span>
+                <span class="product-name">${productMaster.productName}</span>
+            </div>`;
+        
+        const tableHTML = `
             <table class="data-table" style="margin-bottom: 20px;">
                 <thead>
                     <tr>
@@ -42,6 +94,121 @@ function renderOrderCandidates(data, container, wholesalers) {
                     </tr>
                 </thead>
                 <tbody>
+                    ${newRowHTML}
+                </tbody>
+            </table>`;
+        
+        const newGroupHTML = `
+            <div class="order-yj-group-wrapper" data-yj-code="${yjCode}">
+                ${yjHeaderHTML}
+                ${tableHTML}
+            </div>`;
+        
+        outputContainer.insertAdjacentHTML('beforeend', newGroupHTML);
+    }
+    window.showNotification(`「${productMaster.productName}」を発注リストに追加しました。`, 'success');
+}
+
+/**
+ * 連続スキャンモーダル内のスキャン済みリストの表示を更新する関数
+ */
+function updateScannedItemsDisplay() {
+    const counts = scanQueue.reduce((acc, code) => {
+        acc[code] = (acc[code] || 0) + 1;
+        return acc;
+    }, {});
+
+    scannedItemsList.innerHTML = Object.entries(counts).map(([code, count]) => {
+        return `<div class="scanned-item">
+                    <span class="scanned-item-name">${code}</span>
+                    <span class="scanned-item-count">x ${count}</span>
+                </div>`;
+    }).join('');
+    scannedItemsCount.textContent = scanQueue.length;
+}
+
+/**
+ * バックグラウンドでスキャンキューを処理する非同期関数
+ */
+async function processScanQueue() {
+    if (isProcessingQueue) return; // 既に処理中なら何もしない
+
+    isProcessingQueue = true;
+    processingIndicator.classList.remove('hidden');
+
+    while (scanQueue.length > 0) {
+        const barcode = scanQueue.shift(); // キューから1件取り出す
+
+        try {
+            // GS1コードから製品情報を取得（既存のロジックを再利用）
+            let gs1Code = '';
+            if (barcode.startsWith('01') && barcode.length > 16) {
+                gs1Code = barcode.substring(2, 16);
+            } else {
+                gs1Code = barcode;
+            }
+
+            const res = await fetch(`/api/product/by_gs1?gs1_code=${gs1Code}`);
+            if (!res.ok) {
+                if (res.status === 404) {
+                    // マスターが存在しない場合は自動で作成
+                    const newMaster = await createAndFetchMaster(gs1Code);
+                    addOrUpdateOrderItem(newMaster);
+                } else {
+                    throw new Error(`サーバーエラー (HTTP ${res.status})`);
+                }
+            } else {
+                const productMaster = await res.json();
+                addOrUpdateOrderItem(productMaster);
+            }
+        } catch (err) {
+            console.error(`バーコード[${barcode}]の処理に失敗:`, err);
+            window.showNotification(`バーコード[${barcode}]の処理に失敗しました: ${err.message}`, 'error');
+        } finally {
+            // モーダル内の表示を更新して、処理済みの項目をリストから消す
+            updateScannedItemsDisplay();
+        }
+    }
+
+    isProcessingQueue = false;
+    processingIndicator.classList.add('hidden');
+}
+// ▲▲▲【修正ここまで】▲▲▲
+
+function renderOrderCandidates(data, container, wholesalers) {
+    if (!data || data.length === 0) {
+        container.innerHTML = "<p>発注が必要な品目はありませんでした。</p>";
+        return;
+    }
+
+    let html = '';
+    data.forEach(yjGroup => {
+        const yjShortfall = yjGroup.totalReorderPoint - (yjGroup.endingBalance || 0);
+
+        html += `
+            <div class="order-yj-group-wrapper" data-yj-code="${yjGroup.yjCode}">
+                <div class="agg-yj-header" style="background-color: #ff0015ff;">
+                    <span>YJ: ${yjGroup.yjCode}</span>
+                    <span class="product-name">${yjGroup.productName}</span>
+                    <span class="balance-info">
+                        在庫: ${formatBalance(yjGroup.endingBalance)} | 
+                        発注点: ${formatBalance(yjGroup.totalReorderPoint)} | 
+                        不足数: ${formatBalance(yjShortfall)}
+                    </span>
+                </div>
+                <table class="data-table" style="margin-bottom: 20px;">
+                    <thead>
+                        <tr>
+                            <th style="width: 25%;">製品名（包装）</th>
+                            <th style="width: 15%;">メーカー</th>
+                            <th style="width: 15%;">包装仕様</th>
+                            <th style="width: 20%;">卸業者</th>
+                            <th style="width: 10%;">発注単位</th>
+                            <th style="width: 5%;">発注数</th>
+                            <th style="width: 10%;">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
         `;
         yjGroup.packageLedgers.forEach(pkg => {
             if (pkg.masters && pkg.masters.length > 0) {
@@ -93,65 +260,11 @@ function renderOrderCandidates(data, container, wholesalers) {
                 });
             }
         });
-        html += `</tbody></table>`;
+        html += `</tbody></table></div>`;
     });
     container.innerHTML = html;
 }
 
-function addOrderItemRow(productMaster) {
-    const outputTbody = document.querySelector('#order-candidates-output tbody');
-    if (!outputTbody) {
-        document.getElementById('order-candidates-output').innerHTML = `
-            <table class="data-table" style="margin-bottom: 20px;">
-                <thead>
-                    <tr>
-                        <th style="width: 25%;">製品名（包装）</th>
-                        <th style="width: 15%;">メーカー</th>
-                        <th style="width: 15%;">包装仕様</th>
-                        <th style="width: 20%;">卸業者</th>
-                        <th style="width: 10%;">発注単位</th>
-                        <th style="width: 5%;">発注数</th>
-                        <th style="width: 10%;">操作</th>
-                    </tr>
-                </thead>
-                <tbody></tbody>
-            </table>
-        `;
-    }
-    const tbody = document.querySelector('#order-candidates-output tbody');
-
-    if (tbody.querySelector(`tr[data-jan-code="${productMaster.productCode}"]`)) {
-        window.showNotification('この製品は既に追加されています。', 'error');
-        return;
-    }
-
-    let wholesalerOptions = '<option value="">--- 選択 ---</option>';
-    wholesalerMap.forEach((name, code) => {
-        const isSelected = (code === productMaster.supplierWholesale);
-        wholesalerOptions += `<option value="${code}" ${isSelected ? 'selected' : ''}>${name}</option>`;
-    });
-    const newRowHTML = `
-        <tr data-jan-code="${productMaster.productCode}" 
-            data-yj-code="${productMaster.yjCode}"
-            data-product-name="${productMaster.productName}"
-            data-package-form="${productMaster.packageForm}"
-            data-jan-pack-inner-qty="${productMaster.janPackInnerQty}"
-            data-yj-unit-name="${productMaster.yjUnitName}"
-            data-yj-pack-unit-qty="${productMaster.yjPackUnitQty}"
-            data-order-multiplier="${productMaster.yjPackUnitQty}"> 
-            <td class="left">${productMaster.productName}</td>
-            <td class="left">${productMaster.makerName || ''}</td>
-            <td class="left">${productMaster.formattedPackageSpec}</td>
-            <td><select class="wholesaler-select" style="width: 100%;">${wholesalerOptions}</select></td>
-            <td>1包装 (${productMaster.yjPackUnitQty} ${productMaster.yjUnitName})</td>
-            <td><input type="number" value="1" class="order-quantity-input" style="width: 80px;"></td>
-            <td><button class="remove-order-item-btn btn">除外</button></td>
-        </tr>
-    `;
-
-    tbody.insertAdjacentHTML('beforeend', newRowHTML);
-    window.showNotification(`「${productMaster.productName}」を発注リストに追加しました。`, 'success');
-}
 
 async function handleOrderBarcodeScan(e) {
     e.preventDefault();
@@ -178,7 +291,7 @@ async function handleOrderBarcodeScan(e) {
             if (res.status === 404) {
                 if (confirm(`このGS1コードはマスターに登録されていません。\n新規マスターを作成して発注リストに追加しますか？`)) {
                     const newMaster = await createAndFetchMaster(gs1Code);
-                    addOrderItemRow(newMaster);
+                    addOrUpdateOrderItem(newMaster);
                 } else {
                     throw new Error('このGS1コードはマスターに登録されていません。');
                 }
@@ -187,7 +300,7 @@ async function handleOrderBarcodeScan(e) {
             }
         } else {
             const productMaster = await res.json();
-            addOrderItemRow(productMaster);
+            addOrUpdateOrderItem(productMaster);
         }
         barcodeInput.value = '';
         barcodeInput.focus();
@@ -213,7 +326,6 @@ async function createAndFetchMaster(gs1Code) {
             throw new Error(createData.message || 'マスターの作成に失敗しました。');
         }
         window.showNotification(`新規マスターを作成しました (YJ: ${createData.yjCode})`, 'success');
-
         window.showLoading('作成したマスター情報を取得中...');
         const fetchRes = await fetch(`/api/product/by_gs1?gs1_code=${gs1Code}`);
         if (!fetchRes.ok) {
@@ -241,14 +353,49 @@ export function initOrders() {
     const barcodeForm = document.getElementById('order-barcode-form');
     const shelfNumberInput = document.getElementById('order-shelf-number');
 
+    // ▼▼▼【ここから追加】▼▼▼
+    // 連続スキャンモーダル用の要素を取得
+    continuousOrderModal = document.getElementById('continuous-order-modal');
+    continuousOrderBtn = document.getElementById('continuous-order-btn');
+    closeContinuousModalBtn = document.getElementById('close-continuous-modal-btn');
+    continuousBarcodeForm = document.getElementById('continuous-barcode-form');
+    continuousBarcodeInput = document.getElementById('continuous-barcode-input');
+    scannedItemsList = document.getElementById('scanned-items-list');
+    scannedItemsCount = document.getElementById('scanned-items-count');
+    processingIndicator = document.getElementById('processing-indicator');
+
+    // モーダル表示ボタンのイベント
+    continuousOrderBtn.addEventListener('click', () => {
+        scanQueue = [];
+        updateScannedItemsDisplay();
+        continuousOrderModal.classList.remove('hidden');
+        document.body.classList.add('modal-open');
+        setTimeout(() => continuousBarcodeInput.focus(), 100);
+    });
+
+    // モーダル閉じるボタンのイベント
+    closeContinuousModalBtn.addEventListener('click', () => {
+        continuousOrderModal.classList.add('hidden');
+        document.body.classList.remove('modal-open');
+    });
+
+    // モーダル内のフォーム送信（バーコードスキャン完了）イベント
+    continuousBarcodeForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const barcode = continuousBarcodeInput.value.trim();
+        if (barcode) {
+            scanQueue.push(barcode);
+            updateScannedItemsDisplay();
+            processScanQueue(); // バックグラウンド処理を開始/継続
+        }
+        continuousBarcodeInput.value = '';
+    });
+    // ▲▲▲【追加ここまで】▲▲▲
+
     if (barcodeForm) {
         barcodeForm.addEventListener('submit', handleOrderBarcodeScan);
     }
     
-    if (barcodeInput) {
-        // No listener needed here anymore
-    }
-
     runBtn.addEventListener('click', async () => {
         window.showLoading();
         const params = new URLSearchParams({
@@ -377,11 +524,12 @@ export function initOrders() {
         } else if (target.classList.contains('remove-order-item-btn')) {
             const row = target.closest('tr');
             const tbody = row.closest('tbody');
+            const table = tbody.closest('table');
+            const wrapper = table.closest('.order-yj-group-wrapper');
             row.remove();
-            if (tbody.children.length === 0) {
-                const header = tbody.closest('table').previousElementSibling;
-                header.remove();
-                tbody.closest('table').remove();
+            
+            if (tbody.children.length === 0 && wrapper) {
+                wrapper.remove();
             }
         }
     });

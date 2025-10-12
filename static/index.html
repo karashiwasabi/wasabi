@@ -33,8 +33,8 @@
     <button id="exportProductsBtn" class="btn btn-magenta">製品エクスポート</button>
     <button id="importProductsBtn" class="btn btn-magenta">製品インポート</button>
     <button id="reprocessBtn" class="btn btn-rose">再計算</button>
-    <button id="exportClientsBtn" class="btn btn-cyan">得意先エクスポート</button>
-    <button id="importClientsBtn" class="btn btn-cyan">得意先インポート</button>
+    <button id="exportCustomersBtn" class="btn btn-cyan">顧客マスターエクスポート</button>
+    <button id="importCustomersBtn" class="btn btn-cyan">顧客マスターインポート</button>
     <button id="settingsBtn" class="btn btn-chartreuse">設定</button>
 </header>
 
@@ -385,12 +385,18 @@
 
 <div id="order-view" class="hidden">
     <div class="controls-grid" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
-        <form id="order-barcode-form" style="width: 100%; margin-bottom: 10px; border-bottom: 1px solid #ccc; padding-bottom: 10px;">
+        <div style="width: 100%; display: flex; gap: 10px; align-items: flex-end; border-bottom: 1px solid #ccc; padding-bottom: 10px;">
+            <form id="order-barcode-form" style="flex-grow: 1;">
+                <div class="field-group">
+                    <label for="order-barcode-input" style="font-weight: bold;">バーコードで個別追加</label>
+                    <input type="text" id="order-barcode-input" inputmode="latin" placeholder="バーコードをスキャンするか、GS1コードを入力してEnter" style="ime-mode: disabled;">
+                </div>
+            </form>
             <div class="field-group">
-                <label for="order-barcode-input" style="font-weight: bold;">バーコードで追加</label>
-                <input type="text" id="order-barcode-input" inputmode="latin" placeholder="バーコードをスキャンするか、GS1コードを入力してEnter" style="ime-mode: disabled;">
+                <label>&nbsp;</label>
+                <button id="continuous-order-btn" class="btn btn-violet">連続バーコード発注</button>
             </div>
-        </form>
+        </div>
         <div class="field-group">
             <label for="order-kanaName">薬品名カナ</label>
             <input type="text" id="order-kanaName" placeholder="（前方一致）">
@@ -405,7 +411,7 @@
         </div>
         <div class="field-group">
             <label for="order-reorder-coefficient">発注点係数</label>
-            <input type="number" id="order-reorder-coefficient" value="1.5" step="0.1">
+            <input type="number" id="order-reorder-coefficient" value="1.5" step="0.1" style="width: 80px;">
         </div>
         <div class="field-group">
             <button id="generate-order-candidates-btn" class="btn">不足品リストを作成</button>
@@ -645,7 +651,28 @@
 </div>
 </div>
 
-<input type="file" id="importClientsInput" style="display:none;" accept=".csv">
+<div id="continuous-order-modal" class="modal-overlay hidden">
+    <div class="modal-content" style="max-width: 600px;">
+        <div class="modal-header">
+            <p class="modal-title">連続バーコード発注</p>
+            <button id="close-continuous-modal-btn" class="close-button">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="continuous-barcode-form">
+                <div class="field-group">
+                    <label for="continuous-barcode-input" style="font-weight: bold;">バーコードをスキャンしてください</label>
+                    <input type="text" id="continuous-barcode-input" inputmode="latin" style="font-size: 1.2em; padding: 8px; ime-mode: disabled;">
+                </div>
+            </form>
+            <div id="scanned-items-container" style="margin-top: 15px;">
+                <p>スキャン済みリスト (<span id="scanned-items-count">0</span>件)</p>
+                <div id="scanned-items-list" style="max-height: 40vh; overflow-y: auto; border: 1px solid #ccc; padding: 5px; min-height: 100px;"></div>
+                <div id="processing-indicator" class="hidden" style="font-size: 12px; color: #555; margin-top: 5px;">処理中...</div>
+            </div>
+        </div>
+    </div>
+</div>
+<input type="file" id="importCustomersInput" style="display:none;" accept=".csv">
 <input type="file" id="importDeadstockInput" style="display:none;" accept=".csv">
 <input type="file" id="importProductsInput" style="display:none;" accept=".csv">
 <input type="file" id="precomp-import-input" style="display:none;" accept=".csv">
