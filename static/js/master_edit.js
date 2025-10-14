@@ -5,14 +5,17 @@ import { hiraganaToKatakana } from './utils.js';
 import { wholesalerMap } from './master_data.js';
 
 let view, tableContainer, refreshBtn, addRowBtn, kanaNameInput, dosageFormInput, shelfNumberInput;
-let allMasters = [];
+let allMasters = []; // サーバーから取得した全マスターデータを保持する配列
 let unitMap = {};
 
+// ▼▼▼【ここから追加】棚番連続登録モーダル用の変数を追加▼▼▼
 let shelfModal, closeShelfModalBtn, bulkShelfNumberBtn;
 let shelfBarcodeForm, shelfBarcodeInput, shelfScannedList, shelfScannedCount;
 let shelfNumberInputForBulk, shelfRegisterBtn, shelfClearBtn;
-let shelfScanPool = [];
+let shelfScanPool = []; // GS1コードを溜めるプール
+// ▲▲▲【追加ここまで】▲▲▲
 
+// 内部で使用するCSSを定義
 const style = document.createElement('style');
 style.innerHTML = `
     .master-edit-table .field-group { display: flex; flex-direction: column; gap: 2px; }
@@ -32,6 +35,7 @@ style.innerHTML = `
     }
 `;
 document.head.appendChild(style);
+
 
 async function fetchUnitMap() {
     if (Object.keys(unitMap).length > 0) return;
@@ -209,73 +213,19 @@ function populateFormWithJcshms(selectedProduct, tbody) {
     setVal('flagDeleterious', selectedProduct.flagDeleterious); setVal('flagNarcotic', selectedProduct.flagNarcotic);
     setVal('flagPsychotropic', selectedProduct.flagPsychotropic); setVal('flagStimulant', selectedProduct.flagStimulant);
     setVal('flagStimulantRaw', selectedProduct.flagStimulantRaw); setVal('yjUnitName', selectedProduct.yjUnitName);
-    setVal('yjPackUnitQty', selectedProduct.yjPackUnitQty); setVal('janPackInnerQty', selectedProduct.janPackInnerQty);
+    setVal('yjPackUnitQty', selectedProduct.yjPackUnitQty);
+    setVal('janPackInnerQty', selectedProduct.janPackInnerQty);
     setVal('janUnitCode', selectedProduct.janUnitCode); setVal('janPackUnitQty', selectedProduct.janPackUnitQty);
 	setVal('specification', selectedProduct.specification);
 	setVal('gs1Code', selectedProduct.gs1Code);
     formatPackageSpecForRow(tbody);
 }
 
-async function createAndFetchMaster(gs1Code) {
-    window.showLoading('新規マスターを作成中...');
-    try {
-        const productCode = gs1Code.length === 14 ? gs1Code.substring(1) : gs1Code;
+// ▼▼▼【ここから修正】棚番連続登録用の関数群を修正・追加▼▼▼
 
-        const createRes = await fetch('/api/master/create_provisional', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ gs1Code, productCode }),
-        });
-        const createData = await createRes.json();
-        if (!createRes.ok) {
-            throw new Error(createData.message || 'マスターの作成に失敗しました。');
-        }
-        window.showNotification(`新規マスターを作成しました (YJ: ${createData.yjCode})`, 'success');
-        window.showLoading('作成したマスター情報を取得中...');
-        const fetchRes = await fetch(`/api/product/by_gs1?gs1_code=${gs1Code}`);
-        if (!fetchRes.ok) {
-            throw new Error('作成されたマスター情報の取得に失敗しました。');
-        }
-        const newMaster = await fetchRes.json();
-        return newMaster;
-
-    } catch (err) {
-        throw err;
-    } finally {
-        window.hideLoading();
-    }
-}
-
-async function resolveProductNameForShelfScan(gs1) {
-    try {
-        const res = await fetch(`/api/product/by_gs1?gs1_code=${gs1}`);
-        let product;
-        if (res.ok) {
-            product = await res.json();
-        } else if (res.status === 404) {
-            product = await createAndFetchMaster(gs1);
-        } else {
-            throw new Error(`サーバーエラー (HTTP ${res.status})`);
-        }
-
-        const poolItem = shelfScanPool.find(item => item.gs1 === gs1);
-        if (poolItem && product) {
-            poolItem.name = product.productName;
-            const listItem = shelfScannedList.querySelector(`.scanned-item[data-gs1="${gs1}"] .scanned-item-name`);
-            if (listItem) {
-                listItem.textContent = product.productName;
-                listItem.classList.add('resolved');
-            }
-        }
-
-    } catch (err) {
-        console.error(`品目名の解決/作成に失敗: ${gs1}`, err);
-        window.showNotification(`バーコード[${gs1}]の処理に失敗: ${err.message}`, 'error');
-        shelfScanPool = shelfScanPool.filter(item => item.gs1 !== gs1);
-        updateShelfScannedList();
-    }
-}
-
+/**
+ * 棚番登録モーダル内のスキャン済みリスト表示を更新する
+ */
 function updateShelfScannedList() {
     shelfScannedCount.textContent = shelfScanPool.length;
     shelfScannedList.innerHTML = shelfScanPool.map(item => `
@@ -285,6 +235,87 @@ function updateShelfScannedList() {
     `).join('');
 }
 
+/**
+ * スキャンされたGS1コードに対応する品目名を取得して表示を更新する
+ * 見つからない場合は仮マスター作成を試みる
+ * @param {string} gs1 - GS1コード
+ */
+async function resolveProductNameForShelfScan(gs1) {
+    try {
+        const res = await fetch(`/api/product/by_gs1?gs1_code=${gs1}`);
+        if (res.ok) {
+            const product = await res.json();
+            const poolItem = shelfScanPool.find(item => item.gs1 === gs1);
+            if (poolItem) {
+                poolItem.name = product.productName;
+                const listItem = shelfScannedList.querySelector(`.scanned-item[data-gs1="${gs1}"] .scanned-item-name`);
+                if (listItem) {
+                    listItem.textContent = product.productName;
+                    listItem.classList.add('resolved');
+                }
+            }
+        } else if (res.status === 404) {
+            // マスターが見つからない場合、ユーザーに確認して仮マスターを作成
+            if (confirm(`このGS1コード[${gs1}]はマスターに登録されていません。\n新規に仮マスターを作成しますか？`)) {
+                const newMaster = await createProvisionalMasterForShelf(gs1);
+                const poolItem = shelfScanPool.find(item => item.gs1 === gs1);
+                 if (poolItem) {
+                    poolItem.name = newMaster.productName;
+                    const listItem = shelfScannedList.querySelector(`.scanned-item[data-gs1="${gs1}"] .scanned-item-name`);
+                    if (listItem) {
+                        listItem.textContent = newMaster.productName;
+                        listItem.classList.add('resolved');
+                    }
+                }
+            }
+        }
+    } catch (err) {
+        console.warn(`品目名の解決に失敗: ${gs1}`, err);
+        window.showNotification(`品目名の解決に失敗しました: ${gs1}`, 'error');
+    }
+}
+
+
+/**
+ * 棚番登録フローの中で、GS1コードから仮マスターを作成する
+ * @param {string} gs1 - GS1コード
+ */
+async function createProvisionalMasterForShelf(gs1) {
+    window.showLoading('新規マスターを作成中...');
+    try {
+        // GS1コードからJANコードを生成（単純なルール）
+        const productCode = gs1.length === 14 ? gs1.substring(1) : gs1;
+
+        const res = await fetch('/api/master/create_provisional', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ gs1Code: gs1, productCode: productCode }),
+        });
+        const resData = await res.json();
+        if (!res.ok) {
+            throw new Error(resData.message || 'マスターの作成に失敗しました。');
+        }
+        window.showNotification(`新規マスターを作成しました (YJ: ${resData.yjCode})`, 'success');
+
+        // 作成したマスター情報を再取得して返す
+        const fetchRes = await fetch(`/api/product/by_gs1?gs1_code=${gs1}`);
+        if (!fetchRes.ok) {
+            throw new Error('作成したマスター情報の取得に失敗しました。');
+        }
+        return await fetchRes.json();
+
+    } catch (err) {
+        window.showNotification(err.message, 'error');
+        throw err; // エラーを呼び出し元に伝播させる
+    } finally {
+        window.hideLoading();
+    }
+}
+
+
+/**
+ * 「この棚番で登録」ボタンが押されたときの処理
+ */
 async function handleShelfRegister() {
     const shelfNumber = shelfNumberInputForBulk.value.trim();
     if (!shelfNumber) {
@@ -313,10 +344,20 @@ async function handleShelfRegister() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
-        const resData = await res.json();
+
         if (!res.ok) {
-            throw new Error(resData.message || '棚番の更新に失敗しました。');
+            const errorText = await res.text();
+            let errorMessage = '棚番の更新に失敗しました。';
+            try {
+                const errorJson = JSON.parse(errorText);
+                errorMessage = errorJson.message || errorMessage;
+            } catch (e) {
+                errorMessage = errorText || errorMessage;
+            }
+            throw new Error(errorMessage);
         }
+
+        const resData = await res.json();
         window.showNotification(resData.message, 'success');
         
         shelfScanPool = [];
@@ -333,6 +374,8 @@ async function handleShelfRegister() {
     }
 }
 
+// ▲▲▲【修正ここまで】▲▲▲
+
 export async function initMasterEdit() {
     view = document.getElementById('master-edit-view');
     if (!view) return;
@@ -343,6 +386,7 @@ export async function initMasterEdit() {
     dosageFormInput = document.getElementById('master-edit-dosageForm');
     shelfNumberInput = document.getElementById('master-edit-shelfNumber');
 
+    // ▼▼▼【ここから追加】棚番モーダル用の要素を取得・イベント設定▼▼▼
     shelfModal = document.getElementById('bulk-shelf-number-modal');
     closeShelfModalBtn = document.getElementById('close-shelf-modal-btn');
     bulkShelfNumberBtn = document.getElementById('bulkShelfNumberBtn');
@@ -372,10 +416,11 @@ export async function initMasterEdit() {
         e.preventDefault();
         const barcode = shelfBarcodeInput.value.trim();
         if (barcode) {
+            // 重複チェック
             if (!shelfScanPool.some(item => item.gs1 === barcode)) {
                 shelfScanPool.push({ gs1: barcode, name: null });
                 updateShelfScannedList();
-                resolveProductNameForShelfScan(barcode);
+                resolveProductNameForShelfScan(barcode); // 裏で品目名を取得
             } else {
                 window.showNotification('このバーコードは既にリストにあります。', 'error');
             }
@@ -392,6 +437,7 @@ export async function initMasterEdit() {
             shelfBarcodeInput.focus();
         }
     });
+    // ▲▲▲【追加ここまで】▲▲▲
 
     await fetchUnitMap();
 
@@ -436,19 +482,9 @@ export async function initMasterEdit() {
         }
     });
 
-    // ▼▼▼【ここから修正】イベントリスナーを 'input' から 'keypress' に変更し、Enterキーでのみ発火するようにする▼▼▼
-    const handleEnterSearch = (e) => {
-        if (e.key === 'Enter') {
-            e.preventDefault(); // フォームの送信など、デフォルトの動作を防ぐ
-            applyFiltersAndRender();
-        }
-    };
-
-    kanaNameInput.addEventListener('keypress', handleEnterSearch);
-    shelfNumberInput.addEventListener('keypress', handleEnterSearch);
-    // ▲▲▲【修正ここまで】▲▲▲
-
+    kanaNameInput.addEventListener('input', applyFiltersAndRender);
     dosageFormInput.addEventListener('change', applyFiltersAndRender);
+    shelfNumberInput.addEventListener('input', applyFiltersAndRender);
     
     tableContainer.addEventListener('input', (e) => {
         const tbody = e.target.closest('tbody[data-record-id]');

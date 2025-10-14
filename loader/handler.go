@@ -199,7 +199,8 @@ func loadCSVToMap(filepath string, skipHeader bool, keyIndex int) (map[string][]
 
 func createInputFromCSV(jcshmsRow, jancodeRow []string) model.ProductMasterInput {
 	var input model.ProductMasterInput
-	if len(jcshmsRow) < 67 {
+	// JC122 は 123番目のカラムなので、少なくとも123列必要
+	if len(jcshmsRow) < 123 {
 		return input
 	}
 
@@ -213,6 +214,10 @@ func createInputFromCSV(jcshmsRow, jancodeRow []string) model.ProductMasterInput
 
 	input.ProductCode = jcshmsRow[0]
 	input.YjCode = jcshmsRow[9]
+	// ▼▼▼【ここを修正】▼▼▼
+	// 正しいインデックス 122 を使用して JC122 (GS1コード) を読み込む
+	input.Gs1Code = jcshmsRow[122]
+	// ▲▲▲【修正ここまで】▲▲▲
 	input.ProductName = strings.TrimSpace(jcshmsRow[18])
 	input.Specification = strings.TrimSpace(jcshmsRow[20])
 	input.Origin = "JCSHMS"

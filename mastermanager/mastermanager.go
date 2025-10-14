@@ -1,3 +1,5 @@
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\mastermanager\mastermanager.go
+
 package mastermanager
 
 import (
@@ -87,11 +89,13 @@ func createMasterInputFromJcshms(jan string, jcshms *model.JCShms) model.Product
 	janUnitCodeVal, _ := strconv.Atoi(jcshms.JA007.String)
 
 	input := model.ProductMasterInput{
-		ProductCode:         jan,
-		YjCode:              jcshms.JC009,
-		ProductName:         strings.TrimSpace(jcshms.JC018), // 基本製品名 (JC018)
-		Specification:       strings.TrimSpace(jcshms.JC020), // 規格 (JC020)
-		Gs1Code:             jcshms.JC122,                    // GS1コード (JC122)
+		ProductCode:   jan,
+		YjCode:        jcshms.JC009,
+		ProductName:   strings.TrimSpace(jcshms.JC018), // 基本製品名 (JC018)
+		Specification: strings.TrimSpace(jcshms.JC020), // 規格 (JC020)
+		// ▼▼▼【ここが修正箇所】▼▼▼
+		Gs1Code: jcshms.JC122, // GS1コード (JC122)
+		// ▲▲▲【修正ここまで】▲▲▲
 		Origin:              "JCSHMS",
 		KanaName:            jcshms.JC022,
 		MakerName:           jcshms.JC030,

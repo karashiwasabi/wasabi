@@ -10,9 +10,11 @@ import (
 // JcshmsToProductMasterInput はJCSHMSのレコードをProductMasterInputに変換します。
 func JcshmsToProductMasterInput(jcshms *model.JCShms, janCode string) model.ProductMasterInput {
 	return model.ProductMasterInput{
-		ProductCode:         janCode,
-		YjCode:              jcshms.JC009,
-		Gs1Code:             jcshms.JC122,
+		ProductCode: janCode,
+		YjCode:      jcshms.JC009,
+		// ▼▼▼【ここが修正箇所】▼▼▼
+		Gs1Code: jcshms.JC122,
+		// ▲▲▲【修正ここまで】▲▲▲
 		ProductName:         strings.TrimSpace(jcshms.JC018), // JC018: 商品名
 		KanaName:            strings.TrimSpace(jcshms.JC022), // JC022: 商品名カナ
 		MakerName:           strings.TrimSpace(jcshms.JC030),
