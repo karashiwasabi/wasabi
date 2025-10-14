@@ -5,10 +5,14 @@ import { hiraganaToKatakana } from './utils.js';
 import { wholesalerMap } from './master_data.js';
 
 let view, tableContainer, refreshBtn, addRowBtn, kanaNameInput, dosageFormInput, shelfNumberInput;
-let allMasters = []; // サーバーから取得した全マスターデータを保持する配列
+let allMasters = [];
 let unitMap = {};
 
-// 内部で使用するCSSを定義
+let shelfModal, closeShelfModalBtn, bulkShelfNumberBtn;
+let shelfBarcodeForm, shelfBarcodeInput, shelfScannedList, shelfScannedCount;
+let shelfNumberInputForBulk, shelfRegisterBtn, shelfClearBtn;
+let shelfScanPool = [];
+
 const style = document.createElement('style');
 style.innerHTML = `
     .master-edit-table .field-group { display: flex; flex-direction: column; gap: 2px; }
@@ -19,7 +23,6 @@ style.innerHTML = `
     .master-edit-table .flags-container .field-group { flex: 1; }
     .master-edit-table input:read-only, .master-edit-table select:disabled, .master-edit-table input:disabled { background-color: #e9ecef; color: #6c757d; cursor: not-allowed; }
     
-    /* ▼▼▼【ここに追加】▼▼▼ */
     .save-success {
         animation: flash-green 1.5s ease-out;
     }
@@ -27,10 +30,8 @@ style.innerHTML = `
         0% { background-color: #d1e7dd; }
         100% { background-color: transparent; }
     }
-    /* ▲▲▲【追加ここまで】▲▲▲ */
 `;
 document.head.appendChild(style);
-
 
 async function fetchUnitMap() {
     if (Object.keys(unitMap).length > 0) return;
@@ -155,6 +156,7 @@ function applyFiltersAndRender() {
 
     if (kanaFilter) {
         filteredMasters = filteredMasters.filter(p => 
+            (p.productCode && p.productCode.toLowerCase().includes(kanaFilter)) ||
             (p.productName && p.productName.toLowerCase().includes(kanaFilter)) || 
             (p.kanaName && p.kanaName.toLowerCase().includes(kanaFilter))
         );
@@ -214,6 +216,123 @@ function populateFormWithJcshms(selectedProduct, tbody) {
     formatPackageSpecForRow(tbody);
 }
 
+async function createAndFetchMaster(gs1Code) {
+    window.showLoading('新規マスターを作成中...');
+    try {
+        const productCode = gs1Code.length === 14 ? gs1Code.substring(1) : gs1Code;
+
+        const createRes = await fetch('/api/master/create_provisional', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ gs1Code, productCode }),
+        });
+        const createData = await createRes.json();
+        if (!createRes.ok) {
+            throw new Error(createData.message || 'マスターの作成に失敗しました。');
+        }
+        window.showNotification(`新規マスターを作成しました (YJ: ${createData.yjCode})`, 'success');
+        window.showLoading('作成したマスター情報を取得中...');
+        const fetchRes = await fetch(`/api/product/by_gs1?gs1_code=${gs1Code}`);
+        if (!fetchRes.ok) {
+            throw new Error('作成されたマスター情報の取得に失敗しました。');
+        }
+        const newMaster = await fetchRes.json();
+        return newMaster;
+
+    } catch (err) {
+        throw err;
+    } finally {
+        window.hideLoading();
+    }
+}
+
+async function resolveProductNameForShelfScan(gs1) {
+    try {
+        const res = await fetch(`/api/product/by_gs1?gs1_code=${gs1}`);
+        let product;
+        if (res.ok) {
+            product = await res.json();
+        } else if (res.status === 404) {
+            product = await createAndFetchMaster(gs1);
+        } else {
+            throw new Error(`サーバーエラー (HTTP ${res.status})`);
+        }
+
+        const poolItem = shelfScanPool.find(item => item.gs1 === gs1);
+        if (poolItem && product) {
+            poolItem.name = product.productName;
+            const listItem = shelfScannedList.querySelector(`.scanned-item[data-gs1="${gs1}"] .scanned-item-name`);
+            if (listItem) {
+                listItem.textContent = product.productName;
+                listItem.classList.add('resolved');
+            }
+        }
+
+    } catch (err) {
+        console.error(`品目名の解決/作成に失敗: ${gs1}`, err);
+        window.showNotification(`バーコード[${gs1}]の処理に失敗: ${err.message}`, 'error');
+        shelfScanPool = shelfScanPool.filter(item => item.gs1 !== gs1);
+        updateShelfScannedList();
+    }
+}
+
+function updateShelfScannedList() {
+    shelfScannedCount.textContent = shelfScanPool.length;
+    shelfScannedList.innerHTML = shelfScanPool.map(item => `
+        <div class="scanned-item" data-gs1="${item.gs1}">
+            <span class="scanned-item-name ${item.name ? 'resolved' : ''}">${item.name || item.gs1}</span>
+        </div>
+    `).join('');
+}
+
+async function handleShelfRegister() {
+    const shelfNumber = shelfNumberInputForBulk.value.trim();
+    if (!shelfNumber) {
+        window.showNotification('棚番を入力してください。', 'error');
+        return;
+    }
+    if (shelfScanPool.length === 0) {
+        window.showNotification('登録する品目がスキャンされていません。', 'error');
+        return;
+    }
+
+    const gs1Codes = shelfScanPool.map(item => item.gs1);
+
+    if (!confirm(`スキャンした ${gs1Codes.length} 件の品目の棚番を「${shelfNumber}」として一括登録します。\nよろしいですか？`)) {
+        return;
+    }
+
+    window.showLoading('棚番を一括更新中...');
+    try {
+        const payload = {
+            shelfNumber: shelfNumber,
+            gs1Codes: gs1Codes
+        };
+        const res = await fetch('/api/masters/bulk_update_shelf_numbers', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const resData = await res.json();
+        if (!res.ok) {
+            throw new Error(resData.message || '棚番の更新に失敗しました。');
+        }
+        window.showNotification(resData.message, 'success');
+        
+        shelfScanPool = [];
+        updateShelfScannedList();
+        shelfNumberInputForBulk.value = '';
+        shelfBarcodeInput.focus();
+
+        loadAndRenderMasters();
+
+    } catch (err) {
+        window.showNotification(`エラー: ${err.message}`, 'error');
+    } finally {
+        window.hideLoading();
+    }
+}
+
 export async function initMasterEdit() {
     view = document.getElementById('master-edit-view');
     if (!view) return;
@@ -224,7 +343,70 @@ export async function initMasterEdit() {
     dosageFormInput = document.getElementById('master-edit-dosageForm');
     shelfNumberInput = document.getElementById('master-edit-shelfNumber');
 
+    shelfModal = document.getElementById('bulk-shelf-number-modal');
+    closeShelfModalBtn = document.getElementById('close-shelf-modal-btn');
+    bulkShelfNumberBtn = document.getElementById('bulkShelfNumberBtn');
+    shelfBarcodeForm = document.getElementById('shelf-barcode-form');
+    shelfBarcodeInput = document.getElementById('shelf-barcode-input');
+    shelfScannedList = document.getElementById('shelf-scanned-list');
+    shelfScannedCount = document.getElementById('shelf-scanned-count');
+    shelfNumberInputForBulk = document.getElementById('shelf-number-input');
+    shelfRegisterBtn = document.getElementById('shelf-register-btn');
+    shelfClearBtn = document.getElementById('shelf-clear-btn');
+
+    bulkShelfNumberBtn.addEventListener('click', () => {
+        shelfScanPool = [];
+        updateShelfScannedList();
+        shelfNumberInputForBulk.value = '';
+        shelfModal.classList.remove('hidden');
+        document.body.classList.add('modal-open');
+        setTimeout(() => shelfBarcodeInput.focus(), 100);
+    });
+
+    closeShelfModalBtn.addEventListener('click', () => {
+        shelfModal.classList.add('hidden');
+        document.body.classList.remove('modal-open');
+    });
+
+    shelfBarcodeForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const barcode = shelfBarcodeInput.value.trim();
+        if (barcode) {
+            if (!shelfScanPool.some(item => item.gs1 === barcode)) {
+                shelfScanPool.push({ gs1: barcode, name: null });
+                updateShelfScannedList();
+                resolveProductNameForShelfScan(barcode);
+            } else {
+                window.showNotification('このバーコードは既にリストにあります。', 'error');
+            }
+        }
+        shelfBarcodeInput.value = '';
+    });
+
+    shelfRegisterBtn.addEventListener('click', handleShelfRegister);
+
+    shelfClearBtn.addEventListener('click', () => {
+        if (confirm('スキャン済みリストをクリアしますか？')) {
+            shelfScanPool = [];
+            updateShelfScannedList();
+            shelfBarcodeInput.focus();
+        }
+    });
+
     await fetchUnitMap();
+
+    view.addEventListener('filterMasterEdit', async (e) => {
+        const { productCode } = e.detail;
+        if (productCode) {
+            kanaNameInput.value = productCode;
+            await loadAndRenderMasters(); 
+            
+            const targetRow = tableContainer.querySelector(`[data-record-id="${productCode}"]`);
+            if (targetRow) {
+                targetRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }
+    });
 
     refreshBtn.addEventListener('click', loadAndRenderMasters);
 
@@ -254,9 +436,19 @@ export async function initMasterEdit() {
         }
     });
 
-    kanaNameInput.addEventListener('input', applyFiltersAndRender);
+    // ▼▼▼【ここから修正】イベントリスナーを 'input' から 'keypress' に変更し、Enterキーでのみ発火するようにする▼▼▼
+    const handleEnterSearch = (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault(); // フォームの送信など、デフォルトの動作を防ぐ
+            applyFiltersAndRender();
+        }
+    };
+
+    kanaNameInput.addEventListener('keypress', handleEnterSearch);
+    shelfNumberInput.addEventListener('keypress', handleEnterSearch);
+    // ▲▲▲【修正ここまで】▲▲▲
+
     dosageFormInput.addEventListener('change', applyFiltersAndRender);
-    shelfNumberInput.addEventListener('input', applyFiltersAndRender);
     
     tableContainer.addEventListener('input', (e) => {
         const tbody = e.target.closest('tbody[data-record-id]');
@@ -321,20 +513,13 @@ export async function initMasterEdit() {
                 const resData = await res.json();
                 window.showNotification(resData.message, 'success');
 
-                // ▼▼▼【ここから修正】▼▼▼
-                // loadAndRenderMasters(); を削除し、以下の処理に置き換え
-
-                // 1. メモリ上のデータを更新
                 const masterIndex = allMasters.findIndex(m => m.productCode === data.productCode);
                 if (masterIndex > -1) {
-                    // 既存マスターの更新
                     allMasters[masterIndex] = { ...allMasters[masterIndex], ...data };
                 } else {
-                    // 新規マスターの追加
                     allMasters.push(data);
                 }
 
-                // 2. DOMを直接更新
                 if (isNew) {
                     const productCodeInput = tbody.querySelector('input[name="productCode"]');
                     productCodeInput.readOnly = true;
@@ -343,13 +528,11 @@ export async function initMasterEdit() {
                     originInput.value = data.origin;
                 }
                 
-                // 3. 視覚的なフィードバック
                 tbody.querySelectorAll('tr').forEach(row => {
-                    row.classList.remove('save-success'); // アニメーションを再実行可能にするため一旦削除
-                    void row.offsetWidth; // リフローを強制
-                    row.classList.add('save-success'); // アニメーションクラスを追加
+                    row.classList.remove('save-success');
+                    void row.offsetWidth;
+                    row.classList.add('save-success');
                 });
-                // ▲▲▲【修正ここまで】▲▲▲
 
             } catch (err) {
                 window.showNotification(err.message, 'error');

@@ -1,3 +1,4 @@
+/* C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\css\styles.css (全体) */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: sans-serif; padding: 10px; background-color: #f4f4f4; }
 .hidden { display: none !important; }
@@ -70,12 +71,10 @@ th { text-align: center; background-color: #f0f0f0; }
 .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
 .close-button { font-size: 24px; border: none; background: none; cursor: pointer; }
 
-/* ▼▼▼ [修正点] 以下の .modal-body スタイルを丸ごと追加 ▼▼▼ */
 .modal-body {
     flex-grow: 1; /* 親要素(.modal-content)の高さに合わせて伸縮 */
     overflow-y: auto; /* 内容がはみ出したら縦スクロールバーを表示 */
 }
-/* ▲▲▲ 修正ここまで ▲▲▲ */
 
 .view-title, .view-subtitle, .modal-title {
     font-size: 1em;
@@ -88,7 +87,6 @@ th { text-align: center; background-color: #f0f0f0; }
 .agg-pkg-header { background-color: #e9ecef; padding: 4px; border: 1px solid #ccc; border-bottom: none; font-weight: bold; font-size: 1em; }
 .agg-yj-header .product-name { margin-left: 20px; flex-grow: 1; }
 
-/* ▼▼▼ [修正点] 取引種別の色分け用スタイルをここに追加 ▼▼▼ */
 .tx-return, .tx-return td {
     color: #dc3545; /* 赤色 */
     font-weight: bold;
@@ -98,22 +96,23 @@ th { text-align: center; background-color: #f0f0f0; }
     color: #0d6efd; /* 青色 */
     font-weight: bold;
 }
-/* ▲▲▲ 修正ここまで ▲▲▲ */
 
-/* ▼▼▼ [ここから修正] 以下のスタイルを追記 ▼▼▼ */
 .provisional-order-item {
     background-color: #e9ecef !important; /* 薄いグレー */
     color: #6c757d; /* やや薄い文字色 */
 }
-.provisional-order-item td {
+
+/* ▼▼▼【ここから修正】▼▼▼ */
+.provisional-order-item td:not(.order-actions-cell) {
     text-decoration: line-through; /* 取り消し線 */
 }
+/* ▲▲▲【修正ここまで】▲▲▲ */
+
 .provisional-order-item select:disabled,
 .provisional-order-item input:disabled {
     background-color: #f8f9fa; /* 背景を少し明るく */
     cursor: not-allowed; /* 操作不可カーソル */
 }
-/* ▲▲▲ [修正ここまで] ▲▲▲ */
 
 /* ▼▼▼ [ここから追加] ボタンのビビッドカラー設定 ▼▼▼ */
 .btn-red { background-color: #ff0000; color: white; border-color: #d90000; }
@@ -153,7 +152,6 @@ th { text-align: center; background-color: #f0f0f0; }
 .btn-orange:hover { background-color: #d96c00; }
 /* ▲▲▲ [追加ここまで] ▲▲▲ */
 
-/* ▼▼▼【ここに追加】▼▼▼ */
 #scanned-items-list {
     background-color: #f8f9fa;
 }
@@ -179,8 +177,39 @@ th { text-align: center; background-color: #f0f0f0; }
 .processing-indicator:not(.hidden) {
     display: block !important;
 }
-/* ▲▲▲【追加ここまで】▲▲▲ */
 
+/* ▼▼▼【ここに追加】▼▼▼ */
+.scanned-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center; /* 垂直方向中央揃え */
+    padding: 4px 8px;
+    border-bottom: 1px solid #e9ecef;
+    font-size: 12px; /* 少し小さく */
+}
+.scanned-item:last-child {
+    border-bottom: none;
+}
+.scanned-item-name {
+    flex-grow: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-right: 10px;
+}
+.scanned-item-count {
+    font-weight: bold;
+    min-width: 30px; /* カウント部分の幅を確保 */
+    text-align: right;
+}
+#shelf-scanned-list .scanned-item-name {
+    color: #555;
+}
+#shelf-scanned-list .scanned-item-name.resolved {
+    color: #000; /* 品目名が解決したら黒文字に */
+    font-weight: normal;
+}
+/* ▲▲▲【追加ここまで】▲▲▲ */
 
 /* ▼▼▼ [修正点] 印刷用CSSを汎用的な仕組みに全面的に書き換え ▼▼▼ */
 @media print {

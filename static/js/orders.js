@@ -2,13 +2,11 @@
 import { hiraganaToKatakana, getLocalDateString, toHalfWidth } from './utils.js';
 import { wholesalerMap } from './master_data.js';
 
-// ▼▼▼【ここから追加】▼▼▼
 // 連続スキャン用のグローバル変数
 let continuousOrderModal, continuousOrderBtn, closeContinuousModalBtn;
 let continuousBarcodeForm, continuousBarcodeInput, scannedItemsList, scannedItemsCount, processingIndicator;
 let scanQueue = [];
 let isProcessingQueue = false;
-// ▲▲▲【追加ここまで】▲▲▲
 
 function formatBalance(balance) {
     if (typeof balance === 'number') {
@@ -17,7 +15,6 @@ function formatBalance(balance) {
     return balance;
 }
 
-// ▼▼▼【ここから修正】▼▼▼
 /**
  * 発注リストに品目を追加、または既に存在する場合は数量を更新する関数
  * @param {object} productMaster - 追加する製品のマスターデータ
@@ -46,6 +43,17 @@ function addOrUpdateOrderItem(productMaster) {
         wholesalerOptions += `<option value="${code}" ${isSelected ? 'selected' : ''}>${name}</option>`;
     });
 
+    const actionCellHTML = `
+        <td class="order-actions-cell">
+            <div class="order-action-buttons">
+                <button class="remove-order-item-btn btn">除外</button>
+                <button class="go-to-master-btn btn" data-product-code="${productMaster.productCode}">ﾏｽﾀ</button>
+                <button class="set-unorderable-btn btn" data-product-code="${productMaster.productCode}">発注不可</button>
+                <button class="go-to-inv-adj-btn btn" data-yj-code="${productMaster.yjCode}">棚卸調整</button>
+            </div>
+        </td>
+    `;
+
     const newRowHTML = `
         <tr data-jan-code="${productMaster.productCode}" 
             data-yj-code="${productMaster.yjCode}"
@@ -61,7 +69,7 @@ function addOrUpdateOrderItem(productMaster) {
             <td><select class="wholesaler-select" style="width: 100%;">${wholesalerOptions}</select></td>
             <td>1包装 (${productMaster.yjPackUnitQty} ${productMaster.yjUnitName})</td>
             <td><input type="number" value="1" class="order-quantity-input" style="width: 80px;"></td>
-            <td><button class="remove-order-item-btn btn">除外</button></td>
+            ${actionCellHTML}
         </tr>
     `;
 
@@ -173,7 +181,6 @@ async function processScanQueue() {
     isProcessingQueue = false;
     processingIndicator.classList.add('hidden');
 }
-// ▲▲▲【修正ここまで】▲▲▲
 
 function renderOrderCandidates(data, container, wholesalers) {
     if (!data || data.length === 0) {
@@ -230,12 +237,22 @@ function renderOrderCandidates(data, container, wholesalers) {
                             rowWholesalerOptions += `<option value="${w.code}" ${isSelected ? 'selected' : ''}>${w.name}</option>`;
                         });
 
-                        let actionCellHTML = '';
+                        let actionCellHTML = `
+                            <td class="order-actions-cell">
+                                <div class="order-action-buttons">
+                        `;
                         if (isOrderable) {
-                            actionCellHTML = '<td><button class="remove-order-item-btn btn">除外</button></td>';
+                            actionCellHTML += '<button class="remove-order-item-btn btn">除外</button>';
                         } else {
-                            actionCellHTML = '<td><button class="change-to-orderable-btn btn">発注に変更</button></td>';
+                            actionCellHTML += '<button class="change-to-orderable-btn btn">発注に変更</button>';
                         }
+                        actionCellHTML += `
+                                    <button class="go-to-master-btn btn" data-product-code="${master.productCode}">ﾏｽﾀ</button>
+                                    <button class="set-unorderable-btn btn" data-product-code="${master.productCode}">発注不可</button>
+                                    <button class="go-to-inv-adj-btn btn" data-yj-code="${yjGroup.yjCode}">棚卸調整</button>
+                                </div>
+                            </td>
+                        `;
 
                         html += `
                             <tr class="${rowClass}" 
@@ -264,7 +281,6 @@ function renderOrderCandidates(data, container, wholesalers) {
     });
     container.innerHTML = html;
 }
-
 
 async function handleOrderBarcodeScan(e) {
     e.preventDefault();
@@ -353,8 +369,6 @@ export function initOrders() {
     const barcodeForm = document.getElementById('order-barcode-form');
     const shelfNumberInput = document.getElementById('order-shelf-number');
 
-    // ▼▼▼【ここから追加】▼▼▼
-    // 連続スキャンモーダル用の要素を取得
     continuousOrderModal = document.getElementById('continuous-order-modal');
     continuousOrderBtn = document.getElementById('continuous-order-btn');
     closeContinuousModalBtn = document.getElementById('close-continuous-modal-btn');
@@ -364,7 +378,6 @@ export function initOrders() {
     scannedItemsCount = document.getElementById('scanned-items-count');
     processingIndicator = document.getElementById('processing-indicator');
 
-    // モーダル表示ボタンのイベント
     continuousOrderBtn.addEventListener('click', () => {
         scanQueue = [];
         updateScannedItemsDisplay();
@@ -373,25 +386,22 @@ export function initOrders() {
         setTimeout(() => continuousBarcodeInput.focus(), 100);
     });
 
-    // モーダル閉じるボタンのイベント
     closeContinuousModalBtn.addEventListener('click', () => {
         continuousOrderModal.classList.add('hidden');
         document.body.classList.remove('modal-open');
     });
 
-    // モーダル内のフォーム送信（バーコードスキャン完了）イベント
     continuousBarcodeForm.addEventListener('submit', (e) => {
         e.preventDefault();
         const barcode = continuousBarcodeInput.value.trim();
         if (barcode) {
             scanQueue.push(barcode);
             updateScannedItemsDisplay();
-            processScanQueue(); // バックグラウンド処理を開始/継続
+            processScanQueue();
         }
         continuousBarcodeInput.value = '';
     });
-    // ▲▲▲【追加ここまで】▲▲▲
-
+    
     if (barcodeForm) {
         barcodeForm.addEventListener('submit', handleOrderBarcodeScan);
     }
@@ -507,11 +517,53 @@ export function initOrders() {
             window.hideLoading();
         }
     });
-    outputContainer.addEventListener('click', (e) => {
+
+    outputContainer.addEventListener('click', async (e) => {
         const target = e.target;
-        
-        if (target.classList.contains('change-to-orderable-btn')) {
-            const row = target.closest('tr');
+        const row = target.closest('tr');
+
+        if (target.classList.contains('go-to-master-btn')) {
+            const productCode = target.dataset.productCode;
+            document.dispatchEvent(new CustomEvent('navigateToMasterEdit', {
+                detail: { productCode },
+                bubbles: true
+            }));
+        } else if (target.classList.contains('set-unorderable-btn')) {
+            const productCode = target.dataset.productCode;
+            const productName = row ? row.cells[0].textContent : productCode;
+            if (!confirm(`「${productName}」を発注不可に設定しますか？\nこの品目は今後、不足品リストに表示されなくなります。`)) {
+                return;
+            }
+            window.showLoading('マスターを更新中...');
+            try {
+                const res = await fetch('/api/master/set_order_stopped', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ productCode: productCode, status: 1 }),
+                });
+                const resData = await res.json();
+                if (!res.ok) throw new Error(resData.message || '更新に失敗しました。');
+
+                if (row) {
+                    row.classList.add('provisional-order-item');
+                    row.querySelector('.wholesaler-select').disabled = true;
+                    row.querySelector('.order-quantity-input').disabled = true;
+                    target.disabled = true; // ボタン自体も無効化
+                }
+                window.showNotification(`「${productName}」を発注不可に設定しました。`, 'success');
+
+            } catch(err) {
+                window.showNotification(err.message, 'error');
+            } finally {
+                window.hideLoading();
+            }
+        } else if (target.classList.contains('go-to-inv-adj-btn')) {
+            const yjCode = target.dataset.yjCode;
+            document.dispatchEvent(new CustomEvent('navigateToInventoryAdjustment', {
+                detail: { yjCode },
+                bubbles: true
+            }));
+        } else if (target.classList.contains('change-to-orderable-btn')) {
             if (row) {
                 row.classList.remove('provisional-order-item');
                 row.querySelector('.wholesaler-select').disabled = false;
@@ -522,7 +574,6 @@ export function initOrders() {
                 target.classList.add('remove-order-item-btn');
             }
         } else if (target.classList.contains('remove-order-item-btn')) {
-            const row = target.closest('tr');
             const tbody = row.closest('tbody');
             const table = tbody.closest('table');
             const wrapper = table.closest('.order-yj-group-wrapper');

@@ -234,8 +234,152 @@ import (
 	"wasabi/model"
 )
 
+// ▼▼▼【ここから追加】▼▼▼
+
+// ExportCustomersHandler は得意先と卸業者の両方を1つのCSVファイルに出力します。
+func ExportCustomersHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		clients, err := db.GetAllClients(conn)
+		if err != nil {
+			http.Error(w, "Failed to get clients", http.StatusInternalServerError)
+			return
+		}
+
+		wholesalers, err := db.GetAllWholesalers(conn)
+		if err != nil {
+			http.Error(w, "Failed to get wholesalers", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/csv")
+		w.Header().Set("Content-Disposition", `attachment; filename="customer_master.csv"`)
+		w.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM
+
+		csvWriter := csv.NewWriter(w)
+		defer csvWriter.Flush()
+
+		headers := []string{"種別", "コード", "名称"}
+		if err := csvWriter.Write(headers); err != nil {
+			http.Error(w, "Failed to write CSV header", http.StatusInternalServerError)
+			return
+		}
+
+		// 得意先を書き込み
+		for _, client := range clients {
+			record := []string{
+				"得意先",
+				fmt.Sprintf("=%q", client.Code),
+				client.Name,
+			}
+			if err := csvWriter.Write(record); err != nil {
+				log.Printf("Failed to write client row to CSV (Code: %s): %v", client.Code, err)
+			}
+		}
+
+		// 卸業者を書き込み
+		for _, wholesaler := range wholesalers {
+			record := []string{
+				"卸業者",
+				fmt.Sprintf("=%q", wholesaler.Code),
+				wholesaler.Name,
+			}
+			if err := csvWriter.Write(record); err != nil {
+				log.Printf("Failed to write wholesaler row to CSV (Code: %s): %v", wholesaler.Code, err)
+			}
+		}
+	}
+}
+
+// ImportCustomersHandler は得意先と卸業者の両方を含むCSVファイルをインポートします。
+func ImportCustomersHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		file, _, err := r.FormFile("file")
+		if err != nil {
+			http.Error(w, "No file uploaded", http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+
+		csvReader := csv.NewReader(file)
+		csvReader.LazyQuotes = true
+		rows, err := csvReader.ReadAll()
+		if err != nil {
+			http.Error(w, "Failed to parse CSV file: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		tx, err := conn.Begin()
+		if err != nil {
+			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback()
+
+		clientStmt, err := tx.Prepare("INSERT OR REPLACE INTO client_master (client_code, client_name) VALUES (?, ?)")
+		if err != nil {
+			http.Error(w, "Failed to prepare client DB statement", http.StatusInternalServerError)
+			return
+		}
+		defer clientStmt.Close()
+
+		wholesalerStmt, err := tx.Prepare("INSERT OR REPLACE INTO wholesalers (wholesaler_code, wholesaler_name) VALUES (?, ?)")
+		if err != nil {
+			http.Error(w, "Failed to prepare wholesaler DB statement", http.StatusInternalServerError)
+			return
+		}
+		defer wholesalerStmt.Close()
+
+		var clientCount, wholesalerCount int
+		for i, row := range rows {
+			if i == 0 || len(row) < 3 { // Skip header or short rows
+				continue
+			}
+			customerType := strings.TrimSpace(row[0])
+			code := strings.Trim(strings.TrimSpace(row[1]), `="`)
+			name := strings.TrimSpace(row[2])
+
+			switch customerType {
+			case "得意先":
+				if _, err := clientStmt.Exec(code, name); err != nil {
+					log.Printf("Failed to import client row %d: %v", i+1, err)
+					http.Error(w, fmt.Sprintf("Failed to import client row %d", i+1), http.StatusInternalServerError)
+					return
+				}
+				clientCount++
+			case "卸業者":
+				if _, err := wholesalerStmt.Exec(code, name); err != nil {
+					log.Printf("Failed to import wholesaler row %d: %v", i+1, err)
+					http.Error(w, fmt.Sprintf("Failed to import wholesaler row %d", i+1), http.StatusInternalServerError)
+					return
+				}
+				wholesalerCount++
+			default:
+				// Unknown type, skip
+			}
+		}
+
+		if err := db.InitializeSequenceFromMaxClientCode(tx); err != nil {
+			log.Printf("Warning: failed to re-initialize client sequence after import: %v", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": fmt.Sprintf("%d件の得意先、%d件の卸業者をインポートしました。", clientCount, wholesalerCount),
+		})
+	}
+}
+
+// ▲▲▲【追加ここまで】▲▲▲
+
+// ExportClientsHandler は古い関数として残しますが、新しいUIからは呼び出されません。
 func ExportClientsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// (元のコードのまま)
 		clients, err := db.GetAllClients(conn)
 		if err != nil {
 			http.Error(w, "Failed to get clients", http.StatusInternalServerError)
@@ -267,8 +411,10 @@ func ExportClientsHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
+// ImportClientsHandler は古い関数として残しますが、新しいUIからは呼び出されません。
 func ImportClientsHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// (元のコードのまま)
 		file, _, err := r.FormFile("file")
 		if err != nil {
 			http.Error(w, "No file uploaded", http.StatusBadRequest)
@@ -314,17 +460,14 @@ func ImportClientsHandler(conn *sql.DB) http.HandlerFunc {
 			importedCount++
 		}
 
-		// ▼▼▼【修正点】コミットの前にシーケンス初期化を移動 ▼▼▼
 		if err := db.InitializeSequenceFromMaxClientCode(tx); err != nil {
 			log.Printf("Warning: failed to re-initialize client sequence after import: %v", err)
-			// ここではエラーを返さず、警告ログにとどめる
 		}
 
 		if err := tx.Commit(); err != nil {
 			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
 			return
 		}
-		// ▲▲▲【修正ここまで】▲▲▲
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
@@ -334,6 +477,7 @@ func ImportClientsHandler(conn *sql.DB) http.HandlerFunc {
 }
 
 func ExportProductsHandler(conn *sql.DB) http.HandlerFunc {
+	// (この関数は変更なし)
 	return func(w http.ResponseWriter, r *http.Request) {
 		products, err := db.GetAllProductMasters(conn)
 		if err != nil {
@@ -349,11 +493,13 @@ func ExportProductsHandler(conn *sql.DB) http.HandlerFunc {
 		defer csvWriter.Flush()
 
 		header := []string{
-			"product_code", "yj_code", "product_name", "origin", "kana_name", "maker_name",
-			"usage_classification", "package_form",
-			"yj_unit_name", "yj_pack_unit_qty", "flag_poison", "flag_deleterious", "flag_narcotic",
-			"flag_psychotropic", "flag_stimulant", "flag_stimulant_raw", "jan_pack_inner_qty",
-			"jan_unit_code", "jan_pack_unit_qty", "nhi_price", "purchase_price", "supplier_wholesale",
+			"product_code", "yj_code", "gs1_code", "product_name", "specification", "kana_name", "maker_name",
+			"usage_classification", "package_form", "yj_unit_name", "yj_pack_unit_qty",
+			"jan_pack_inner_qty", "jan_unit_code", "jan_pack_unit_qty", "origin",
+			"nhi_price", "purchase_price",
+			"flag_poison", "flag_deleterious", "flag_narcotic", "flag_psychotropic", "flag_stimulant", "flag_stimulant_raw",
+			"is_order_stopped", "supplier_wholesale",
+			"group_code", "shelf_number", "category", "user_notes",
 		}
 		if err := csvWriter.Write(header); err != nil {
 			http.Error(w, "Failed to write CSV header", http.StatusInternalServerError)
@@ -364,26 +510,33 @@ func ExportProductsHandler(conn *sql.DB) http.HandlerFunc {
 			record := []string{
 				fmt.Sprintf("=%q", p.ProductCode),
 				p.YjCode,
+				p.Gs1Code,
 				p.ProductName,
-				p.Origin,
+				p.Specification,
 				p.KanaName,
 				p.MakerName,
 				p.UsageClassification,
 				p.PackageForm,
 				p.YjUnitName,
 				strconv.FormatFloat(p.YjPackUnitQty, 'f', -1, 64),
+				strconv.FormatFloat(p.JanPackInnerQty, 'f', -1, 64),
+				strconv.Itoa(p.JanUnitCode),
+				strconv.FormatFloat(p.JanPackUnitQty, 'f', -1, 64),
+				p.Origin,
+				strconv.FormatFloat(p.NhiPrice, 'f', -1, 64),
+				strconv.FormatFloat(p.PurchasePrice, 'f', -1, 64),
 				strconv.Itoa(p.FlagPoison),
 				strconv.Itoa(p.FlagDeleterious),
 				strconv.Itoa(p.FlagNarcotic),
 				strconv.Itoa(p.FlagPsychotropic),
 				strconv.Itoa(p.FlagStimulant),
 				strconv.Itoa(p.FlagStimulantRaw),
-				strconv.FormatFloat(p.JanPackInnerQty, 'f', -1, 64),
-				strconv.Itoa(p.JanUnitCode),
-				strconv.FormatFloat(p.JanPackUnitQty, 'f', -1, 64),
-				strconv.FormatFloat(p.NhiPrice, 'f', -1, 64),
-				strconv.FormatFloat(p.PurchasePrice, 'f', -1, 64),
+				strconv.Itoa(p.IsOrderStopped),
 				p.SupplierWholesale,
+				p.GroupCode,
+				p.ShelfNumber,
+				p.Category,
+				p.UserNotes,
 			}
 			if err := csvWriter.Write(record); err != nil {
 				log.Printf("Failed to write product row to CSV (JAN: %s): %v", p.ProductCode, err)
@@ -393,6 +546,7 @@ func ExportProductsHandler(conn *sql.DB) http.HandlerFunc {
 }
 
 func ImportProductsHandler(conn *sql.DB) http.HandlerFunc {
+	// (この関数は変更なし)
 	return func(w http.ResponseWriter, r *http.Request) {
 		file, _, err := r.FormFile("file")
 		if err != nil {
@@ -419,47 +573,55 @@ func ImportProductsHandler(conn *sql.DB) http.HandlerFunc {
 
 		var importedCount int
 		for i, row := range rows {
-			if i == 0 || len(row) < 22 {
+			if i == 0 || len(row) < 29 {
 				continue
 			}
 
-			yjPackUnitQty, _ := strconv.ParseFloat(row[9], 64)
-			flagPoison, _ := strconv.Atoi(row[10])
-			flagDeleterious, _ := strconv.Atoi(row[11])
-			flagNarcotic, _ := strconv.Atoi(row[12])
-			flagPsychotropic, _ := strconv.Atoi(row[13])
-			flagStimulant, _ := strconv.Atoi(row[14])
-			flagStimulantRaw, _ := strconv.Atoi(row[15])
-			janPackInnerQty, _ := strconv.ParseFloat(row[16], 64)
-			janUnitCode, _ := strconv.Atoi(row[17])
-			janPackUnitQty, _ := strconv.ParseFloat(row[18], 64)
-			nhiPrice, _ := strconv.ParseFloat(row[19], 64)
-			purchasePrice, _ := strconv.ParseFloat(row[20], 64)
+			yjPackUnitQty, _ := strconv.ParseFloat(row[10], 64)
+			janPackInnerQty, _ := strconv.ParseFloat(row[11], 64)
+			janUnitCode, _ := strconv.Atoi(row[12])
+			janPackUnitQty, _ := strconv.ParseFloat(row[13], 64)
+			nhiPrice, _ := strconv.ParseFloat(row[15], 64)
+			purchasePrice, _ := strconv.ParseFloat(row[16], 64)
+			flagPoison, _ := strconv.Atoi(row[17])
+			flagDeleterious, _ := strconv.Atoi(row[18])
+			flagNarcotic, _ := strconv.Atoi(row[19])
+			flagPsychotropic, _ := strconv.Atoi(row[20])
+			flagStimulant, _ := strconv.Atoi(row[21])
+			flagStimulantRaw, _ := strconv.Atoi(row[22])
+			isOrderStopped, _ := strconv.Atoi(row[23])
 			productCode := strings.Trim(strings.TrimSpace(row[0]), `="`)
 
 			input := model.ProductMasterInput{
 				ProductCode:         productCode,
 				YjCode:              strings.TrimSpace(row[1]),
-				ProductName:         strings.TrimSpace(row[2]),
-				Origin:              strings.TrimSpace(row[3]),
-				KanaName:            strings.TrimSpace(row[4]),
-				MakerName:           strings.TrimSpace(row[5]),
-				UsageClassification: strings.TrimSpace(row[6]),
-				PackageForm:         strings.TrimSpace(row[7]),
-				YjUnitName:          strings.TrimSpace(row[8]),
+				Gs1Code:             strings.TrimSpace(row[2]),
+				ProductName:         strings.TrimSpace(row[3]),
+				Specification:       strings.TrimSpace(row[4]),
+				KanaName:            strings.TrimSpace(row[5]),
+				MakerName:           strings.TrimSpace(row[6]),
+				UsageClassification: strings.TrimSpace(row[7]),
+				PackageForm:         strings.TrimSpace(row[8]),
+				YjUnitName:          strings.TrimSpace(row[9]),
 				YjPackUnitQty:       yjPackUnitQty,
+				JanPackInnerQty:     janPackInnerQty,
+				JanUnitCode:         janUnitCode,
+				JanPackUnitQty:      janPackUnitQty,
+				Origin:              strings.TrimSpace(row[14]),
+				NhiPrice:            nhiPrice,
+				PurchasePrice:       purchasePrice,
 				FlagPoison:          flagPoison,
 				FlagDeleterious:     flagDeleterious,
 				FlagNarcotic:        flagNarcotic,
 				FlagPsychotropic:    flagPsychotropic,
 				FlagStimulant:       flagStimulant,
 				FlagStimulantRaw:    flagStimulantRaw,
-				JanPackInnerQty:     janPackInnerQty,
-				JanUnitCode:         janUnitCode,
-				JanPackUnitQty:      janPackUnitQty,
-				NhiPrice:            nhiPrice,
-				PurchasePrice:       purchasePrice,
-				SupplierWholesale:   strings.TrimSpace(row[21]),
+				IsOrderStopped:      isOrderStopped,
+				SupplierWholesale:   strings.TrimSpace(row[24]),
+				GroupCode:           strings.TrimSpace(row[25]),
+				ShelfNumber:         strings.TrimSpace(row[26]),
+				Category:            strings.TrimSpace(row[27]),
+				UserNotes:           strings.TrimSpace(row[28]),
 			}
 
 			if err := db.UpsertProductMasterInTx(tx, input); err != nil {
@@ -470,7 +632,6 @@ func ImportProductsHandler(conn *sql.DB) http.HandlerFunc {
 			importedCount++
 		}
 
-		// ▼▼▼【修正点】コミットの前にシーケンス初期化を移動 ▼▼▼
 		if err := db.InitializeSequenceFromMaxYjCode(tx); err != nil {
 			log.Printf("Warning: failed to re-initialize YJ sequence after import: %v", err)
 		}
@@ -479,7 +640,6 @@ func ImportProductsHandler(conn *sql.DB) http.HandlerFunc {
 			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
 			return
 		}
-		// ▲▲▲【修正ここまで】▲▲▲
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
@@ -690,8 +850,7 @@ func GetConfig() Config {
 
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\dat\handler.go -----
-// C:\Users\wasab\OneDrive\デス-
-// WASABI/dat/handler.go
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\dat\handler.go (全体)
 
 package dat
 
@@ -884,8 +1043,8 @@ func ProcessDatFile(conn *sql.DB, filePath string) ([]model.TransactionRecord, e
 		ar := model.TransactionRecord{
 			TransactionDate: rec.Date, ClientCode: rec.ClientCode, ReceiptNumber: rec.ReceiptNumber,
 			LineNumber: rec.LineNumber, Flag: rec.Flag, JanCode: rec.JanCode,
-			ProductName: rec.ProductName, DatQuantity: rec.DatQuantity, UnitPrice: rec.UnitPrice,
-			Subtotal: rec.Subtotal, ExpiryDate: rec.ExpiryDate, LotNumber: rec.LotNumber,
+			ProductName: rec.ProductName, DatQuantity: rec.DatQuantity,
+			ExpiryDate: rec.ExpiryDate, LotNumber: rec.LotNumber,
 		}
 
 		master, err := mastermanager.FindOrCreate(tx, rec.JanCode, rec.ProductName, mastersMap, jcshmsMap)
@@ -893,12 +1052,38 @@ func ProcessDatFile(conn *sql.DB, filePath string) ([]model.TransactionRecord, e
 			return nil, fmt.Errorf("mastermanager failed for jan %s: %w", rec.JanCode, err)
 		}
 
+		// ▼▼▼【ここから修正】▼▼▼
+		// 1. YJ数量とJAN数量を計算
 		if master.YjPackUnitQty > 0 {
 			ar.YjQuantity = ar.DatQuantity * master.YjPackUnitQty
 		}
 		if master.JanPackUnitQty > 0 {
 			ar.JanQuantity = ar.DatQuantity * master.JanPackUnitQty
 		}
+
+		// 2. DATファイルから読み取った「包装あたりの納入価」を取得
+		//    DATファイルに価格情報がない場合のみ、マスターの納入価をフォールバックとして使用
+		packagePurchasePrice := rec.UnitPrice
+		if packagePurchasePrice <= 0 && master.PurchasePrice > 0 {
+			packagePurchasePrice = master.PurchasePrice
+		}
+
+		// 3. YJ単位の単価（仮の単価）を計算し、取引レコードの「UnitPrice」として設定
+		if master.YjPackUnitQty > 0 && packagePurchasePrice > 0 {
+			ar.UnitPrice = packagePurchasePrice / master.YjPackUnitQty
+		} else {
+			// 包装数量が不明な場合などは、DATの単価をそのまま使用せざるを得ない
+			ar.UnitPrice = rec.UnitPrice
+		}
+
+		// 4. 金額を「YJ数量 × YJ単位単価」で再計算
+		//    DATファイルに記録されているSubtotalは参照しない
+		ar.Subtotal = ar.YjQuantity * ar.UnitPrice
+
+		// 5. 取引レコードのPurchasePriceには、計算の元となった「包装あたりの納入価」を記録として保存
+		ar.PurchasePrice = packagePurchasePrice
+
+		// ▲▲▲【修正ここまで】▲▲▲
 
 		mappers.MapProductMasterToTransaction(&ar, master)
 		ar.ProcessFlagMA = "COMPLETE"
@@ -921,8 +1106,6 @@ func ProcessDatFile(conn *sql.DB, filePath string) ([]model.TransactionRecord, e
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("transaction commit error (final): %w", err)
 	}
-
-	// (backorder reconciliation logic is omitted as in tkr)
 
 	return finalRecords, nil
 }
@@ -4928,12 +5111,12 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 
 			yjQuantity := rec.JanQuantity * master.JanPackInnerQty
 
-			var unitNhiPrice float64
-			if master.YjPackUnitQty > 0 {
-				// DBのnhi_priceは包装薬価なので、ここで単価を計算
-				unitNhiPrice = master.NhiPrice / master.YjPackUnitQty
-			}
-			subtotal := yjQuantity * unitNhiPrice
+			// ▼▼▼【ここから修正】▼▼▼
+			// 単価にはマスターの薬価（YJ単位）を使用
+			unitPrice := master.NhiPrice
+			// 金額を「YJ数量 × YJ単位薬価」で計算
+			subtotal := yjQuantity * unitPrice
+			// ▲▲▲【修正ここまで】▲▲▲
 
 			tr := model.TransactionRecord{
 				TransactionDate: dateStr,
@@ -4945,7 +5128,7 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 				JanQuantity:     rec.JanQuantity,
 				DatQuantity:     rec.DatQuantity,
 				YjQuantity:      yjQuantity,
-				Subtotal:        subtotal,
+				Subtotal:        subtotal, // 正しく計算された金額を設定
 				ExpiryDate:      rec.ExpiryDate,
 				LotNumber:       rec.LotNumber,
 			}
@@ -4956,6 +5139,7 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 				tr.ProcessFlagMA = "PROVISIONAL"
 			}
 
+			// マッピング関数を呼ぶ（この中でUnitPriceが設定される）
 			mappers.MapProductMasterToTransaction(&tr, master)
 			finalRecords = append(finalRecords, tr)
 		}
@@ -5708,7 +5892,6 @@ func CreateMasterUpdateHandler(conn *sql.DB) http.HandlerFunc {
 
 		var updatedProducts, orphanedProducts, newlyAddedProducts []UpdatedProductView
 
-		// ▼▼▼【ここから修正】▼▼▼
 		existingMastersMap := make(map[string]*model.ProductMaster)
 		for _, m := range existingMasters {
 			existingMastersMap[m.ProductCode] = m
@@ -5719,6 +5902,7 @@ func CreateMasterUpdateHandler(conn *sql.DB) http.HandlerFunc {
 			jcshmsRow, matchFound := newJcshmsData[master.ProductCode]
 			if matchFound {
 				jancodeRow := newJancodeData[master.ProductCode]
+				// ProductMasterInputへの変換ロジックを createInputFromCSV に集約
 				input := createInputFromCSV(jcshmsRow, jancodeRow)
 				if master.Origin == "PROVISIONAL" && input.YjCode == "" {
 					input.Origin = "PROVISIONAL"
@@ -5746,7 +5930,37 @@ func CreateMasterUpdateHandler(conn *sql.DB) http.HandlerFunc {
 				master.Origin = "PROVISIONAL"
 				master.ProductName = newProductName
 				// 更新用のInputを作成
-				input := model.ProductMasterInput{ /* ... masterの全フィールドをコピー ... */ } // ここはUpsert用のInputに変換する必要がある
+				input := model.ProductMasterInput{
+					ProductCode:         master.ProductCode,
+					YjCode:              master.YjCode,
+					Gs1Code:             master.Gs1Code,
+					ProductName:         master.ProductName,
+					KanaName:            master.KanaName,
+					MakerName:           master.MakerName,
+					Specification:       master.Specification,
+					UsageClassification: master.UsageClassification,
+					PackageForm:         master.PackageForm,
+					YjUnitName:          master.YjUnitName,
+					YjPackUnitQty:       master.YjPackUnitQty,
+					JanPackInnerQty:     master.JanPackInnerQty,
+					JanUnitCode:         master.JanUnitCode,
+					JanPackUnitQty:      master.JanPackUnitQty,
+					Origin:              master.Origin,
+					NhiPrice:            master.NhiPrice,
+					PurchasePrice:       master.PurchasePrice,
+					FlagPoison:          master.FlagPoison,
+					FlagDeleterious:     master.FlagDeleterious,
+					FlagNarcotic:        master.FlagNarcotic,
+					FlagPsychotropic:    master.FlagPsychotropic,
+					FlagStimulant:       master.FlagStimulant,
+					FlagStimulantRaw:    master.FlagStimulantRaw,
+					IsOrderStopped:      master.IsOrderStopped,
+					SupplierWholesale:   master.SupplierWholesale,
+					GroupCode:           master.GroupCode,
+					ShelfNumber:         master.ShelfNumber,
+					Category:            master.Category,
+					UserNotes:           master.UserNotes,
+				}
 				if err := db.UpsertProductMasterInTx(tx, input); err != nil {
 					http.Error(w, fmt.Sprintf("マスターのPROVISIONAL化に失敗 (JAN: %s): %v", master.ProductCode, err), http.StatusInternalServerError)
 					return
@@ -5756,18 +5970,21 @@ func CreateMasterUpdateHandler(conn *sql.DB) http.HandlerFunc {
 		}
 
 		// --- 新規マスターの追加処理 ---
-		for productCode, jcshmsRow := range newJcshmsData {
-			if _, exists := existingMastersMap[productCode]; !exists {
-				jancodeRow := newJancodeData[productCode]
-				input := createInputFromCSV(jcshmsRow, jancodeRow)
-				if err := db.UpsertProductMasterInTx(tx, input); err != nil {
-					http.Error(w, fmt.Sprintf("新規マスターの追加に失敗 (JAN: %s): %v", productCode, err), http.StatusInternalServerError)
-					return
+		// ▼▼▼【ご指示により、JCSHMSマスターにしか存在しない新規品目を自動で追加する機能を削除】▼▼▼
+		/*
+			for productCode, jcshmsRow := range newJcshmsData {
+				if _, exists := existingMastersMap[productCode]; !exists {
+					jancodeRow := newJancodeData[productCode]
+					input := createInputFromCSV(jcshmsRow, jancodeRow)
+					if err := db.UpsertProductMasterInTx(tx, input); err != nil {
+						http.Error(w, fmt.Sprintf("新規マスターの追加に失敗 (JAN: %s): %v", productCode, err), http.StatusInternalServerError)
+						return
+					}
+					newlyAddedProducts = append(newlyAddedProducts, UpdatedProductView{ProductCode: productCode, ProductName: input.ProductName, Status: "NEW"})
 				}
-				newlyAddedProducts = append(newlyAddedProducts, UpdatedProductView{ProductCode: productCode, ProductName: input.ProductName, Status: "NEW"})
 			}
-		}
-		// ▲▲▲【修正ここまで】▲▲▲
+		*/
+		// ▲▲▲【削除ここまで】▲▲▲
 
 		if err := tx.Commit(); err != nil {
 			http.Error(w, "トランザクションのコミットに失敗しました", http.StatusInternalServerError)
@@ -5833,10 +6050,8 @@ func createInputFromCSV(jcshmsRow, jancodeRow []string) model.ProductMasterInput
 
 	input.ProductCode = jcshmsRow[0]
 	input.YjCode = jcshmsRow[9]
-	// ▼▼▼【ここが修正箇所】製品名と規格を分離して格納します ▼▼▼
 	input.ProductName = strings.TrimSpace(jcshmsRow[18])
 	input.Specification = strings.TrimSpace(jcshmsRow[20])
-	// ▲▲▲【修正ここまで】▲▲▲
 	input.Origin = "JCSHMS"
 	input.KanaName = jcshmsRow[22]
 	input.MakerName = jcshmsRow[30]
@@ -6098,20 +6313,23 @@ func MapProductMasterToTransaction(ar *model.TransactionRecord, master *model.Pr
 
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\masteredit\handler.go -----
-// C:\Users\wasab\OneDrive\デスクトップ\WASABI\masteredit\handler.go
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\masteredit\handler.go (全体)
 package masteredit
 
 import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"strings"
 	"wasabi/db"
 	"wasabi/mappers"
 	"wasabi/model"
 )
 
-// GetEditableMastersHandler returns a list of editable product masters.
+// (GetEditableMastersHandler, UpdateMasterHandler, CreateProvisionalMasterHandler, SetOrderStoppedHandler は変更なし)
+
 func GetEditableMastersHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		masters, err := db.GetAllProductMasters(conn)
@@ -6123,43 +6341,35 @@ func GetEditableMastersHandler(conn *sql.DB) http.HandlerFunc {
 		json.NewEncoder(w).Encode(masters)
 	}
 }
-
-// UpdateMasterHandler updates or inserts a product master record from the edit screen.
 func UpdateMasterHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 			return
 		}
-
 		var input model.ProductMasterInput
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
-
 		if input.ProductCode == "" {
 			http.Error(w, "Product Code (JAN) cannot be empty.", http.StatusBadRequest)
 			return
 		}
-
 		tx, err := conn.Begin()
 		if err != nil {
 			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
 			return
 		}
 		defer tx.Rollback()
-
 		if err := db.UpsertProductMasterInTx(tx, input); err != nil {
 			http.Error(w, "Failed to upsert product master", http.StatusInternalServerError)
 			return
 		}
-
 		if err := tx.Commit(); err != nil {
 			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
 			return
 		}
-
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"message": "Saved successfully."})
 	}
@@ -6170,8 +6380,6 @@ type CreateProvisionalMasterRequest struct {
 	ProductCode string `json:"productCode"` // 13-digit JAN
 }
 
-// CreateProvisionalMasterHandler はGS1コードに基づいてマスターを作成します。
-// JCSHMSに存在すれば正規マスターを、存在しなければ仮マスターを作成します。
 func CreateProvisionalMasterHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req CreateProvisionalMasterRequest
@@ -6183,25 +6391,19 @@ func CreateProvisionalMasterHandler(conn *sql.DB) http.HandlerFunc {
 			http.Error(w, "gs1Code and productCode are required", http.StatusBadRequest)
 			return
 		}
-
 		tx, err := conn.Begin()
 		if err != nil {
 			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
 			return
 		}
 		defer tx.Rollback()
-
 		var jcshmsRecord *model.JCShms
 		var foundJanCode string
-
-		// --- ステップ1: まずGS1コードでJCSHMSマスターを検索 ---
 		jcshmsRecord, foundJanCode, err = db.GetJcshmsRecordByGS1(tx, req.Gs1Code)
 		if err != nil && err != sql.ErrNoRows {
 			http.Error(w, "Failed to search JCSHMS master by GS1: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-
-		// --- ステップ2: GS1で見つからなかった場合、JANコードで再検索 ---
 		if jcshmsRecord == nil {
 			jcshmsRecord, err = db.GetJcshmsRecordByJan(tx, req.ProductCode)
 			if err != nil && err != sql.ErrNoRows {
@@ -6209,23 +6411,19 @@ func CreateProvisionalMasterHandler(conn *sql.DB) http.HandlerFunc {
 				return
 			}
 			if jcshmsRecord != nil {
-				foundJanCode = req.ProductCode // JAN検索で見つかったので、リクエストのJANコードを使用
+				foundJanCode = req.ProductCode
 			}
 		}
-
 		var yjCodeToReturn string
 		if jcshmsRecord != nil {
-			// --- JCSHMSに存在した場合：正規マスターとして登録 ---
 			input := mappers.JcshmsToProductMasterInput(jcshmsRecord, foundJanCode)
-			input.Gs1Code = req.Gs1Code // バーコードから読み取ったGS1コードを常に正とする
-
+			input.Gs1Code = req.Gs1Code
 			if err := db.UpsertProductMasterInTx(tx, input); err != nil {
 				http.Error(w, "Failed to create master from JCSHMS: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
 			yjCodeToReturn = input.YjCode
 		} else {
-			// --- JCSHMSに存在しない場合：仮マスターとして登録 ---
 			newYjCode, err := db.NextSequenceInTx(tx, "MA2Y", "MA2Y", 8)
 			if err != nil {
 				http.Error(w, "Failed to generate new YJ code", http.StatusInternalServerError)
@@ -6244,16 +6442,169 @@ func CreateProvisionalMasterHandler(conn *sql.DB) http.HandlerFunc {
 			}
 			yjCodeToReturn = newYjCode
 		}
-
 		if err := tx.Commit(); err != nil {
 			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
 			return
 		}
-
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"yjCode": yjCodeToReturn})
 	}
 }
+
+type SetOrderStoppedRequest struct {
+	ProductCode string `json:"productCode"`
+	Status      int    `json:"status"` // 0: 発注可, 1: 発注不可
+}
+
+func SetOrderStoppedHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req SetOrderStoppedRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		if req.ProductCode == "" {
+			http.Error(w, "productCode is required", http.StatusBadRequest)
+			return
+		}
+		tx, err := conn.Begin()
+		if err != nil {
+			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback()
+		master, err := db.GetProductMasterByCode(tx, req.ProductCode)
+		if err != nil {
+			http.Error(w, "Failed to get product master: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if master == nil {
+			http.Error(w, "Product not found", http.StatusNotFound)
+			return
+		}
+		master.IsOrderStopped = req.Status
+		input := model.ProductMasterInput{
+			ProductCode:         master.ProductCode,
+			YjCode:              master.YjCode,
+			Gs1Code:             master.Gs1Code,
+			ProductName:         master.ProductName,
+			Specification:       master.Specification,
+			KanaName:            master.KanaName,
+			MakerName:           master.MakerName,
+			UsageClassification: master.UsageClassification,
+			PackageForm:         master.PackageForm,
+			YjUnitName:          master.YjUnitName,
+			YjPackUnitQty:       master.YjPackUnitQty,
+			JanPackInnerQty:     master.JanPackInnerQty,
+			JanUnitCode:         master.JanUnitCode,
+			JanPackUnitQty:      master.JanPackUnitQty,
+			Origin:              master.Origin,
+			NhiPrice:            master.NhiPrice,
+			PurchasePrice:       master.PurchasePrice,
+			FlagPoison:          master.FlagPoison,
+			FlagDeleterious:     master.FlagDeleterious,
+			FlagNarcotic:        master.FlagNarcotic,
+			FlagPsychotropic:    master.FlagPsychotropic,
+			FlagStimulant:       master.FlagStimulant,
+			FlagStimulantRaw:    master.FlagStimulantRaw,
+			IsOrderStopped:      master.IsOrderStopped,
+			SupplierWholesale:   master.SupplierWholesale,
+			GroupCode:           master.GroupCode,
+			ShelfNumber:         master.ShelfNumber,
+			Category:            master.Category,
+			UserNotes:           master.UserNotes,
+		}
+		if err := db.UpsertProductMasterInTx(tx, input); err != nil {
+			http.Error(w, "Failed to update product master", http.StatusInternalServerError)
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"message": "更新しました。"})
+	}
+}
+
+// ▼▼▼【ここから追加】▼▼▼
+// BulkUpdateShelfNumbersRequest は棚番一括更新APIのリクエストボディの構造体です。
+type BulkUpdateShelfNumbersRequest struct {
+	ShelfNumber string   `json:"shelfNumber"`
+	Gs1Codes    []string `json:"gs1Codes"`
+}
+
+// BulkUpdateShelfNumbersHandler は、複数のGS1コードに紐づく品目の棚番を一括で更新します。
+func BulkUpdateShelfNumbersHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req BulkUpdateShelfNumbersRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if req.ShelfNumber == "" || len(req.Gs1Codes) == 0 {
+			http.Error(w, "shelfNumber and gs1Codes are required", http.StatusBadRequest)
+			return
+		}
+
+		tx, err := conn.Begin()
+		if err != nil {
+			http.Error(w, "Failed to start transaction: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback()
+
+		stmt, err := tx.Prepare("UPDATE product_master SET shelf_number = ? WHERE gs1_code = ?")
+		if err != nil {
+			http.Error(w, "Failed to prepare update statement: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer stmt.Close()
+
+		var updatedCount int
+		var notFoundCodes []string
+
+		for _, gs1Code := range req.Gs1Codes {
+			// (01)が付いている場合や前後に空白がある場合を考慮
+			cleanGs1 := strings.TrimSpace(strings.TrimPrefix(gs1Code, "(01)"))
+
+			res, err := stmt.Exec(req.ShelfNumber, cleanGs1)
+			if err != nil {
+				// 個々のエラーはログに出力するが、処理は続行する
+				log.Printf("Failed to update shelf number for gs1_code %s: %v", cleanGs1, err)
+				continue
+			}
+
+			rowsAffected, err := res.RowsAffected()
+			if err != nil {
+				log.Printf("Failed to get affected rows for gs1_code %s: %v", cleanGs1, err)
+				continue
+			}
+
+			if rowsAffected > 0 {
+				updatedCount++
+			} else {
+				notFoundCodes = append(notFoundCodes, gs1Code)
+			}
+		}
+
+		if err := tx.Commit(); err != nil {
+			http.Error(w, "Failed to commit transaction: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		message := fmt.Sprintf("%d件の棚番を更新しました。", updatedCount)
+		if len(notFoundCodes) > 0 {
+			message += fmt.Sprintf(" %d件は見つかりませんでした: %s", len(notFoundCodes), strings.Join(notFoundCodes, ", "))
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"message": message})
+	}
+}
+
+// ▲▲▲【追加ここまで】▲▲▲
 
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\mastermanager\mastermanager.go -----
@@ -8554,7 +8905,9 @@ func ProcessTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 			http.Error(w, "Failed to fetch all product masters: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		// ▼▼▼【ここを修正】▼▼▼
 		mastersMap := make(map[string]*model.ProductMaster)
+		// ▲▲▲【修正ここまで】▲▲▲
 		for _, m := range allMasters {
 			mastersMap[m.ProductCode] = m
 		}
@@ -8615,27 +8968,31 @@ func ProcessTransactionsHandler(conn *sql.DB) http.HandlerFunc {
 					rec.JanQuantity = rec.YjQuantity / master.JanPackInnerQty
 				}
 
-				// ▼▼▼【ここから金額再計算ロジックを修正】▼▼▼
 				// 3. 金額を再計算 (取引種別に応じてロジックを分岐)
 				switch rec.Flag {
-				case 0, 3, 4, 5: // 棚卸系(0,4,5)と処方(3)の場合
-					// 常にマスターの薬価(YJ単価)を正として単価と金額を再計算する
-					rec.UnitPrice = master.NhiPrice
-					rec.Subtotal = rec.YjQuantity * rec.UnitPrice
-				default: // その他の取引(納品、返品、入出庫など)
-					var unitPriceToUse float64
-					if rec.UnitPrice > 0 {
-						// 取引時に記録された単価を尊重する
-						unitPriceToUse = rec.UnitPrice
-					} else {
-						// 単価が記録されていない場合のみマスターの薬価を使用する
-						unitPriceToUse = master.NhiPrice
-						rec.UnitPrice = unitPriceToUse // レコードの単価も更新
+				case 1: // 納品
+					// rec.PurchasePriceには「取引時点での包装納入価」が保存されているはず。
+					// もしそれが0で、rec.UnitPriceに古い箱単価が入っている場合はそれを使用する。
+					packagePurchasePrice := rec.PurchasePrice
+					if packagePurchasePrice <= 0 && rec.UnitPrice > 0 {
+						packagePurchasePrice = rec.UnitPrice
 					}
-					// 金額は数量の変更を反映するために再計算する
-					rec.Subtotal = rec.YjQuantity * unitPriceToUse
+
+					// 正しいYJ単位の単価を再計算
+					if master.YjPackUnitQty > 0 && packagePurchasePrice > 0 {
+						rec.UnitPrice = packagePurchasePrice / master.YjPackUnitQty
+					}
+					// 金額を再計算
+					rec.Subtotal = rec.YjQuantity * rec.UnitPrice
+
+				case 0, 3, 4, 5: // 棚卸、処方など
+					rec.UnitPrice = master.NhiPrice // 薬価を単価とする
+					rec.Subtotal = rec.YjQuantity * rec.UnitPrice
+
+				default: // その他
+					// 数量の変更を反映するため金額は再計算するが、単価は維持する
+					rec.Subtotal = rec.YjQuantity * rec.UnitPrice
 				}
-				// ▲▲▲【修正ここまで】▲▲▲
 
 				// 4. 処理ステータスを更新
 				if rec.ProcessFlagMA == "PROVISIONAL" && master.Origin == "JCSHMS" {
@@ -8686,6 +9043,7 @@ import (
 	"wasabi/model"
 )
 
+// GenerateReturnCandidatesHandler は返品可能リストを生成します
 func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -8715,12 +9073,14 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 			Coefficient: coefficient,
 		}
 
+		// ステップ1: 過去のデータから使用量を分析し、発注点を計算する
 		yjGroups, err := db.GetStockLedger(conn, filters)
 		if err != nil {
 			http.Error(w, "Failed to get stock ledger: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
+		// ステップ2: 「今現在」のリアルタイム在庫を取得する
 		currentStockMap, err := db.GetAllCurrentStockMap(conn)
 		if err != nil {
 			http.Error(w, "Failed to get current stock map: "+err.Error(), http.StatusInternalServerError)
@@ -8733,6 +9093,7 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 			isGroupAdded := false
 
 			for _, pkg := range group.PackageLedgers {
+				// ステップ3: 包装ごとに「今現在」の在庫を計算する
 				var currentStockForPackage float64
 				var productCodesInPackage []string
 				for _, master := range pkg.Masters {
@@ -8742,9 +9103,13 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 
 				trueEffectiveBalance := currentStockForPackage
 
+				// ステップ4: 「発注点」と「今現在の有効在庫」を比較する
 				if len(pkg.Masters) > 0 {
 					yjPackUnitQty := pkg.Masters[0].YjPackUnitQty
-					if pkg.ReorderPoint > 0 && trueEffectiveBalance > (pkg.ReorderPoint+yjPackUnitQty) {
+					// ▼▼▼【ここから修正】▼▼▼
+					// 「発注点 > 0」の条件を削除
+					if trueEffectiveBalance > (pkg.ReorderPoint + yjPackUnitQty) {
+						// ▲▲▲【修正ここまで】▲▲▲
 
 						pkg.EffectiveEndingBalance = trueEffectiveBalance
 
@@ -8769,6 +9134,7 @@ func GenerateReturnCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 			}
 		}
 
+		// 返品候補リストを剤型優先、次にカナ名順でソートする
 		sort.Slice(returnCandidates, func(i, j int) bool {
 			prio := map[string]int{
 				"1": 1, "内": 1, "2": 2, "外": 2, "3": 3, "注": 3,
@@ -9260,6 +9626,7 @@ func GetUsagePathHandler(conn *sql.DB) http.HandlerFunc {
 }
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\css\styles.css -----
+/* C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\css\styles.css (全体) */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: sans-serif; padding: 10px; background-color: #f4f4f4; }
 .hidden { display: none !important; }
@@ -9332,12 +9699,10 @@ th { text-align: center; background-color: #f0f0f0; }
 .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
 .close-button { font-size: 24px; border: none; background: none; cursor: pointer; }
 
-/* ▼▼▼ [修正点] 以下の .modal-body スタイルを丸ごと追加 ▼▼▼ */
 .modal-body {
     flex-grow: 1; /* 親要素(.modal-content)の高さに合わせて伸縮 */
     overflow-y: auto; /* 内容がはみ出したら縦スクロールバーを表示 */
 }
-/* ▲▲▲ 修正ここまで ▲▲▲ */
 
 .view-title, .view-subtitle, .modal-title {
     font-size: 1em;
@@ -9350,7 +9715,6 @@ th { text-align: center; background-color: #f0f0f0; }
 .agg-pkg-header { background-color: #e9ecef; padding: 4px; border: 1px solid #ccc; border-bottom: none; font-weight: bold; font-size: 1em; }
 .agg-yj-header .product-name { margin-left: 20px; flex-grow: 1; }
 
-/* ▼▼▼ [修正点] 取引種別の色分け用スタイルをここに追加 ▼▼▼ */
 .tx-return, .tx-return td {
     color: #dc3545; /* 赤色 */
     font-weight: bold;
@@ -9360,22 +9724,23 @@ th { text-align: center; background-color: #f0f0f0; }
     color: #0d6efd; /* 青色 */
     font-weight: bold;
 }
-/* ▲▲▲ 修正ここまで ▲▲▲ */
 
-/* ▼▼▼ [ここから修正] 以下のスタイルを追記 ▼▼▼ */
 .provisional-order-item {
     background-color: #e9ecef !important; /* 薄いグレー */
     color: #6c757d; /* やや薄い文字色 */
 }
-.provisional-order-item td {
+
+/* ▼▼▼【ここから修正】▼▼▼ */
+.provisional-order-item td:not(.order-actions-cell) {
     text-decoration: line-through; /* 取り消し線 */
 }
+/* ▲▲▲【修正ここまで】▲▲▲ */
+
 .provisional-order-item select:disabled,
 .provisional-order-item input:disabled {
     background-color: #f8f9fa; /* 背景を少し明るく */
     cursor: not-allowed; /* 操作不可カーソル */
 }
-/* ▲▲▲ [修正ここまで] ▲▲▲ */
 
 /* ▼▼▼ [ここから追加] ボタンのビビッドカラー設定 ▼▼▼ */
 .btn-red { background-color: #ff0000; color: white; border-color: #d90000; }
@@ -9414,6 +9779,65 @@ th { text-align: center; background-color: #f0f0f0; }
 .btn-orange { background-color: #ff7f00; color: white; border-color: #d96c00; }
 .btn-orange:hover { background-color: #d96c00; }
 /* ▲▲▲ [追加ここまで] ▲▲▲ */
+
+#scanned-items-list {
+    background-color: #f8f9fa;
+}
+.scanned-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 8px;
+    border-bottom: 1px solid #e9ecef;
+}
+.scanned-item:last-child {
+    border-bottom: none;
+}
+.scanned-item-name {
+    flex-grow: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-right: 10px;
+}
+.scanned-item-count {
+    font-weight: bold;
+}
+.processing-indicator:not(.hidden) {
+    display: block !important;
+}
+
+/* ▼▼▼【ここに追加】▼▼▼ */
+.scanned-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center; /* 垂直方向中央揃え */
+    padding: 4px 8px;
+    border-bottom: 1px solid #e9ecef;
+    font-size: 12px; /* 少し小さく */
+}
+.scanned-item:last-child {
+    border-bottom: none;
+}
+.scanned-item-name {
+    flex-grow: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-right: 10px;
+}
+.scanned-item-count {
+    font-weight: bold;
+    min-width: 30px; /* カウント部分の幅を確保 */
+    text-align: right;
+}
+#shelf-scanned-list .scanned-item-name {
+    color: #555;
+}
+#shelf-scanned-list .scanned-item-name.resolved {
+    color: #000; /* 品目名が解決したら黒文字に */
+    font-weight: normal;
+}
+/* ▲▲▲【追加ここまで】▲▲▲ */
 
 /* ▼▼▼ [修正点] 印刷用CSSを汎用的な仕組みに全面的に書き換え ▼▼▼ */
 @media print {
@@ -9795,7 +10219,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         const event = new CustomEvent('loadInventoryAdjustment', { detail: { yjCode } });
         document.getElementById('inventory-adjustment-view').dispatchEvent(event);
     });
-  
+     // ▼▼▼【ここから追加】▼▼▼
+    // マスター編集画面への遷移イベントを捕捉する
+    document.addEventListener('navigateToMasterEdit', (e) => {
+        const { productCode } = e.detail;
+        showView('master-edit-view');
+        // マスター編集画面に、特定の製品コードで絞り込むためのイベントを発行する
+        const event = new CustomEvent('filterMasterEdit', { detail: { productCode } });
+        document.getElementById('master-edit-view').dispatchEvent(event);
+    });
+    // ▲▲▲【追加ここまで】▲▲▲ 
     inOutBtn.addEventListener('click', () => { showView('in-out-view'); resetInOutView(); });
     datBtn.addEventListener('click', () => {
         showView('upload-view');
@@ -10080,32 +10513,34 @@ async function handleFileUpload(event, url) {
  */
 export function initBackupButtons() {
     // DOM要素を取得
-    const exportClientsBtn = document.getElementById('exportClientsBtn');
-    const importClientsBtn = document.getElementById('importClientsBtn');
-    const importClientsInput = document.getElementById('importClientsInput');
+    // ▼▼▼【ここから修正】▼▼▼
+    const exportCustomersBtn = document.getElementById('exportCustomersBtn');
+    const importCustomersBtn = document.getElementById('importCustomersBtn');
+    const importCustomersInput = document.getElementById('importCustomersInput');
+    // ▲▲▲【修正ここまで】▲▲▲
     const exportProductsBtn = document.getElementById('exportProductsBtn');
     const importProductsBtn = document.getElementById('importProductsBtn');
     const importProductsInput = document.getElementById('importProductsInput');
-        // ▼▼▼【ここに追加】▼▼▼
     const exportPricingBtn = document.getElementById('exportPricingBtn');
-    // ▲▲▲【追加ここまで】▲▲▲
 
-    // 得意先エクスポート
-    if (exportClientsBtn) {
-        exportClientsBtn.addEventListener('click', () => {
-            window.location.href = '/api/clients/export';
+    // ▼▼▼【ここから修正】▼▼▼
+    // 得意先・卸業者（顧客マスター）エクスポート
+    if (exportCustomersBtn) {
+        exportCustomersBtn.addEventListener('click', () => {
+            window.location.href = '/api/customers/export';
         });
     }
 
-    // 得意先インポート
-    if (importClientsBtn && importClientsInput) {
-        importClientsBtn.addEventListener('click', () => {
-            importClientsInput.click();
+    // 得意先・卸業者（顧客マスター）インポート
+    if (importCustomersBtn && importCustomersInput) {
+        importCustomersBtn.addEventListener('click', () => {
+            importCustomersInput.click();
         });
-        importClientsInput.addEventListener('change', (event) => {
-            handleFileUpload(event, '/api/clients/import');
+        importCustomersInput.addEventListener('change', (event) => {
+            handleFileUpload(event, '/api/customers/import');
         });
     }
+    // ▲▲▲【修正ここまで】▲▲▲
 
     // 製品エクスポート
     if (exportProductsBtn) {
@@ -10124,14 +10559,12 @@ export function initBackupButtons() {
         });
     }
 
-        // ▼▼▼【ここに追加】▼▼▼
     // 価格情報バックアップ
     if (exportPricingBtn) {
         exportPricingBtn.addEventListener('click', () => {
             window.location.href = '/api/pricing/backup_export';
         });
     }
-    // ▲▲▲【追加ここまで】▲▲▲
 }
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\common_table.js -----
@@ -12716,8 +13149,6 @@ export async function loadMasterData() {
 // ▲▲▲【修正ここまで】▲▲▲
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\master_edit.js -----
-// C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\master_edit.js
-
 import { showModal } from './inout_modal.js';
 import { hiraganaToKatakana } from './utils.js';
 import { wholesalerMap } from './master_data.js';
@@ -12725,6 +13156,13 @@ import { wholesalerMap } from './master_data.js';
 let view, tableContainer, refreshBtn, addRowBtn, kanaNameInput, dosageFormInput, shelfNumberInput;
 let allMasters = []; // サーバーから取得した全マスターデータを保持する配列
 let unitMap = {};
+
+// ▼▼▼【ここから追加】棚番連続登録モーダル用の変数を追加▼▼▼
+let shelfModal, closeShelfModalBtn, bulkShelfNumberBtn;
+let shelfBarcodeForm, shelfBarcodeInput, shelfScannedList, shelfScannedCount;
+let shelfNumberInputForBulk, shelfRegisterBtn, shelfClearBtn;
+let shelfScanPool = []; // GS1コードを溜めるプール
+// ▲▲▲【追加ここまで】▲▲▲
 
 // 内部で使用するCSSを定義
 const style = document.createElement('style');
@@ -12736,6 +13174,14 @@ style.innerHTML = `
     .master-edit-table .flags-container { display: flex; gap: 5px; }
     .master-edit-table .flags-container .field-group { flex: 1; }
     .master-edit-table input:read-only, .master-edit-table select:disabled, .master-edit-table input:disabled { background-color: #e9ecef; color: #6c757d; cursor: not-allowed; }
+    
+    .save-success {
+        animation: flash-green 1.5s ease-out;
+    }
+    @keyframes flash-green {
+        0% { background-color: #d1e7dd; }
+        100% { background-color: transparent; }
+    }
 `;
 document.head.appendChild(style);
 
@@ -12863,6 +13309,7 @@ function applyFiltersAndRender() {
 
     if (kanaFilter) {
         filteredMasters = filteredMasters.filter(p => 
+            (p.productCode && p.productCode.toLowerCase().includes(kanaFilter)) ||
             (p.productName && p.productName.toLowerCase().includes(kanaFilter)) || 
             (p.kanaName && p.kanaName.toLowerCase().includes(kanaFilter))
         );
@@ -12922,6 +13369,99 @@ function populateFormWithJcshms(selectedProduct, tbody) {
     formatPackageSpecForRow(tbody);
 }
 
+// ▼▼▼【ここから追加】棚番連続登録用の関数群▼▼▼
+
+/**
+ * 棚番登録モーダル内のスキャン済みリスト表示を更新する
+ */
+function updateShelfScannedList() {
+    shelfScannedCount.textContent = shelfScanPool.length;
+    shelfScannedList.innerHTML = shelfScanPool.map(item => `
+        <div class="scanned-item" data-gs1="${item.gs1}">
+            <span class="scanned-item-name ${item.name ? 'resolved' : ''}">${item.name || item.gs1}</span>
+        </div>
+    `).join('');
+}
+
+/**
+ * スキャンされたGS1コードに対応する品目名を取得して表示を更新する
+ * @param {string} gs1 - GS1コード
+ */
+async function resolveProductNameForShelfScan(gs1) {
+    try {
+        const res = await fetch(`/api/product/by_gs1?gs1_code=${gs1}`);
+        if (res.ok) {
+            const product = await res.json();
+            const poolItem = shelfScanPool.find(item => item.gs1 === gs1);
+            if (poolItem) {
+                poolItem.name = product.productName;
+                const listItem = shelfScannedList.querySelector(`.scanned-item[data-gs1="${gs1}"] .scanned-item-name`);
+                if (listItem) {
+                    listItem.textContent = product.productName;
+                    listItem.classList.add('resolved');
+                }
+            }
+        }
+    } catch (err) {
+        console.warn(`品目名の解決に失敗: ${gs1}`, err);
+    }
+}
+
+/**
+ * 「この棚番で登録」ボタンが押されたときの処理
+ */
+async function handleShelfRegister() {
+    const shelfNumber = shelfNumberInputForBulk.value.trim();
+    if (!shelfNumber) {
+        window.showNotification('棚番を入力してください。', 'error');
+        return;
+    }
+    if (shelfScanPool.length === 0) {
+        window.showNotification('登録する品目がスキャンされていません。', 'error');
+        return;
+    }
+
+    const gs1Codes = shelfScanPool.map(item => item.gs1);
+
+    if (!confirm(`スキャンした ${gs1Codes.length} 件の品目の棚番を「${shelfNumber}」として一括登録します。\nよろしいですか？`)) {
+        return;
+    }
+
+    window.showLoading('棚番を一括更新中...');
+    try {
+        const payload = {
+            shelfNumber: shelfNumber,
+            gs1Codes: gs1Codes
+        };
+        const res = await fetch('/api/masters/bulk_update_shelf_numbers', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const resData = await res.json();
+        if (!res.ok) {
+            throw new Error(resData.message || '棚番の更新に失敗しました。');
+        }
+        window.showNotification(resData.message, 'success');
+        
+        // 成功したらモーダル内のリストと入力欄をクリア
+        shelfScanPool = [];
+        updateShelfScannedList();
+        shelfNumberInputForBulk.value = '';
+        shelfBarcodeInput.focus();
+
+        // 裏のマスター一覧も更新
+        loadAndRenderMasters();
+
+    } catch (err) {
+        window.showNotification(`エラー: ${err.message}`, 'error');
+    } finally {
+        window.hideLoading();
+    }
+}
+
+// ▲▲▲【追加ここまで】▲▲▲
+
 export async function initMasterEdit() {
     view = document.getElementById('master-edit-view');
     if (!view) return;
@@ -12932,7 +13472,73 @@ export async function initMasterEdit() {
     dosageFormInput = document.getElementById('master-edit-dosageForm');
     shelfNumberInput = document.getElementById('master-edit-shelfNumber');
 
+    // ▼▼▼【ここから追加】棚番モーダル用の要素を取得・イベント設定▼▼▼
+    shelfModal = document.getElementById('bulk-shelf-number-modal');
+    closeShelfModalBtn = document.getElementById('close-shelf-modal-btn');
+    bulkShelfNumberBtn = document.getElementById('bulkShelfNumberBtn');
+    shelfBarcodeForm = document.getElementById('shelf-barcode-form');
+    shelfBarcodeInput = document.getElementById('shelf-barcode-input');
+    shelfScannedList = document.getElementById('shelf-scanned-list');
+    shelfScannedCount = document.getElementById('shelf-scanned-count');
+    shelfNumberInputForBulk = document.getElementById('shelf-number-input');
+    shelfRegisterBtn = document.getElementById('shelf-register-btn');
+    shelfClearBtn = document.getElementById('shelf-clear-btn');
+
+    bulkShelfNumberBtn.addEventListener('click', () => {
+        shelfScanPool = [];
+        updateShelfScannedList();
+        shelfNumberInputForBulk.value = '';
+        shelfModal.classList.remove('hidden');
+        document.body.classList.add('modal-open');
+        setTimeout(() => shelfBarcodeInput.focus(), 100);
+    });
+
+    closeShelfModalBtn.addEventListener('click', () => {
+        shelfModal.classList.add('hidden');
+        document.body.classList.remove('modal-open');
+    });
+
+    shelfBarcodeForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const barcode = shelfBarcodeInput.value.trim();
+        if (barcode) {
+            // 重複チェック
+            if (!shelfScanPool.some(item => item.gs1 === barcode)) {
+                shelfScanPool.push({ gs1: barcode, name: null });
+                updateShelfScannedList();
+                resolveProductNameForShelfScan(barcode); // 裏で品目名を取得
+            } else {
+                window.showNotification('このバーコードは既にリストにあります。', 'error');
+            }
+        }
+        shelfBarcodeInput.value = '';
+    });
+
+    shelfRegisterBtn.addEventListener('click', handleShelfRegister);
+
+    shelfClearBtn.addEventListener('click', () => {
+        if (confirm('スキャン済みリストをクリアしますか？')) {
+            shelfScanPool = [];
+            updateShelfScannedList();
+            shelfBarcodeInput.focus();
+        }
+    });
+    // ▲▲▲【追加ここまで】▲▲▲
+
     await fetchUnitMap();
+
+    view.addEventListener('filterMasterEdit', async (e) => {
+        const { productCode } = e.detail;
+        if (productCode) {
+            kanaNameInput.value = productCode;
+            await loadAndRenderMasters(); 
+            
+            const targetRow = tableContainer.querySelector(`[data-record-id="${productCode}"]`);
+            if (targetRow) {
+                targetRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }
+    });
 
     refreshBtn.addEventListener('click', loadAndRenderMasters);
 
@@ -12979,6 +13585,7 @@ export async function initMasterEdit() {
         if (!tbody) return;
 
         if (target.classList.contains('save-master-btn')) {
+            const isNew = tbody.dataset.recordId.startsWith('new-');
             const data = {};
             tbody.querySelectorAll('input, select, textarea').forEach(el => {
                 if(el.name){
@@ -13027,7 +13634,28 @@ export async function initMasterEdit() {
 
                 const resData = await res.json();
                 window.showNotification(resData.message, 'success');
-                loadAndRenderMasters();
+
+                const masterIndex = allMasters.findIndex(m => m.productCode === data.productCode);
+                if (masterIndex > -1) {
+                    allMasters[masterIndex] = { ...allMasters[masterIndex], ...data };
+                } else {
+                    allMasters.push(data);
+                }
+
+                if (isNew) {
+                    const productCodeInput = tbody.querySelector('input[name="productCode"]');
+                    productCodeInput.readOnly = true;
+                    tbody.dataset.recordId = data.productCode;
+                    const originInput = tbody.querySelector('input[name="origin"]');
+                    originInput.value = data.origin;
+                }
+                
+                tbody.querySelectorAll('tr').forEach(row => {
+                    row.classList.remove('save-success');
+                    void row.offsetWidth;
+                    row.classList.add('save-success');
+                });
+
             } catch (err) {
                 window.showNotification(err.message, 'error');
             } finally {
@@ -13096,6 +13724,12 @@ export function initMedrec() {
 import { hiraganaToKatakana, getLocalDateString, toHalfWidth } from './utils.js';
 import { wholesalerMap } from './master_data.js';
 
+// 連続スキャン用のグローバル変数
+let continuousOrderModal, continuousOrderBtn, closeContinuousModalBtn;
+let continuousBarcodeForm, continuousBarcodeInput, scannedItemsList, scannedItemsCount, processingIndicator;
+let scanQueue = [];
+let isProcessingQueue = false;
+
 function formatBalance(balance) {
     if (typeof balance === 'number') {
         return balance.toFixed(2);
@@ -13103,26 +13737,80 @@ function formatBalance(balance) {
     return balance;
 }
 
-function renderOrderCandidates(data, container, wholesalers) {
-    if (!data || data.length === 0) {
-        container.innerHTML = "<p>発注が必要な品目はありませんでした。</p>";
+/**
+ * 発注リストに品目を追加、または既に存在する場合は数量を更新する関数
+ * @param {object} productMaster - 追加する製品のマスターデータ
+ */
+function addOrUpdateOrderItem(productMaster) {
+    const outputContainer = document.getElementById('order-candidates-output');
+    const productCode = productMaster.productCode;
+    const yjCode = productMaster.yjCode;
+
+    // 1. 既に同じJANコードの行が存在するかチェック
+    const existingRow = outputContainer.querySelector(`tr[data-jan-code="${productCode}"]`);
+    if (existingRow) {
+        // 存在する場合、数量を1増やす
+        const quantityInput = existingRow.querySelector('.order-quantity-input');
+        if (quantityInput) {
+            quantityInput.value = parseInt(quantityInput.value, 10) + 1;
+            window.showNotification(`「${productMaster.productName}」の数量を1増やしました。`, 'success');
+        }
         return;
     }
 
-    let html = '';
-    data.forEach(yjGroup => {
-        const yjShortfall = yjGroup.totalReorderPoint - (yjGroup.endingBalance || 0);
+    // 2. 新しい行のHTMLを生成
+    let wholesalerOptions = '<option value="">--- 選択 ---</option>';
+    wholesalerMap.forEach((name, code) => {
+        const isSelected = (code === productMaster.supplierWholesale);
+        wholesalerOptions += `<option value="${code}" ${isSelected ? 'selected' : ''}>${name}</option>`;
+    });
 
-        html += `
-            <div class="agg-yj-header" style="background-color: #ff0015ff;">
-                <span>YJ: ${yjGroup.yjCode}</span>
-                <span class="product-name">${yjGroup.productName}</span>
-                <span class="balance-info">
-                    在庫: ${formatBalance(yjGroup.endingBalance)} | 
-                    発注点: ${formatBalance(yjGroup.totalReorderPoint)} | 
-                    不足数: ${formatBalance(yjShortfall)}
-                </span>
+    const actionCellHTML = `
+        <td class="order-actions-cell">
+            <div class="order-action-buttons">
+                <button class="remove-order-item-btn btn">除外</button>
+                <button class="go-to-master-btn btn" data-product-code="${productMaster.productCode}">ﾏｽﾀ</button>
+                <button class="set-unorderable-btn btn" data-product-code="${productMaster.productCode}">発注不可</button>
+                <button class="go-to-inv-adj-btn btn" data-yj-code="${productMaster.yjCode}">棚卸調整</button>
             </div>
+        </td>
+    `;
+
+    const newRowHTML = `
+        <tr data-jan-code="${productMaster.productCode}" 
+            data-yj-code="${productMaster.yjCode}"
+            data-product-name="${productMaster.productName}"
+            data-package-form="${productMaster.packageForm}"
+            data-jan-pack-inner-qty="${productMaster.janPackInnerQty}"
+            data-yj-unit-name="${productMaster.yjUnitName}"
+            data-yj-pack-unit-qty="${productMaster.yjPackUnitQty}"
+            data-order-multiplier="${productMaster.yjPackUnitQty}"> 
+            <td class="left">${productMaster.productName}</td>
+            <td class="left">${productMaster.makerName || ''}</td>
+            <td class="left">${productMaster.formattedPackageSpec}</td>
+            <td><select class="wholesaler-select" style="width: 100%;">${wholesalerOptions}</select></td>
+            <td>1包装 (${productMaster.yjPackUnitQty} ${productMaster.yjUnitName})</td>
+            <td><input type="number" value="1" class="order-quantity-input" style="width: 80px;"></td>
+            ${actionCellHTML}
+        </tr>
+    `;
+
+    // 3. 対応するYJコードのグループを探す
+    let yjGroupWrapper = outputContainer.querySelector(`.order-yj-group-wrapper[data-yj-code="${yjCode}"]`);
+
+    if (yjGroupWrapper) {
+        // 4a. 既存のYJグループに新しい行を追加
+        const tbody = yjGroupWrapper.querySelector('tbody');
+        tbody.insertAdjacentHTML('beforeend', newRowHTML);
+    } else {
+        // 4b. YJグループが存在しない場合、新しいグループ全体を作成
+        const yjHeaderHTML = `
+            <div class="agg-yj-header">
+                <span>YJ: ${yjCode}</span>
+                <span class="product-name">${productMaster.productName}</span>
+            </div>`;
+        
+        const tableHTML = `
             <table class="data-table" style="margin-bottom: 20px;">
                 <thead>
                     <tr>
@@ -13136,6 +13824,120 @@ function renderOrderCandidates(data, container, wholesalers) {
                     </tr>
                 </thead>
                 <tbody>
+                    ${newRowHTML}
+                </tbody>
+            </table>`;
+        
+        const newGroupHTML = `
+            <div class="order-yj-group-wrapper" data-yj-code="${yjCode}">
+                ${yjHeaderHTML}
+                ${tableHTML}
+            </div>`;
+        
+        outputContainer.insertAdjacentHTML('beforeend', newGroupHTML);
+    }
+    window.showNotification(`「${productMaster.productName}」を発注リストに追加しました。`, 'success');
+}
+
+/**
+ * 連続スキャンモーダル内のスキャン済みリストの表示を更新する関数
+ */
+function updateScannedItemsDisplay() {
+    const counts = scanQueue.reduce((acc, code) => {
+        acc[code] = (acc[code] || 0) + 1;
+        return acc;
+    }, {});
+
+    scannedItemsList.innerHTML = Object.entries(counts).map(([code, count]) => {
+        return `<div class="scanned-item">
+                    <span class="scanned-item-name">${code}</span>
+                    <span class="scanned-item-count">x ${count}</span>
+                </div>`;
+    }).join('');
+    scannedItemsCount.textContent = scanQueue.length;
+}
+
+/**
+ * バックグラウンドでスキャンキューを処理する非同期関数
+ */
+async function processScanQueue() {
+    if (isProcessingQueue) return; // 既に処理中なら何もしない
+
+    isProcessingQueue = true;
+    processingIndicator.classList.remove('hidden');
+
+    while (scanQueue.length > 0) {
+        const barcode = scanQueue.shift(); // キューから1件取り出す
+
+        try {
+            // GS1コードから製品情報を取得（既存のロジックを再利用）
+            let gs1Code = '';
+            if (barcode.startsWith('01') && barcode.length > 16) {
+                gs1Code = barcode.substring(2, 16);
+            } else {
+                gs1Code = barcode;
+            }
+
+            const res = await fetch(`/api/product/by_gs1?gs1_code=${gs1Code}`);
+            if (!res.ok) {
+                if (res.status === 404) {
+                    // マスターが存在しない場合は自動で作成
+                    const newMaster = await createAndFetchMaster(gs1Code);
+                    addOrUpdateOrderItem(newMaster);
+                } else {
+                    throw new Error(`サーバーエラー (HTTP ${res.status})`);
+                }
+            } else {
+                const productMaster = await res.json();
+                addOrUpdateOrderItem(productMaster);
+            }
+        } catch (err) {
+            console.error(`バーコード[${barcode}]の処理に失敗:`, err);
+            window.showNotification(`バーコード[${barcode}]の処理に失敗しました: ${err.message}`, 'error');
+        } finally {
+            // モーダル内の表示を更新して、処理済みの項目をリストから消す
+            updateScannedItemsDisplay();
+        }
+    }
+
+    isProcessingQueue = false;
+    processingIndicator.classList.add('hidden');
+}
+
+function renderOrderCandidates(data, container, wholesalers) {
+    if (!data || data.length === 0) {
+        container.innerHTML = "<p>発注が必要な品目はありませんでした。</p>";
+        return;
+    }
+
+    let html = '';
+    data.forEach(yjGroup => {
+        const yjShortfall = yjGroup.totalReorderPoint - (yjGroup.endingBalance || 0);
+
+        html += `
+            <div class="order-yj-group-wrapper" data-yj-code="${yjGroup.yjCode}">
+                <div class="agg-yj-header" style="background-color: #ff0015ff;">
+                    <span>YJ: ${yjGroup.yjCode}</span>
+                    <span class="product-name">${yjGroup.productName}</span>
+                    <span class="balance-info">
+                        在庫: ${formatBalance(yjGroup.endingBalance)} | 
+                        発注点: ${formatBalance(yjGroup.totalReorderPoint)} | 
+                        不足数: ${formatBalance(yjShortfall)}
+                    </span>
+                </div>
+                <table class="data-table" style="margin-bottom: 20px;">
+                    <thead>
+                        <tr>
+                            <th style="width: 25%;">製品名（包装）</th>
+                            <th style="width: 15%;">メーカー</th>
+                            <th style="width: 15%;">包装仕様</th>
+                            <th style="width: 20%;">卸業者</th>
+                            <th style="width: 10%;">発注単位</th>
+                            <th style="width: 5%;">発注数</th>
+                            <th style="width: 10%;">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
         `;
         yjGroup.packageLedgers.forEach(pkg => {
             if (pkg.masters && pkg.masters.length > 0) {
@@ -13157,12 +13959,22 @@ function renderOrderCandidates(data, container, wholesalers) {
                             rowWholesalerOptions += `<option value="${w.code}" ${isSelected ? 'selected' : ''}>${w.name}</option>`;
                         });
 
-                        let actionCellHTML = '';
+                        let actionCellHTML = `
+                            <td class="order-actions-cell">
+                                <div class="order-action-buttons">
+                        `;
                         if (isOrderable) {
-                            actionCellHTML = '<td><button class="remove-order-item-btn btn">除外</button></td>';
+                            actionCellHTML += '<button class="remove-order-item-btn btn">除外</button>';
                         } else {
-                            actionCellHTML = '<td><button class="change-to-orderable-btn btn">発注に変更</button></td>';
+                            actionCellHTML += '<button class="change-to-orderable-btn btn">発注に変更</button>';
                         }
+                        actionCellHTML += `
+                                    <button class="go-to-master-btn btn" data-product-code="${master.productCode}">ﾏｽﾀ</button>
+                                    <button class="set-unorderable-btn btn" data-product-code="${master.productCode}">発注不可</button>
+                                    <button class="go-to-inv-adj-btn btn" data-yj-code="${yjGroup.yjCode}">棚卸調整</button>
+                                </div>
+                            </td>
+                        `;
 
                         html += `
                             <tr class="${rowClass}" 
@@ -13187,64 +13999,9 @@ function renderOrderCandidates(data, container, wholesalers) {
                 });
             }
         });
-        html += `</tbody></table>`;
+        html += `</tbody></table></div>`;
     });
     container.innerHTML = html;
-}
-
-function addOrderItemRow(productMaster) {
-    const outputTbody = document.querySelector('#order-candidates-output tbody');
-    if (!outputTbody) {
-        document.getElementById('order-candidates-output').innerHTML = `
-            <table class="data-table" style="margin-bottom: 20px;">
-                <thead>
-                    <tr>
-                        <th style="width: 25%;">製品名（包装）</th>
-                        <th style="width: 15%;">メーカー</th>
-                        <th style="width: 15%;">包装仕様</th>
-                        <th style="width: 20%;">卸業者</th>
-                        <th style="width: 10%;">発注単位</th>
-                        <th style="width: 5%;">発注数</th>
-                        <th style="width: 10%;">操作</th>
-                    </tr>
-                </thead>
-                <tbody></tbody>
-            </table>
-        `;
-    }
-    const tbody = document.querySelector('#order-candidates-output tbody');
-
-    if (tbody.querySelector(`tr[data-jan-code="${productMaster.productCode}"]`)) {
-        window.showNotification('この製品は既に追加されています。', 'error');
-        return;
-    }
-
-    let wholesalerOptions = '<option value="">--- 選択 ---</option>';
-    wholesalerMap.forEach((name, code) => {
-        const isSelected = (code === productMaster.supplierWholesale);
-        wholesalerOptions += `<option value="${code}" ${isSelected ? 'selected' : ''}>${name}</option>`;
-    });
-    const newRowHTML = `
-        <tr data-jan-code="${productMaster.productCode}" 
-            data-yj-code="${productMaster.yjCode}"
-            data-product-name="${productMaster.productName}"
-            data-package-form="${productMaster.packageForm}"
-            data-jan-pack-inner-qty="${productMaster.janPackInnerQty}"
-            data-yj-unit-name="${productMaster.yjUnitName}"
-            data-yj-pack-unit-qty="${productMaster.yjPackUnitQty}"
-            data-order-multiplier="${productMaster.yjPackUnitQty}"> 
-            <td class="left">${productMaster.productName}</td>
-            <td class="left">${productMaster.makerName || ''}</td>
-            <td class="left">${productMaster.formattedPackageSpec}</td>
-            <td><select class="wholesaler-select" style="width: 100%;">${wholesalerOptions}</select></td>
-            <td>1包装 (${productMaster.yjPackUnitQty} ${productMaster.yjUnitName})</td>
-            <td><input type="number" value="1" class="order-quantity-input" style="width: 80px;"></td>
-            <td><button class="remove-order-item-btn btn">除外</button></td>
-        </tr>
-    `;
-
-    tbody.insertAdjacentHTML('beforeend', newRowHTML);
-    window.showNotification(`「${productMaster.productName}」を発注リストに追加しました。`, 'success');
 }
 
 async function handleOrderBarcodeScan(e) {
@@ -13272,7 +14029,7 @@ async function handleOrderBarcodeScan(e) {
             if (res.status === 404) {
                 if (confirm(`このGS1コードはマスターに登録されていません。\n新規マスターを作成して発注リストに追加しますか？`)) {
                     const newMaster = await createAndFetchMaster(gs1Code);
-                    addOrderItemRow(newMaster);
+                    addOrUpdateOrderItem(newMaster);
                 } else {
                     throw new Error('このGS1コードはマスターに登録されていません。');
                 }
@@ -13281,7 +14038,7 @@ async function handleOrderBarcodeScan(e) {
             }
         } else {
             const productMaster = await res.json();
-            addOrderItemRow(productMaster);
+            addOrUpdateOrderItem(productMaster);
         }
         barcodeInput.value = '';
         barcodeInput.focus();
@@ -13307,7 +14064,6 @@ async function createAndFetchMaster(gs1Code) {
             throw new Error(createData.message || 'マスターの作成に失敗しました。');
         }
         window.showNotification(`新規マスターを作成しました (YJ: ${createData.yjCode})`, 'success');
-
         window.showLoading('作成したマスター情報を取得中...');
         const fetchRes = await fetch(`/api/product/by_gs1?gs1_code=${gs1Code}`);
         if (!fetchRes.ok) {
@@ -13335,14 +14091,43 @@ export function initOrders() {
     const barcodeForm = document.getElementById('order-barcode-form');
     const shelfNumberInput = document.getElementById('order-shelf-number');
 
+    continuousOrderModal = document.getElementById('continuous-order-modal');
+    continuousOrderBtn = document.getElementById('continuous-order-btn');
+    closeContinuousModalBtn = document.getElementById('close-continuous-modal-btn');
+    continuousBarcodeForm = document.getElementById('continuous-barcode-form');
+    continuousBarcodeInput = document.getElementById('continuous-barcode-input');
+    scannedItemsList = document.getElementById('scanned-items-list');
+    scannedItemsCount = document.getElementById('scanned-items-count');
+    processingIndicator = document.getElementById('processing-indicator');
+
+    continuousOrderBtn.addEventListener('click', () => {
+        scanQueue = [];
+        updateScannedItemsDisplay();
+        continuousOrderModal.classList.remove('hidden');
+        document.body.classList.add('modal-open');
+        setTimeout(() => continuousBarcodeInput.focus(), 100);
+    });
+
+    closeContinuousModalBtn.addEventListener('click', () => {
+        continuousOrderModal.classList.add('hidden');
+        document.body.classList.remove('modal-open');
+    });
+
+    continuousBarcodeForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const barcode = continuousBarcodeInput.value.trim();
+        if (barcode) {
+            scanQueue.push(barcode);
+            updateScannedItemsDisplay();
+            processScanQueue();
+        }
+        continuousBarcodeInput.value = '';
+    });
+    
     if (barcodeForm) {
         barcodeForm.addEventListener('submit', handleOrderBarcodeScan);
     }
     
-    if (barcodeInput) {
-        // No listener needed here anymore
-    }
-
     runBtn.addEventListener('click', async () => {
         window.showLoading();
         const params = new URLSearchParams({
@@ -13454,11 +14239,53 @@ export function initOrders() {
             window.hideLoading();
         }
     });
-    outputContainer.addEventListener('click', (e) => {
+
+    outputContainer.addEventListener('click', async (e) => {
         const target = e.target;
-        
-        if (target.classList.contains('change-to-orderable-btn')) {
-            const row = target.closest('tr');
+        const row = target.closest('tr');
+
+        if (target.classList.contains('go-to-master-btn')) {
+            const productCode = target.dataset.productCode;
+            document.dispatchEvent(new CustomEvent('navigateToMasterEdit', {
+                detail: { productCode },
+                bubbles: true
+            }));
+        } else if (target.classList.contains('set-unorderable-btn')) {
+            const productCode = target.dataset.productCode;
+            const productName = row ? row.cells[0].textContent : productCode;
+            if (!confirm(`「${productName}」を発注不可に設定しますか？\nこの品目は今後、不足品リストに表示されなくなります。`)) {
+                return;
+            }
+            window.showLoading('マスターを更新中...');
+            try {
+                const res = await fetch('/api/master/set_order_stopped', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ productCode: productCode, status: 1 }),
+                });
+                const resData = await res.json();
+                if (!res.ok) throw new Error(resData.message || '更新に失敗しました。');
+
+                if (row) {
+                    row.classList.add('provisional-order-item');
+                    row.querySelector('.wholesaler-select').disabled = true;
+                    row.querySelector('.order-quantity-input').disabled = true;
+                    target.disabled = true; // ボタン自体も無効化
+                }
+                window.showNotification(`「${productName}」を発注不可に設定しました。`, 'success');
+
+            } catch(err) {
+                window.showNotification(err.message, 'error');
+            } finally {
+                window.hideLoading();
+            }
+        } else if (target.classList.contains('go-to-inv-adj-btn')) {
+            const yjCode = target.dataset.yjCode;
+            document.dispatchEvent(new CustomEvent('navigateToInventoryAdjustment', {
+                detail: { yjCode },
+                bubbles: true
+            }));
+        } else if (target.classList.contains('change-to-orderable-btn')) {
             if (row) {
                 row.classList.remove('provisional-order-item');
                 row.querySelector('.wholesaler-select').disabled = false;
@@ -13469,13 +14296,13 @@ export function initOrders() {
                 target.classList.add('remove-order-item-btn');
             }
         } else if (target.classList.contains('remove-order-item-btn')) {
-            const row = target.closest('tr');
             const tbody = row.closest('tbody');
+            const table = tbody.closest('table');
+            const wrapper = table.closest('.order-yj-group-wrapper');
             row.remove();
-            if (tbody.children.length === 0) {
-                const header = tbody.closest('table').previousElementSibling;
-                header.remove();
-                tbody.closest('table').remove();
+            
+            if (tbody.children.length === 0 && wrapper) {
+                wrapper.remove();
             }
         }
     });
@@ -15324,7 +16151,7 @@ export function initValuationView() {
     <button id="manualInventoryBtn" class="btn btn-green">棚卸入力</button>
     <button id="inventoryAdjustmentBtn" class="btn btn-green">棚卸調整</button>
     <button id="inventoryHistoryBtn" class="btn btn-green">棚卸履歴</button>
-    <button id="ledgerBtn" class="btn btn-green">管理台帳</button> 
+    <button id="ledgerBtn" class="btn btn-green">管理台帳</button>
     <button id="aggregationBtn" class="btn btn-spring-green">集計</button>
     <button id="valuationBtn" class="btn btn-spring-green">在庫評価</button>
     <button id="orderBtn" class="btn btn-orange">発注</button>
@@ -15337,8 +16164,8 @@ export function initValuationView() {
     <button id="exportProductsBtn" class="btn btn-magenta">製品エクスポート</button>
     <button id="importProductsBtn" class="btn btn-magenta">製品インポート</button>
     <button id="reprocessBtn" class="btn btn-rose">再計算</button>
-    <button id="exportClientsBtn" class="btn btn-cyan">得意先エクスポート</button>
-    <button id="importClientsBtn" class="btn btn-cyan">得意先インポート</button>
+    <button id="exportCustomersBtn" class="btn btn-cyan">顧客マスターエクスポート</button>
+    <button id="importCustomersBtn" class="btn btn-cyan">顧客マスターインポート</button>
     <button id="settingsBtn" class="btn btn-chartreuse">設定</button>
 </header>
 
@@ -15363,7 +16190,7 @@ export function initValuationView() {
     <p id="upload-view-title" class="view-subtitle">File Upload</p>
     <div id="upload-output-container"></div>
 </div>
-    
+
 <div id="inventory-view" class="hidden">
     <p class="view-subtitle">Inventory File Upload</p>
     <div id="inventory-output-container"></div>
@@ -15410,7 +16237,7 @@ export function initValuationView() {
                 <input type="text" id="ia-barcode-input" inputmode="latin" placeholder="バーコードをスキャンするか、JAN/GS1コードを入力してEnter" style="font-size: 1.2em; padding: 8px; ime-mode: disabled;">
             </div>
         </form>
-        
+
         <div style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; width: 100%;">
             <div class="field-group">
                 <label for="ia-dosageForm">1. 剤型で絞り込み</label>
@@ -15480,7 +16307,7 @@ export function initValuationView() {
 <div id="master-edit-view" class="hidden">
     <div class="inout-header-controls" style="justify-content: flex-start; gap: 20px;">
         <div class="field-group">
-            <label for="master-edit-kanaName">製品名/カナ名</label>
+            <label for="master-edit-kanaName">製品名/カナ名/JAN</label>
             <input type="text" id="master-edit-kanaName" placeholder="（部分一致）">
         </div>
         <div class="field-group">
@@ -15500,6 +16327,7 @@ export function initValuationView() {
             <input type="text" id="master-edit-shelfNumber" placeholder="（部分一致）">
         </div>
         <div class="buttons-group" style="margin-left: auto;">
+            <button id="bulkShelfNumberBtn" class="btn btn-violet">棚番連続登録</button>
             <button id="addMasterRowBtn" class="btn">新規行を追加</button>
             <button id="refreshMastersBtn" class="btn">一覧を更新</button>
         </div>
@@ -15514,7 +16342,7 @@ export function initValuationView() {
         <input type="text" id="precomp-patient-number" placeholder="患者番号を入力">
         </div>
         <button id="precomp-load-btn" class="btn">呼び出し</button>
-        
+
  <div class="buttons-group">
             <button id="precomp-import-btn" class="btn">CSVインポート</button>
             <button id="precomp-import-all-btn" class="btn">CSVインポート（全件）</button>
@@ -15580,10 +16408,10 @@ export function initValuationView() {
             </div>
             <p style="font-size: 11px; margin-top: 5px;">SOUフォルダ内のJCSHMS.CSVとJANCODE.CSVをデータベースに再登録します。処理には数分かかる場合があります。</p>
         </fieldset>
-        
+
         <fieldset style="margin-top: 20px; border-color: #dc3545;">
             <legend style="color: #dc3545;">データメンテナンス</legend>
-            
+
             <div style="margin-top: 10px; padding-bottom: 15px; border-bottom: 1px solid #ccc;">
                 <p style="font-size: 11px; margin-bottom: 5px;">
                     <strong>マスターデータ整理:</strong> 在庫がゼロで、かつ過去3ヶ月間入出庫がなかった製品マスターを削除します。
@@ -15689,12 +16517,18 @@ export function initValuationView() {
 
 <div id="order-view" class="hidden">
     <div class="controls-grid" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
-        <form id="order-barcode-form" style="width: 100%; margin-bottom: 10px; border-bottom: 1px solid #ccc; padding-bottom: 10px;">
+        <div style="width: 100%; display: flex; gap: 10px; align-items: flex-end; border-bottom: 1px solid #ccc; padding-bottom: 10px;">
+            <form id="order-barcode-form" style="flex-grow: 1;">
+                <div class="field-group">
+                    <label for="order-barcode-input" style="font-weight: bold;">バーコードで個別追加</label>
+                    <input type="text" id="order-barcode-input" inputmode="latin" placeholder="バーコードをスキャンするか、GS1コードを入力してEnter" style="ime-mode: disabled;">
+                </div>
+            </form>
             <div class="field-group">
-                <label for="order-barcode-input" style="font-weight: bold;">バーコードで追加</label>
-                <input type="text" id="order-barcode-input" inputmode="latin" placeholder="バーコードをスキャンするか、GS1コードを入力してEnter" style="ime-mode: disabled;">
+                <label>&nbsp;</label>
+                <button id="continuous-order-btn" class="btn btn-violet">連続バーコード発注</button>
             </div>
-        </form>
+        </div>
         <div class="field-group">
             <label for="order-kanaName">薬品名カナ</label>
             <input type="text" id="order-kanaName" placeholder="（前方一致）">
@@ -15709,7 +16543,7 @@ export function initValuationView() {
         </div>
         <div class="field-group">
             <label for="order-reorder-coefficient">発注点係数</label>
-            <input type="number" id="order-reorder-coefficient" value="1.5" step="0.1">
+            <input type="number" id="order-reorder-coefficient" value="1.5" step="0.1" style="width: 80px;">
         </div>
         <div class="field-group">
             <button id="generate-order-candidates-btn" class="btn">不足品リストを作成</button>
@@ -15743,7 +16577,7 @@ export function initValuationView() {
                 <button id="pricing-export-btn" class="btn">全品の見積依頼Excelを出力</button>
                 <button id="pricing-export-unregistered-btn" class="btn">未登録品の見積依頼Excelを出力</button>
             </fieldset>
-            
+
             <fieldset style="border: 1px solid #ccc; padding: 10px;">
                 <legend>ステップ2: 見積もり入力</legend>
                 <div class="field-group">
@@ -15766,7 +16600,7 @@ export function initValuationView() {
                     <button id="pricing-direct-import-btn" class="btn">ファイルを選択して一括更新</button>
                 </div>
             </fieldset>
-            
+
             <fieldset style="border: 1px solid #ccc; padding: 10px;">
                 <legend>フィルター</legend>
                 <div class="field-group">
@@ -15827,7 +16661,7 @@ export function initValuationView() {
         </div>
         <div id="aggregation-output-container"></div>
 </div>
-    
+
 <div id="valuation-view" class="hidden">
         <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
             <div class="field-group">
@@ -15858,7 +16692,7 @@ export function initValuationView() {
                 <button id="export-valuation-btn" class="btn">Excelエクスポート</button>
             </div>
         </div>
-        
+
         <div id="valuation-output-container">
             <p>評価基準日を指定して「計算実行」を押してください。</p>
         </div>
@@ -15949,7 +16783,59 @@ export function initValuationView() {
 </div>
 </div>
 
-<input type="file" id="importClientsInput" style="display:none;" accept=".csv">
+<div id="continuous-order-modal" class="modal-overlay hidden">
+    <div class="modal-content" style="max-width: 600px;">
+        <div class="modal-header">
+            <p class="modal-title">連続バーコード発注</p>
+            <button id="close-continuous-modal-btn" class="close-button">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="continuous-barcode-form">
+                <div class="field-group">
+                    <label for="continuous-barcode-input" style="font-weight: bold;">バーコードをスキャンしてください</label>
+                    <input type="text" id="continuous-barcode-input" inputmode="latin" style="font-size: 1.2em; padding: 8px; ime-mode: disabled;">
+                </div>
+            </form>
+            <div id="scanned-items-container" style="margin-top: 15px;">
+                <p>スキャン済みリスト (<span id="scanned-items-count">0</span>件)</p>
+                <div id="scanned-items-list" style="max-height: 40vh; overflow-y: auto; border: 1px solid #ccc; padding: 5px; min-height: 100px;"></div>
+                <div id="processing-indicator" class="hidden" style="font-size: 12px; color: #555; margin-top: 5px;">処理中...</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="bulk-shelf-number-modal" class="modal-overlay hidden">
+    <div class="modal-content" style="max-width: 700px;">
+        <div class="modal-header">
+            <p class="modal-title">棚番 連続一括登録</p>
+            <button id="close-shelf-modal-btn" class="close-button">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="shelf-barcode-form">
+                <div class="field-group">
+                    <label for="shelf-barcode-input" style="font-weight: bold;">バーコードを連続スキャンしてください</label>
+                    <input type="text" id="shelf-barcode-input" inputmode="latin" placeholder="GS1コードをスキャンしてEnter" style="font-size: 1.2em; padding: 8px; ime-mode: disabled;">
+                </div>
+            </form>
+            <div id="shelf-scanned-items-container" style="margin-top: 15px;">
+                <p>スキャン済みリスト (<span id="shelf-scanned-count">0</span>件)</p>
+                <div id="shelf-scanned-list" style="max-height: 30vh; overflow-y: auto; border: 1px solid #ccc; padding: 5px; min-height: 100px;"></div>
+            </div>
+            <div id="shelf-register-section" style="margin-top: 20px; padding-top: 20px; border-top: 2px solid #007bff;">
+                <div class="field-group">
+                    <label for="shelf-number-input" style="font-weight: bold;">上記リストの品目に登録する棚番</label>
+                    <input type="text" id="shelf-number-input" placeholder="例: A-1-1" style="font-size: 1.2em; padding: 8px;">
+                </div>
+                <div style="margin-top: 10px; text-align: right;">
+                    <button id="shelf-clear-btn" class="btn">リストをクリア</button>
+                    <button id="shelf-register-btn" class="btn" style="background-color: #0d6efd; color: white;">この棚番で登録</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+<input type="file" id="importCustomersInput" style="display:none;" accept=".csv">
 <input type="file" id="importDeadstockInput" style="display:none;" accept=".csv">
 <input type="file" id="importProductsInput" style="display:none;" accept=".csv">
 <input type="file" id="precomp-import-input" style="display:none;" accept=".csv">
@@ -16748,11 +17634,13 @@ func main() {
 	mux.HandleFunc("/api/transaction/delete/", transaction.DeleteTransactionHandler(conn))
 	mux.HandleFunc("/api/masters/editable", masteredit.GetEditableMastersHandler(conn))
 	mux.HandleFunc("/api/master/update", masteredit.UpdateMasterHandler(conn))
-	// ▼▼▼【ここに追加】▼▼▼
 	mux.HandleFunc("/api/master/create_provisional", masteredit.CreateProvisionalMasterHandler(conn))
+	mux.HandleFunc("/api/master/set_order_stopped", masteredit.SetOrderStoppedHandler(conn))
+	// ▼▼▼【ここに追加】▼▼▼
+	mux.HandleFunc("/api/masters/bulk_update_shelf_numbers", masteredit.BulkUpdateShelfNumbersHandler(conn))
 	// ▲▲▲【追加ここまで】▲▲▲
-	mux.HandleFunc("/api/clients/export", backup.ExportClientsHandler(conn))
-	mux.HandleFunc("/api/clients/import", backup.ImportClientsHandler(conn))
+	mux.HandleFunc("/api/customers/export", backup.ExportCustomersHandler(conn))
+	mux.HandleFunc("/api/customers/import", backup.ImportCustomersHandler(conn))
 	mux.HandleFunc("/api/products/export", backup.ExportProductsHandler(conn))
 	mux.HandleFunc("/api/products/import", backup.ImportProductsHandler(conn))
 	mux.HandleFunc("/api/pricing/backup_export", pricing.BackupExportHandler(conn))
@@ -16795,10 +17683,7 @@ func main() {
 	mux.HandleFunc("/api/edge/download", edge.DownloadHandler(conn))
 	mux.HandleFunc("/api/sequence/next/", sequence.GetNextSequenceHandler(conn))
 	mux.HandleFunc("/api/products/search_filtered", product.SearchProductsHandler(conn))
-	// ▼▼▼【ここから修正】▼▼▼
-	// エンドポイントを /api/product/by_gs1 に変更し、新しいハンドラを呼び出す
 	mux.HandleFunc("/api/product/by_gs1", search.GetProductByGS1Handler(conn))
-	// ▲▲▲【修正ここまで】▲▲▲
 	mux.HandleFunc("/api/inventory/adjust/data", guidedinventory.GetInventoryDataHandler(conn))
 	mux.HandleFunc("/api/inventory/adjust/save", guidedinventory.SaveInventoryDataHandler(conn))
 	mux.HandleFunc("/api/inventory/by_date", transaction.GetInventoryByDateHandler(conn))

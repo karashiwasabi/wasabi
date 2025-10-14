@@ -94,17 +94,13 @@ func main() {
 	mux.HandleFunc("/api/transaction/delete/", transaction.DeleteTransactionHandler(conn))
 	mux.HandleFunc("/api/masters/editable", masteredit.GetEditableMastersHandler(conn))
 	mux.HandleFunc("/api/master/update", masteredit.UpdateMasterHandler(conn))
-	// ▼▼▼【ここに追加】▼▼▼
 	mux.HandleFunc("/api/master/create_provisional", masteredit.CreateProvisionalMasterHandler(conn))
+	mux.HandleFunc("/api/master/set_order_stopped", masteredit.SetOrderStoppedHandler(conn))
+	// ▼▼▼【ここに追加】▼▼▼
+	mux.HandleFunc("/api/masters/bulk_update_shelf_numbers", masteredit.BulkUpdateShelfNumbersHandler(conn))
 	// ▲▲▲【追加ここまで】▲▲▲
-	// ▼▼▼【ここから修正】▼▼▼
-	// 古い得意先のエンドポイントを新しい顧客マスターのエンドポイントに置き換える
 	mux.HandleFunc("/api/customers/export", backup.ExportCustomersHandler(conn))
 	mux.HandleFunc("/api/customers/import", backup.ImportCustomersHandler(conn))
-	// ▲▲▲【修正ここまで】▲▲▲
-
-	mux.HandleFunc("/api/clients/export", backup.ExportClientsHandler(conn))
-	mux.HandleFunc("/api/clients/import", backup.ImportClientsHandler(conn))
 	mux.HandleFunc("/api/products/export", backup.ExportProductsHandler(conn))
 	mux.HandleFunc("/api/products/import", backup.ImportProductsHandler(conn))
 	mux.HandleFunc("/api/pricing/backup_export", pricing.BackupExportHandler(conn))
@@ -147,10 +143,7 @@ func main() {
 	mux.HandleFunc("/api/edge/download", edge.DownloadHandler(conn))
 	mux.HandleFunc("/api/sequence/next/", sequence.GetNextSequenceHandler(conn))
 	mux.HandleFunc("/api/products/search_filtered", product.SearchProductsHandler(conn))
-	// ▼▼▼【ここから修正】▼▼▼
-	// エンドポイントを /api/product/by_gs1 に変更し、新しいハンドラを呼び出す
 	mux.HandleFunc("/api/product/by_gs1", search.GetProductByGS1Handler(conn))
-	// ▲▲▲【修正ここまで】▲▲▲
 	mux.HandleFunc("/api/inventory/adjust/data", guidedinventory.GetInventoryDataHandler(conn))
 	mux.HandleFunc("/api/inventory/adjust/save", guidedinventory.SaveInventoryDataHandler(conn))
 	mux.HandleFunc("/api/inventory/by_date", transaction.GetInventoryByDateHandler(conn))

@@ -20,7 +20,7 @@
     <button id="manualInventoryBtn" class="btn btn-green">棚卸入力</button>
     <button id="inventoryAdjustmentBtn" class="btn btn-green">棚卸調整</button>
     <button id="inventoryHistoryBtn" class="btn btn-green">棚卸履歴</button>
-    <button id="ledgerBtn" class="btn btn-green">管理台帳</button> 
+    <button id="ledgerBtn" class="btn btn-green">管理台帳</button>
     <button id="aggregationBtn" class="btn btn-spring-green">集計</button>
     <button id="valuationBtn" class="btn btn-spring-green">在庫評価</button>
     <button id="orderBtn" class="btn btn-orange">発注</button>
@@ -59,7 +59,7 @@
     <p id="upload-view-title" class="view-subtitle">File Upload</p>
     <div id="upload-output-container"></div>
 </div>
-    
+
 <div id="inventory-view" class="hidden">
     <p class="view-subtitle">Inventory File Upload</p>
     <div id="inventory-output-container"></div>
@@ -106,7 +106,7 @@
                 <input type="text" id="ia-barcode-input" inputmode="latin" placeholder="バーコードをスキャンするか、JAN/GS1コードを入力してEnter" style="font-size: 1.2em; padding: 8px; ime-mode: disabled;">
             </div>
         </form>
-        
+
         <div style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; width: 100%;">
             <div class="field-group">
                 <label for="ia-dosageForm">1. 剤型で絞り込み</label>
@@ -176,7 +176,7 @@
 <div id="master-edit-view" class="hidden">
     <div class="inout-header-controls" style="justify-content: flex-start; gap: 20px;">
         <div class="field-group">
-            <label for="master-edit-kanaName">製品名/カナ名</label>
+            <label for="master-edit-kanaName">製品名/カナ名/JAN</label>
             <input type="text" id="master-edit-kanaName" placeholder="（部分一致）">
         </div>
         <div class="field-group">
@@ -196,6 +196,7 @@
             <input type="text" id="master-edit-shelfNumber" placeholder="（部分一致）">
         </div>
         <div class="buttons-group" style="margin-left: auto;">
+            <button id="bulkShelfNumberBtn" class="btn btn-violet">棚番連続登録</button>
             <button id="addMasterRowBtn" class="btn">新規行を追加</button>
             <button id="refreshMastersBtn" class="btn">一覧を更新</button>
         </div>
@@ -210,7 +211,7 @@
         <input type="text" id="precomp-patient-number" placeholder="患者番号を入力">
         </div>
         <button id="precomp-load-btn" class="btn">呼び出し</button>
-        
+
  <div class="buttons-group">
             <button id="precomp-import-btn" class="btn">CSVインポート</button>
             <button id="precomp-import-all-btn" class="btn">CSVインポート（全件）</button>
@@ -276,10 +277,10 @@
             </div>
             <p style="font-size: 11px; margin-top: 5px;">SOUフォルダ内のJCSHMS.CSVとJANCODE.CSVをデータベースに再登録します。処理には数分かかる場合があります。</p>
         </fieldset>
-        
+
         <fieldset style="margin-top: 20px; border-color: #dc3545;">
             <legend style="color: #dc3545;">データメンテナンス</legend>
-            
+
             <div style="margin-top: 10px; padding-bottom: 15px; border-bottom: 1px solid #ccc;">
                 <p style="font-size: 11px; margin-bottom: 5px;">
                     <strong>マスターデータ整理:</strong> 在庫がゼロで、かつ過去3ヶ月間入出庫がなかった製品マスターを削除します。
@@ -445,7 +446,7 @@
                 <button id="pricing-export-btn" class="btn">全品の見積依頼Excelを出力</button>
                 <button id="pricing-export-unregistered-btn" class="btn">未登録品の見積依頼Excelを出力</button>
             </fieldset>
-            
+
             <fieldset style="border: 1px solid #ccc; padding: 10px;">
                 <legend>ステップ2: 見積もり入力</legend>
                 <div class="field-group">
@@ -468,7 +469,7 @@
                     <button id="pricing-direct-import-btn" class="btn">ファイルを選択して一括更新</button>
                 </div>
             </fieldset>
-            
+
             <fieldset style="border: 1px solid #ccc; padding: 10px;">
                 <legend>フィルター</legend>
                 <div class="field-group">
@@ -529,7 +530,7 @@
         </div>
         <div id="aggregation-output-container"></div>
 </div>
-    
+
 <div id="valuation-view" class="hidden">
         <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
             <div class="field-group">
@@ -560,7 +561,7 @@
                 <button id="export-valuation-btn" class="btn">Excelエクスポート</button>
             </div>
         </div>
-        
+
         <div id="valuation-output-container">
             <p>評価基準日を指定して「計算実行」を押してください。</p>
         </div>
@@ -668,6 +669,37 @@
                 <p>スキャン済みリスト (<span id="scanned-items-count">0</span>件)</p>
                 <div id="scanned-items-list" style="max-height: 40vh; overflow-y: auto; border: 1px solid #ccc; padding: 5px; min-height: 100px;"></div>
                 <div id="processing-indicator" class="hidden" style="font-size: 12px; color: #555; margin-top: 5px;">処理中...</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="bulk-shelf-number-modal" class="modal-overlay hidden">
+    <div class="modal-content" style="max-width: 700px;">
+        <div class="modal-header">
+            <p class="modal-title">棚番 連続一括登録</p>
+            <button id="close-shelf-modal-btn" class="close-button">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="shelf-barcode-form">
+                <div class="field-group">
+                    <label for="shelf-barcode-input" style="font-weight: bold;">バーコードを連続スキャンしてください</label>
+                    <input type="text" id="shelf-barcode-input" inputmode="latin" placeholder="GS1コードをスキャンしてEnter" style="font-size: 1.2em; padding: 8px; ime-mode: disabled;">
+                </div>
+            </form>
+            <div id="shelf-scanned-items-container" style="margin-top: 15px;">
+                <p>スキャン済みリスト (<span id="shelf-scanned-count">0</span>件)</p>
+                <div id="shelf-scanned-list" style="max-height: 30vh; overflow-y: auto; border: 1px solid #ccc; padding: 5px; min-height: 100px;"></div>
+            </div>
+            <div id="shelf-register-section" style="margin-top: 20px; padding-top: 20px; border-top: 2px solid #007bff;">
+                <div class="field-group">
+                    <label for="shelf-number-input" style="font-weight: bold;">上記リストの品目に登録する棚番</label>
+                    <input type="text" id="shelf-number-input" placeholder="例: A-1-1" style="font-size: 1.2em; padding: 8px;">
+                </div>
+                <div style="margin-top: 10px; text-align: right;">
+                    <button id="shelf-clear-btn" class="btn">リストをクリア</button>
+                    <button id="shelf-register-btn" class="btn" style="background-color: #0d6efd; color: white;">この棚番で登録</button>
+                </div>
             </div>
         </div>
     </div>

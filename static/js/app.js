@@ -123,7 +123,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         const event = new CustomEvent('loadInventoryAdjustment', { detail: { yjCode } });
         document.getElementById('inventory-adjustment-view').dispatchEvent(event);
     });
-  
+     // ▼▼▼【ここから追加】▼▼▼
+    // マスター編集画面への遷移イベントを捕捉する
+    document.addEventListener('navigateToMasterEdit', (e) => {
+        const { productCode } = e.detail;
+        showView('master-edit-view');
+        // マスター編集画面に、特定の製品コードで絞り込むためのイベントを発行する
+        const event = new CustomEvent('filterMasterEdit', { detail: { productCode } });
+        document.getElementById('master-edit-view').dispatchEvent(event);
+    });
+    // ▲▲▲【追加ここまで】▲▲▲ 
     inOutBtn.addEventListener('click', () => { showView('in-out-view'); resetInOutView(); });
     datBtn.addEventListener('click', () => {
         showView('upload-view');
