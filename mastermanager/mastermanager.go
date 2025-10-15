@@ -49,6 +49,16 @@ func FindOrCreate(
 			// ヘルパー関数を呼び出して、新しいDB構造に基づいたデータを作成
 			input := createMasterInputFromJcshms(janCode, jcshms)
 
+			// ▼▼▼【ここから修正】YJコードがない場合に自動採番するロジックを追加 ▼▼▼
+			if input.YjCode == "" {
+				newYj, err := db.NextSequenceInTx(tx, "MA2Y", "MA2Y", 8)
+				if err != nil {
+					return nil, fmt.Errorf("failed to get next sequence for JCSHMS master with no YJ code: %w", err)
+				}
+				input.YjCode = newYj
+			}
+			// ▲▲▲【修正ここまで】▲▲▲
+
 			if err := db.UpsertProductMasterInTx(tx, input); err != nil {
 				return nil, fmt.Errorf("failed to create master from jcshms: %w", err)
 			}

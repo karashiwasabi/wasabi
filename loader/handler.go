@@ -67,10 +67,25 @@ func CreateMasterUpdateHandler(conn *sql.DB) http.HandlerFunc {
 				jancodeRow := newJancodeData[master.ProductCode]
 				// ProductMasterInputへの変換ロジックを createInputFromCSV に集約
 				input := createInputFromCSV(jcshmsRow, jancodeRow)
-				if master.Origin == "PROVISIONAL" && input.YjCode == "" {
-					input.Origin = "PROVISIONAL"
-					input.YjCode = master.YjCode
+
+				// ▼▼▼【ここから修正】▼▼▼
+				if input.YjCode == "" {
+					// JCSHMSにYJコードがない場合
+					if master.YjCode != "" {
+						// DBに既にYJコードがあれば（手入力されたものなど）、それを維持する
+						input.YjCode = master.YjCode
+					} else {
+						// DBにもYJコードがなければ、新規に採番する
+						newYjCode, err := db.NextSequenceInTx(tx, "MA2Y", "MA2Y", 8)
+						if err != nil {
+							http.Error(w, fmt.Sprintf("YJコードの採番に失敗 (JAN: %s): %v", master.ProductCode, err), http.StatusInternalServerError)
+							return
+						}
+						input.YjCode = newYjCode
+					}
 				}
+				// ▲▲▲【修正ここまで】▲▲▲
+
 				// 既存のユーザー設定項目を維持する
 				input.PurchasePrice = master.PurchasePrice
 				input.SupplierWholesale = master.SupplierWholesale
@@ -78,9 +93,7 @@ func CreateMasterUpdateHandler(conn *sql.DB) http.HandlerFunc {
 				input.ShelfNumber = master.ShelfNumber
 				input.Category = master.Category
 				input.UserNotes = master.UserNotes
-				// ▼▼▼【ここが修正箇所】▼▼▼
 				input.IsOrderStopped = master.IsOrderStopped // 発注可否設定を引き継ぐ
-				// ▲▲▲【修正ここまで】▲▲▲
 
 				if err := db.UpsertProductMasterInTx(tx, input); err != nil {
 					http.Error(w, fmt.Sprintf("マスターの上書き更新に失敗 (JAN: %s): %v", master.ProductCode, err), http.StatusInternalServerError)

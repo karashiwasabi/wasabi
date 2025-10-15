@@ -33,15 +33,16 @@ function createMasterRowHTML(master = {}) {
     const rowId = master.productCode || `new-${Date.now()}`;
     const isProtected = master.origin === 'JCSHMS';
     const disabledAttr = isProtected ? 'disabled' : '';
-
+    // ▼▼▼【ここから修正】YJコードが空白の場合は編集できるようにreadonly条件を変更 ▼▼▼
     const row1 = `
         <tr class="data-row-top">
             <td colspan="2"><div class="field-group"><label>1. JAN</label><input type="text" name="productCode" value="${master.productCode || ''}" placeholder="製品コード(JAN)" ${!isNew ? 'readonly' : ''}></div></td>
-            <td colspan="2"><div class="field-group"><label>2. YJ</label><input type="text" name="yjCode" value="${master.yjCode || ''}" placeholder="YJコード" ${isNew || isProtected ? 'readonly' : ''}></div></td>
+            <td colspan="2"><div class="field-group"><label>2. YJ</label><input type="text" name="yjCode" value="${master.yjCode || ''}" placeholder="YJコード" ${isNew || (isProtected && master.yjCode) ? 'readonly' : ''}></div></td>
             <td colspan="2"><div class="field-group"><label>3. GS1</label><input type="text" name="gs1Code" value="${master.gs1Code || ''}" ${disabledAttr}></div></td>
             <td colspan="3"><div class="field-group"><label>4. 商品名</label><input type="text" name="productName" value="${master.productName || ''}" ${disabledAttr}></div></td>
             <td colspan="3"><div class="field-group"><label>5. カナ</label><input type="text" name="kanaName" value="${master.kanaName || ''}" ${disabledAttr}></div></td>
         </tr>`;
+    // ▲▲▲【修正ここまで】▲▲▲
 
     const row2 = `
         <tr class="data-row-middle">
