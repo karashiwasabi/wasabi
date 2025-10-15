@@ -78,6 +78,9 @@ func CreateMasterUpdateHandler(conn *sql.DB) http.HandlerFunc {
 				input.ShelfNumber = master.ShelfNumber
 				input.Category = master.Category
 				input.UserNotes = master.UserNotes
+				// ▼▼▼【ここが修正箇所】▼▼▼
+				input.IsOrderStopped = master.IsOrderStopped // 発注可否設定を引き継ぐ
+				// ▲▲▲【修正ここまで】▲▲▲
 
 				if err := db.UpsertProductMasterInTx(tx, input); err != nil {
 					http.Error(w, fmt.Sprintf("マスターの上書き更新に失敗 (JAN: %s): %v", master.ProductCode, err), http.StatusInternalServerError)
@@ -199,7 +202,6 @@ func loadCSVToMap(filepath string, skipHeader bool, keyIndex int) (map[string][]
 
 func createInputFromCSV(jcshmsRow, jancodeRow []string) model.ProductMasterInput {
 	var input model.ProductMasterInput
-	// JC122 は 123番目のカラムなので、少なくとも123列必要
 	if len(jcshmsRow) < 123 {
 		return input
 	}
@@ -214,10 +216,7 @@ func createInputFromCSV(jcshmsRow, jancodeRow []string) model.ProductMasterInput
 
 	input.ProductCode = jcshmsRow[0]
 	input.YjCode = jcshmsRow[9]
-	// ▼▼▼【ここを修正】▼▼▼
-	// 正しいインデックス 122 を使用して JC122 (GS1コード) を読み込む
 	input.Gs1Code = jcshmsRow[122]
-	// ▲▲▲【修正ここまで】▲▲▲
 	input.ProductName = strings.TrimSpace(jcshmsRow[18])
 	input.Specification = strings.TrimSpace(jcshmsRow[20])
 	input.Origin = "JCSHMS"

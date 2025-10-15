@@ -10,6 +10,44 @@ let dosageFormFilter, kanaInitialFilter, selectProductBtn, deadStockOnlyFilter, 
 let currentYjCode = null;
 let lastLoadedDataCache = null;
 let unitMap = {};
+
+// ▼▼▼【ここから修正】▼▼▼
+/**
+ * GS1-128形式のバーコード文字列を解析し、情報をオブジェクトとして返す共通関数
+ * @param {string} code - バーコード文字列
+ * @returns {object|null} - 解析されたデータオブジェクト、または無効な場合はnull
+ */
+function parseGS1_128(code) {
+    let rest = code;
+    const data = {};
+
+    if (rest.startsWith('01')) {
+        if (rest.length < 16) return null;
+        data.gs1Code = rest.substring(2, 16);
+        rest = rest.substring(16);
+    } else {
+        return null;
+    }
+
+    if (rest.startsWith('17')) {
+        if (rest.length < 8) return data; 
+        data.expiryDate = rest.substring(2, 8);
+        rest = rest.substring(8);
+    }
+
+    if (rest.startsWith('10')) {
+        const groupSeparatorIndex = rest.indexOf('\x1D'); // GS (Group Separator)
+        if (groupSeparatorIndex !== -1) {
+            data.lotNumber = rest.substring(2, groupSeparatorIndex);
+        } else {
+            data.lotNumber = rest.substring(2);
+        }
+    }
+   
+    return data;
+}
+// ▲▲▲【修正ここまで】▲▲▲
+
 async function fetchUnitMap() {
     if (Object.keys(unitMap).length > 0) return;
     try {
@@ -105,7 +143,7 @@ function generateSummaryPrecompHtml(precompDetails) {
 
 function createFinalInputRow(master, deadStockRecord = null, isPrimary = false) {
     const actionButtons = isPrimary ?
-`
+    `
         <button class="btn add-deadstock-row-btn" data-product-code="${master.productCode}">＋</button>
         <button class="btn register-inventory-btn">登録</button>
     ` : `<button class="btn delete-deadstock-row-btn">－</button>`;
@@ -176,12 +214,25 @@ function generateInputSectionsHtml(packageLedgers, yjUnitName = '単位') {
         html += `</div>`;
         return html;
     }).join('');
-
-    return `<div class="input-section" style="margin-top: 30px;"><h3 class="view-subtitle">2. 棚卸入力</h3>
+    
+    return `<div class="input-section" style="margin-top: 30px;">
+        <h3 class="view-subtitle">2. 棚卸入力</h3>
         <div class="inventory-input-area" style="padding: 10px; border: 1px solid #ccc; background-color: #f8f9fa; margin-bottom: 15px;">
-            <label for="inventory-date" style="font-weight: bold;">棚卸日:</label>
-            <input type="date" id="inventory-date"></div>
-        ${packageGroupsHtml}</div>`;
+            <div style="display: flex; gap: 20px; align-items: flex-end;">
+                <div class="field-group">
+                    <label for="inventory-date" style="font-weight: bold;">棚卸日:</label>
+                    <input type="date" id="inventory-date">
+                </div>
+                <form id="adjustment-barcode-form" style="flex-grow: 1;">
+                    <div class="field-group">
+                        <label for="adjustment-barcode-input" style="font-weight: bold;">バーコードでロット・期限入力</label>
+                        <input type="text" id="adjustment-barcode-input" inputmode="latin" placeholder="GS1-128バーコードをスキャンしてEnter" style="ime-mode: disabled; font-size: 1.1em;">
+                    </div>
+                </form>
+            </div>
+        </div>
+        ${packageGroupsHtml}
+    </div>`;
 }
 
 function generateDeadStockReferenceHtml(deadStockRecords) {
@@ -244,11 +295,94 @@ function generateFullHtml(data) {
         ${deadStockReferenceHtml}`;
 }
 
+async function handleAdjustmentBarcodeScan(e) {
+    e.preventDefault();
+    const barcodeInput = document.getElementById('adjustment-barcode-input');
+    const inputValue = barcodeInput.value.trim();
+    if (!inputValue) return;
+
+    const parsedData = parseGS1_128(inputValue);
+    if (!parsedData || !parsedData.gs1Code) {
+        window.showNotification('GS1-128形式のバーコードではありません。', 'error');
+        barcodeInput.value = '';
+        return;
+    }
+
+    window.showLoading('製品情報を検索中...');
+    try {
+        const res = await fetch(`/api/product/by_gs1?gs1_code=${parsedData.gs1Code}`);
+        
+        let productMaster;
+        if (!res.ok) {
+            if (res.status === 404) {
+                 if (confirm(`このGS1コードはマスターに登録されていません。\n新規マスターを作成しますか？`)) {
+                    productMaster = await createProvisionalMaster(parsedData.gs1Code);
+                 } else {
+                    throw new Error('このGS1コードはマスターに登録されていません。');
+                 }
+            } else {
+                throw new Error('製品情報の検索に失敗しました。');
+            }
+        } else {
+            productMaster = await res.json();
+        }
+
+        // 該当製品の入力欄を探す
+        const productTbody = outputContainer.querySelector(`.final-input-tbody[data-product-code="${productMaster.productCode}"]`);
+        if (!productTbody) {
+            throw new Error(`画面内に製品「${productMaster.productName}」の入力欄が見つかりません。`);
+        }
+
+        // 空のロット・期限入力行を探す
+        let targetRow = null;
+        const rows = productTbody.querySelectorAll('tr.inventory-row');
+        for (let i = 0; i < rows.length; i += 2) {
+            const expiryInput = rows[i].querySelector('.expiry-input');
+            const lotInput = rows[i+1].querySelector('.lot-input');
+            if (expiryInput.value.trim() === '' && lotInput.value.trim() === '') {
+                targetRow = rows[i];
+                break;
+            }
+        }
+
+        // 空の行がなければ新しい行を追加
+        if (!targetRow) {
+            const addBtn = productTbody.querySelector('.add-deadstock-row-btn');
+            if (addBtn) {
+                addBtn.click();
+                const newRows = productTbody.querySelectorAll('tr.inventory-row');
+                targetRow = newRows[newRows.length - 2]; // 新しく追加された上の行
+            }
+        }
+
+        if (targetRow) {
+            const expiryInput = targetRow.querySelector('.expiry-input');
+            const lotInput = targetRow.nextElementSibling.querySelector('.lot-input');
+            if (parsedData.expiryDate) {
+                expiryInput.value = parsedData.expiryDate;
+            }
+            if (parsedData.lotNumber) {
+                lotInput.value = parsedData.lotNumber;
+            }
+            window.showNotification('ロット・期限を自動入力しました。', 'success');
+        } else {
+            throw new Error('ロット・期限の入力欄の追加に失敗しました。');
+        }
+
+    } catch (err) {
+        window.showNotification(err.message, 'error');
+    } finally {
+        window.hideLoading();
+        barcodeInput.value = '';
+        barcodeInput.focus();
+    }
+}
+
+
 export async function initInventoryAdjustment() {
     await fetchUnitMap();
     view = document.getElementById('inventory-adjustment-view');
     if (!view) return;
-
     dosageFormFilter = document.getElementById('ia-dosageForm');
     kanaInitialFilter = document.getElementById('ia-kanaInitial');
     selectProductBtn = document.getElementById('ia-select-product-btn');
@@ -257,7 +391,7 @@ export async function initInventoryAdjustment() {
     
     barcodeInput = document.getElementById('ia-barcode-input');
     const barcodeForm = document.getElementById('ia-barcode-form');
-    shelfNumberInput = document.getElementById('ia-shelf-number');
+    shelfNumberInput = document.getElementById('ia-shelf-number'); // IDを正しいものに修正
 
     if (barcodeForm) {
         barcodeForm.addEventListener('submit', handleBarcodeScan);
@@ -266,6 +400,11 @@ export async function initInventoryAdjustment() {
     selectProductBtn.addEventListener('click', onSelectProductClick);
     outputContainer.addEventListener('input', handleInputChanges);
     outputContainer.addEventListener('click', handleClicks);
+    outputContainer.addEventListener('submit', (e) => {
+        if (e.target.id === 'adjustment-barcode-form') {
+            handleAdjustmentBarcodeScan(e);
+        }
+    });
 
     view.addEventListener('loadInventoryAdjustment', (e) => {
         const { yjCode } = e.detail;
@@ -277,31 +416,6 @@ export async function initInventoryAdjustment() {
             loadAndRenderDetails(yjCode);
         }
     });
-}
-
-function parseGS1_128(code) {
-    let rest = code;
-    const data = {};
-
-    if (rest.startsWith('01')) {
-        if (rest.length < 16) return null;
-        data.gs1Code = rest.substring(2, 16);
-        rest = rest.substring(16);
-    } else {
-        return null;
-    }
-
-    if (rest.startsWith('17')) {
-        if (rest.length < 8) return data; 
-        data.expiryDate = rest.substring(2, 8);
-        rest = rest.substring(8);
-    }
-
-    if (rest.startsWith('10')) {
-        data.lotNumber = rest.substring(2);
-    }
-   
-    return data;
 }
 
 async function handleBarcodeScan(e) {
@@ -347,22 +461,7 @@ async function handleBarcodeScan(e) {
             const productMaster = await res.json();
             await loadAndRenderDetails(productMaster.yjCode);
 
-            if (parsedData && (parsedData.expiryDate || parsedData.lotNumber)) {
-                setTimeout(() => {
-                    const firstProductInputGroup = outputContainer.querySelector('.product-input-group');
-                    if (firstProductInputGroup) {
-                        if (parsedData.expiryDate) {
-                            const expiryInput = firstProductInputGroup.querySelector('.expiry-input');
-                            if (expiryInput) expiryInput.value = parsedData.expiryDate;
-                        }
-                        if (parsedData.lotNumber) {
-                            const lotInput = firstProductInputGroup.querySelector('.lot-input');
-                            if (lotInput) lotInput.value = parsedData.lotNumber;
-                        }
-                        window.showNotification('有効期限とロットを自動入力しました。', 'success');
-                    }
-                }, 100);
-            }
+            // この機能ではロット・期限の自動入力は不要なため削除
             barcodeInput.value = '';
             barcodeInput.focus();
         }
@@ -391,8 +490,11 @@ async function createProvisionalMaster(gs1Code) {
         window.showNotification(`新規マスターを作成しました (YJ: ${resData.yjCode})`, 'success');
         await loadAndRenderDetails(resData.yjCode);
 
-        barcodeInput.value = '';
-        barcodeInput.focus();
+        const mainBarcode = document.getElementById('ia-barcode-input');
+        if(mainBarcode) {
+            mainBarcode.value = '';
+            mainBarcode.focus();
+        }
     } catch (err) {
         throw err;
     }
@@ -477,6 +579,7 @@ function handleInputChanges(e) {
         reverseCalculateStock();
     }
 
+    
     if(targetClassList.contains('lot-quantity-input') || targetClassList.contains('final-inventory-input')){
         const productCode = e.target.dataset.productCode;
         updateFinalInventoryTotal(productCode);
