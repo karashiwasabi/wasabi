@@ -114,10 +114,40 @@ func UploadDatHandler(conn *sql.DB) http.HandlerFunc {
 			processed, err := ProcessDatFile(conn, path)
 			if err != nil {
 				log.Printf("Failed to process DAT file %s: %v", path, err)
+				// 1つのファイルの処理に失敗しても他のファイルの処理は続ける
 				continue
 			}
 			allProcessedRecords = append(allProcessedRecords, processed...)
 		}
+
+		// ▼▼▼【ここから修正】▼▼▼
+		// 処理した納品データを使って発注残を消し込む
+		if len(allProcessedRecords) > 0 {
+			var deliveredItems []model.Backorder
+			for _, rec := range allProcessedRecords {
+				// 納品(flag=1)の取引のみを消し込み対象とする
+				if rec.Flag == 1 {
+					deliveredItems = append(deliveredItems, model.Backorder{
+						YjCode:          rec.YjCode,
+						PackageForm:     rec.PackageForm,
+						JanPackInnerQty: rec.JanPackInnerQty,
+						YjUnitName:      rec.YjUnitName,
+						YjQuantity:      rec.YjQuantity,
+					})
+				}
+			}
+
+			if len(deliveredItems) > 0 {
+				if err := db.ReconcileBackorders(conn, deliveredItems); err != nil {
+					// 消し込みに失敗しても、納品登録自体は完了しているため、エラーログを出力するに留める
+					log.Printf("WARN: Failed to reconcile backorders after DAT import: %v", err)
+					http.Error(w, "納品データの登録には成功しましたが、発注残の自動消し込みに失敗しました。手動で調整してください。: "+err.Error(), http.StatusMultiStatus)
+					return
+				}
+				log.Printf("Successfully reconciled %d backorder items.", len(deliveredItems))
+			}
+		}
+		// ▲▲▲【修正ここまで】▲▲▲
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -200,8 +230,6 @@ func ProcessDatFile(conn *sql.DB, filePath string) ([]model.TransactionRecord, e
 			return nil, fmt.Errorf("mastermanager failed for jan %s: %w", rec.JanCode, err)
 		}
 
-		// ▼▼▼【ここから修正】▼▼▼
-		// 1. YJ数量とJAN数量を計算
 		if master.YjPackUnitQty > 0 {
 			ar.YjQuantity = ar.DatQuantity * master.YjPackUnitQty
 		}
@@ -209,29 +237,19 @@ func ProcessDatFile(conn *sql.DB, filePath string) ([]model.TransactionRecord, e
 			ar.JanQuantity = ar.DatQuantity * master.JanPackUnitQty
 		}
 
-		// 2. DATファイルから読み取った「包装あたりの納入価」を取得
-		//    DATファイルに価格情報がない場合のみ、マスターの納入価をフォールバックとして使用
 		packagePurchasePrice := rec.UnitPrice
 		if packagePurchasePrice <= 0 && master.PurchasePrice > 0 {
 			packagePurchasePrice = master.PurchasePrice
 		}
 
-		// 3. YJ単位の単価（仮の単価）を計算し、取引レコードの「UnitPrice」として設定
 		if master.YjPackUnitQty > 0 && packagePurchasePrice > 0 {
 			ar.UnitPrice = packagePurchasePrice / master.YjPackUnitQty
 		} else {
-			// 包装数量が不明な場合などは、DATの単価をそのまま使用せざるを得ない
 			ar.UnitPrice = rec.UnitPrice
 		}
 
-		// 4. 金額を「YJ数量 × YJ単位単価」で再計算
-		//    DATファイルに記録されているSubtotalは参照しない
 		ar.Subtotal = ar.YjQuantity * ar.UnitPrice
-
-		// 5. 取引レコードのPurchasePriceには、計算の元となった「包装あたりの納入価」を記録として保存
 		ar.PurchasePrice = packagePurchasePrice
-
-		// ▲▲▲【修正ここまで】▲▲▲
 
 		mappers.MapProductMasterToTransaction(&ar, master)
 		ar.ProcessFlagMA = "COMPLETE"
