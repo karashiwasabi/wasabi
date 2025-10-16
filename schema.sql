@@ -1,3 +1,5 @@
+-- C:\Users\wasab\OneDrive\デスクトップ\WASABI\schema.sql
+
 -- 得意先マスターテーブル
 CREATE TABLE IF NOT EXISTS client_master (
   client_code TEXT PRIMARY KEY,
@@ -16,7 +18,7 @@ CREATE TABLE IF NOT EXISTS product_master (
     product_code TEXT PRIMARY KEY,
     yj_code TEXT,
     gs1_code TEXT,                       -- 調剤包装単位コード (JC122)
-    product_name TEXT,                     -- (役割変更) 規格を含まない基本製品名 (商品名 JC018)
+    product_name TEXT,                   -- (役割変更) 規格を含まない基本製品名 (商品名 JC018)
     kana_name TEXT,
     maker_name TEXT,
     
@@ -94,8 +96,6 @@ CREATE TABLE IF NOT EXISTS transaction_records (
   process_flag_ma TEXT
 );
 
--- (以降のテーブル定義は変更ありません)
-
 -- 予製レコードテーブル
 CREATE TABLE IF NOT EXISTS precomp_records (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -126,17 +126,24 @@ CREATE TABLE IF NOT EXISTS precomp_records (
   UNIQUE(client_code, jan_code)
 );
 
+-- ▼▼▼【ここから修正】▼▼▼
 -- 発注残管理テーブル
 CREATE TABLE IF NOT EXISTS backorders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_date TEXT NOT NULL,
   yj_code TEXT NOT NULL,
+  product_name TEXT,
   package_form TEXT NOT NULL,
   jan_pack_inner_qty REAL NOT NULL,
   yj_unit_name TEXT NOT NULL,
-  order_date TEXT NOT NULL,
-  yj_quantity REAL NOT NULL,
-  product_name TEXT,
-  PRIMARY KEY (yj_code, package_form, jan_pack_inner_qty, yj_unit_name)
+  order_quantity REAL NOT NULL,
+  remaining_quantity REAL NOT NULL,
+  wholesaler_code TEXT,
+  yj_pack_unit_qty REAL,
+  jan_pack_unit_qty REAL,
+  jan_unit_code INTEGER
 );
+-- ▲▲▲【修正ここまで】▲▲▲
 
 -- 手入力用ロット・期限情報テーブル
 CREATE TABLE IF NOT EXISTS dead_stock_list (
@@ -152,6 +159,7 @@ CREATE TABLE IF NOT EXISTS dead_stock_list (
   created_at TEXT NOT NULL,
   UNIQUE(product_code, expiry_date, lot_number)
 );
+
 -- JCSHMSマスター (SOU/JCSHMS.CSV から読み込み)
 CREATE TABLE IF NOT EXISTS jcshms (
   JC000 TEXT, JC001 TEXT, JC002 TEXT, JC003 TEXT, JC004 TEXT, JC005 TEXT, JC006 TEXT, JC007 TEXT, JC008 TEXT, JC009 TEXT,
@@ -185,8 +193,6 @@ CREATE TABLE IF NOT EXISTS code_sequences (
 );
 INSERT OR IGNORE INTO code_sequences(name, last_no) VALUES ('MA2Y', 0);
 INSERT OR IGNORE INTO code_sequences(name, last_no) VALUES ('CL', 0);
-
-
 -- パフォーマンス向上のためのインデックス
 CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_unique_slip
   ON transaction_records(transaction_date, client_code, receipt_number, line_number)

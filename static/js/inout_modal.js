@@ -32,7 +32,6 @@ function handleResultClick(event) {
 
 async function performSearch() {
   const query = hiraganaToKatakana(searchInput.value.trim());
-  
   if (!skipQueryLengthCheck && query.length < 2) {
     alert('検索キーワードを2文字以上入力してください。');
     searchResultsBody.innerHTML = '<tr><td colspan="6" class="center">2文字以上入力して検索してください。</td></tr>';
@@ -63,11 +62,13 @@ function renderSearchResults(products) {
     return;
   }
 
+  // ▼▼▼【ここから修正】▼▼▼
   let html = '';
   products.forEach(p => {
     const productData = JSON.stringify(p);
+    const rowClass = p.isAdopted ? 'class="adopted-item"' : '';
     html += `
-      <tr>
+      <tr ${rowClass}>
         <td class="left">${p.productName || ''}</td>
         <td class="left">${p.makerName || ''}</td>
         <td class="left">${p.formattedPackageSpec}</td>
@@ -77,6 +78,7 @@ function renderSearchResults(products) {
       </tr>
     `;
   });
+  // ▲▲▲【修正ここまで】▲▲▲
   searchResultsBody.innerHTML = html;
 }
 

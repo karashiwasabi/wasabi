@@ -134,16 +134,19 @@ func GetBackordersHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
+// ▼▼▼【ここから修正】▼▼▼
 /**
  * @brief 単一の発注残レコードを削除するためのHTTPハンドラです。
  * @param conn データベース接続
  * @return http.HandlerFunc HTTPリクエストを処理するハンドラ関数
  * @details
- * HTTPリクエストのボディから削除対象のBackorder情報を受け取り、DBから削除します。
+ * HTTPリクエストのボディから削除対象のIDを受け取り、DBから削除します。
  */
 func DeleteBackorderHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var payload model.Backorder
+		var payload struct {
+			ID int `json:"id"`
+		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
@@ -156,7 +159,7 @@ func DeleteBackorderHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer tx.Rollback()
 
-		if err := db.DeleteBackorderInTx(tx, payload); err != nil {
+		if err := db.DeleteBackorderInTx(tx, payload.ID); err != nil {
 			http.Error(w, "Failed to delete backorder: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -176,12 +179,14 @@ func DeleteBackorderHandler(conn *sql.DB) http.HandlerFunc {
  * @param conn データベース接続
  * @return http.HandlerFunc HTTPリクエストを処理するハンドラ関数
  * @details
- * HTTPリクエストのボディから削除対象のBackorder情報の配列を受け取り、ループ処理でDBから削除します。
+ * HTTPリクエストのボディから削除対象のIDの配列を受け取り、ループ処理でDBから削除します。
  * 処理は単一のトランザクション内で行われ、一件でも失敗した場合は全てロールバックされます。
  */
 func BulkDeleteBackordersHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var payload []model.Backorder
+		var payload []struct {
+			ID int `json:"id"`
+		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
@@ -201,7 +206,7 @@ func BulkDeleteBackordersHandler(conn *sql.DB) http.HandlerFunc {
 		defer tx.Rollback()
 
 		for _, bo := range payload {
-			if err := db.DeleteBackorderInTx(tx, bo); err != nil {
+			if err := db.DeleteBackorderInTx(tx, bo.ID); err != nil {
 				http.Error(w, "Failed to delete backorder: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
@@ -216,6 +221,8 @@ func BulkDeleteBackordersHandler(conn *sql.DB) http.HandlerFunc {
 		json.NewEncoder(w).Encode(map[string]string{"message": "選択された発注残を削除しました。"})
 	}
 }
+
+// ▲▲▲【修正ここまで】▲▲▲
 
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\backup\handler.go -----
@@ -1523,46 +1530,50 @@ import (
 	"wasabi/model"
 )
 
+// ▼▼▼【ここから修正】▼▼▼
+
 /**
- * @brief 複数の発注残レコードをトランザクション内で登録または更新します（UPSERT）。
+ * @brief 複数の発注残レコードをトランザクション内で登録します（INSERT）。
  * @param tx SQLトランザクションオブジェクト
- * @param backorders 登録・更新する発注残レコードのスライス
+ * @param backorders 登録する発注残レコードのスライス
  * @return error 処理中にエラーが発生した場合
  * @details
- * 複合主キー(yj_code, package_form, etc.)でコンフリクトが発生した場合、
- * 既存のレコードのyj_quantityに新しい数量を加算し、order_dateを更新します。
+ * 発注ごとに新しいレコードとしてデータベースに挿入します。
  */
-func UpsertBackordersInTx(tx *sql.Tx, backorders []model.Backorder) error {
+func InsertBackordersInTx(tx *sql.Tx, backorders []model.Backorder) error {
 	const q = `
-		INSERT INTO backorders (yj_code, package_form, jan_pack_inner_qty, yj_unit_name, order_date, yj_quantity, product_name)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(yj_code, package_form, jan_pack_inner_qty, yj_unit_name) DO UPDATE SET
-			yj_quantity = yj_quantity + excluded.yj_quantity,
-			order_date = excluded.order_date
-	`
+		INSERT INTO backorders (
+			order_date, yj_code, product_name, package_form, jan_pack_inner_qty, 
+			yj_unit_name, order_quantity, remaining_quantity, wholesaler_code,
+			yj_pack_unit_qty, jan_pack_unit_qty, jan_unit_code
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	stmt, err := tx.Prepare(q)
 	if err != nil {
-		return fmt.Errorf("failed to prepare backorder upsert statement: %w", err)
+		return fmt.Errorf("failed to prepare backorder insert statement: %w", err)
 	}
 	defer stmt.Close()
 
 	for _, bo := range backorders {
-		_, err := stmt.Exec(bo.YjCode, bo.PackageForm, bo.JanPackInnerQty, bo.YjUnitName, bo.OrderDate, bo.YjQuantity, bo.ProductName)
+		_, err := stmt.Exec(
+			bo.OrderDate, bo.YjCode, bo.ProductName, bo.PackageForm, bo.JanPackInnerQty,
+			bo.YjUnitName, bo.OrderQuantity, bo.RemainingQuantity, bo.WholesalerCode,
+			bo.YjPackUnitQty, bo.JanPackUnitQty, bo.JanUnitCode,
+		)
 		if err != nil {
-			return fmt.Errorf("failed to execute backorder upsert for yj %s: %w", bo.YjCode, err)
+			return fmt.Errorf("failed to execute backorder insert for yj %s: %w", bo.YjCode, err)
 		}
 	}
 	return nil
 }
 
 /**
- * @brief 納品データに基づいて発注残を消し込みます。
+ * @brief 納品データに基づいて発注残を消し込みます（FIFO: 先入れ先出し）。
  * @param conn データベース接続
  * @param deliveredItems 納品された品物のスライス
  * @return error 処理中にエラーが発生した場合
  * @details
- * 納品された各品物について、対応する発注残の数量を減らします。
- * 発注残数量が0以下になった場合は、そのレコードを削除します。
+ * 納品された各品物について、対応する発注残を古いものから順に消し込みます。
+ * 発注残数量が0になったレコードは削除されます。
  */
 func ReconcileBackorders(conn *sql.DB, deliveredItems []model.Backorder) error {
 	tx, err := conn.Begin()
@@ -1572,40 +1583,47 @@ func ReconcileBackorders(conn *sql.DB, deliveredItems []model.Backorder) error {
 	defer tx.Rollback()
 
 	for _, item := range deliveredItems {
-		var currentBackorderQty float64
-		err := tx.QueryRow(`
-			SELECT yj_quantity FROM backorders 
-			WHERE yj_code = ? AND package_form = ? AND jan_pack_inner_qty = ? AND yj_unit_name = ?`,
+		deliveryQty := item.YjQuantity
+
+		rows, err := tx.Query(`
+			SELECT id, remaining_quantity FROM backorders 
+			WHERE yj_code = ? AND package_form = ? AND jan_pack_inner_qty = ? AND yj_unit_name = ?
+			ORDER BY order_date, id`,
 			item.YjCode, item.PackageForm, item.JanPackInnerQty, item.YjUnitName,
-		).Scan(&currentBackorderQty)
-
+		)
 		if err != nil {
-			if err == sql.ErrNoRows {
-				continue // 対応する発注残がなければスキップ
-			}
-			return fmt.Errorf("failed to query backorder for yj %s: %w", item.YjCode, err)
+			return fmt.Errorf("failed to query backorders for reconciliation: %w", err)
 		}
 
-		newQty := currentBackorderQty - item.YjQuantity
-		if newQty <= 0 {
-			_, err := tx.Exec(`
-				DELETE FROM backorders 
-				WHERE yj_code = ? AND package_form = ? AND jan_pack_inner_qty = ? AND yj_unit_name = ?`,
-				item.YjCode, item.PackageForm, item.JanPackInnerQty, item.YjUnitName,
-			)
-			if err != nil {
-				return fmt.Errorf("failed to delete completed backorder for yj %s: %w", item.YjCode, err)
+		for rows.Next() {
+			if deliveryQty <= 0 {
+				break
 			}
-		} else {
-			_, err := tx.Exec(`
-				UPDATE backorders SET yj_quantity = ? 
-				WHERE yj_code = ? AND package_form = ? AND jan_pack_inner_qty = ? AND yj_unit_name = ?`,
-				newQty, item.YjCode, item.PackageForm, item.JanPackInnerQty, item.YjUnitName,
-			)
-			if err != nil {
-				return fmt.Errorf("failed to update backorder for yj %s: %w", item.YjCode, err)
+			var id int
+			var remainingQty float64
+			if err := rows.Scan(&id, &remainingQty); err != nil {
+				rows.Close()
+				return fmt.Errorf("failed to scan backorder row: %w", err)
+			}
+
+			if deliveryQty >= remainingQty {
+				// 納品数で発注残が完全にカバーされる場合
+				if _, err := tx.Exec(`DELETE FROM backorders WHERE id = ?`, id); err != nil {
+					rows.Close()
+					return fmt.Errorf("failed to delete reconciled backorder id %d: %w", id, err)
+				}
+				deliveryQty -= remainingQty
+			} else {
+				// 納品数の一部で発注残を減らす場合
+				newRemaining := remainingQty - deliveryQty
+				if _, err := tx.Exec(`UPDATE backorders SET remaining_quantity = ? WHERE id = ?`, newRemaining, id); err != nil {
+					rows.Close()
+					return fmt.Errorf("failed to update partially reconciled backorder id %d: %w", id, err)
+				}
+				deliveryQty = 0
 			}
 		}
+		rows.Close()
 	}
 	return tx.Commit()
 }
@@ -1620,21 +1638,25 @@ func ReconcileBackorders(conn *sql.DB, deliveredItems []model.Backorder) error {
  * 在庫元帳の計算（GetStockLedger）で使われます。
  */
 func GetAllBackordersMap(conn *sql.DB) (map[string]float64, error) {
-	rows, err := conn.Query("SELECT yj_code, package_form, jan_pack_inner_qty, yj_unit_name, yj_quantity FROM backorders")
+	const q = `
+		SELECT yj_code, package_form, jan_pack_inner_qty, yj_unit_name, SUM(remaining_quantity)
+		FROM backorders
+		GROUP BY yj_code, package_form, jan_pack_inner_qty, yj_unit_name`
+	rows, err := conn.Query(q)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query all backorders: %w", err)
+		return nil, fmt.Errorf("failed to query all backorders map: %w", err)
 	}
 	defer rows.Close()
 
 	backordersMap := make(map[string]float64)
 	for rows.Next() {
-		var bo model.Backorder
-		var qty float64
-		if err := rows.Scan(&bo.YjCode, &bo.PackageForm, &bo.JanPackInnerQty, &bo.YjUnitName, &qty); err != nil {
+		var yjCode, packageForm, yjUnitName string
+		var janPackInnerQty, totalRemaining float64
+		if err := rows.Scan(&yjCode, &packageForm, &janPackInnerQty, &yjUnitName, &totalRemaining); err != nil {
 			return nil, err
 		}
-		key := fmt.Sprintf("%s|%s|%g|%s", bo.YjCode, bo.PackageForm, bo.JanPackInnerQty, bo.YjUnitName)
-		backordersMap[key] = qty
+		key := fmt.Sprintf("%s|%s|%g|%s", yjCode, packageForm, janPackInnerQty, yjUnitName)
+		backordersMap[key] = totalRemaining
 	}
 	return backordersMap, nil
 }
@@ -1644,24 +1666,16 @@ func GetAllBackordersMap(conn *sql.DB) (map[string]float64, error) {
  * @param conn データベース接続
  * @return []model.Backorder 発注残レコードのスライス
  * @return error 処理中にエラーが発生した場合
- * @details
- * product_masterテーブルとJOINし、包装仕様の表示に必要な追加情報を取得します。
  */
 func GetAllBackordersList(conn *sql.DB) ([]model.Backorder, error) {
-	// ▼▼▼【ここから修正】▼▼▼
 	const q = `
 		SELECT
-			b.yj_code, b.package_form, b.jan_pack_inner_qty, b.yj_unit_name,
-			b.order_date, b.yj_quantity, b.product_name,
-			IFNULL(pm.yj_pack_unit_qty, 0), 
-			IFNULL(pm.jan_pack_unit_qty, 0), 
-			IFNULL(pm.jan_unit_code, 0)
-		FROM backorders AS b
-		LEFT JOIN product_master AS pm ON b.yj_code = pm.yj_code
-		GROUP BY b.yj_code, b.package_form, b.jan_pack_inner_qty, b.yj_unit_name
-		ORDER BY b.order_date, b.product_name
+			id, order_date, yj_code, product_name, package_form, jan_pack_inner_qty, 
+			yj_unit_name, order_quantity, remaining_quantity, wholesaler_code,
+			yj_pack_unit_qty, jan_pack_unit_qty, jan_unit_code
+		FROM backorders
+		ORDER BY order_date, product_name, id
 	`
-	// ▲▲▲【修正ここまで】▲▲▲
 	rows, err := conn.Query(q)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query all backorders list: %w", err)
@@ -1672,8 +1686,8 @@ func GetAllBackordersList(conn *sql.DB) ([]model.Backorder, error) {
 	for rows.Next() {
 		var bo model.Backorder
 		if err := rows.Scan(
-			&bo.YjCode, &bo.PackageForm, &bo.JanPackInnerQty, &bo.YjUnitName,
-			&bo.OrderDate, &bo.YjQuantity, &bo.ProductName,
+			&bo.ID, &bo.OrderDate, &bo.YjCode, &bo.ProductName, &bo.PackageForm, &bo.JanPackInnerQty,
+			&bo.YjUnitName, &bo.OrderQuantity, &bo.RemainingQuantity, &bo.WholesalerCode,
 			&bo.YjPackUnitQty, &bo.JanPackUnitQty, &bo.JanUnitCode,
 		); err != nil {
 			return nil, err
@@ -1684,28 +1698,29 @@ func GetAllBackordersList(conn *sql.DB) ([]model.Backorder, error) {
 }
 
 /**
- * @brief 指定されたキーの発注残レコードをトランザクション内で削除します。
+ * @brief 指定されたIDの発注残レコードをトランザクション内で削除します。
  * @param tx SQLトランザクションオブジェクト
- * @param backorder 削除対象のキー情報を持つBackorder構造体
+ * @param id 削除対象のID
  * @return error 処理中にエラーが発生した場合
  */
-func DeleteBackorderInTx(tx *sql.Tx, backorder model.Backorder) error {
-	const q = `DELETE FROM backorders 
-				WHERE yj_code = ? AND package_form = ? AND jan_pack_inner_qty = ? AND yj_unit_name = ?`
+func DeleteBackorderInTx(tx *sql.Tx, id int) error {
+	const q = `DELETE FROM backorders WHERE id = ?`
 
-	res, err := tx.Exec(q, backorder.YjCode, backorder.PackageForm, backorder.JanPackInnerQty, backorder.YjUnitName)
+	res, err := tx.Exec(q, id)
 	if err != nil {
-		return fmt.Errorf("failed to delete backorder for yj %s: %w", backorder.YjCode, err)
+		return fmt.Errorf("failed to delete backorder for id %d: %w", id, err)
 	}
 	rowsAffected, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("failed to get rows affected for backorder yj %s: %w", backorder.YjCode, err)
+		return fmt.Errorf("failed to get rows affected for backorder id %d: %w", id, err)
 	}
 	if rowsAffected == 0 {
-		return fmt.Errorf("no backorder found to delete for yj %s with specified package", backorder.YjCode)
+		return fmt.Errorf("no backorder found to delete for id %d", id)
 	}
 	return nil
 }
+
+// ▲▲▲【修正ここまで】▲▲▲
 
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\cleanup.go -----
@@ -3136,6 +3151,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings" // stringsパッケージをインポート
 	"wasabi/model"
 	"wasabi/units"
 )
@@ -3151,6 +3167,7 @@ import (
  * アプリ内にまだ存在しない公式の医薬品マスターを探すために使用されます。
  */
 func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterView, error) {
+	// ▼▼▼【ここから修正】▼▼▼
 	const q = `
 		SELECT
 			j.JC000, j.JC009, j.JC018, j.JC022, j.JC030, j.JC013, j.JC037, j.JC039,
@@ -3178,7 +3195,19 @@ func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterVi
 	}
 	defer rows.Close()
 
-	var results []model.ProductMasterView
+	type tempResult struct {
+		jcshms   model.JCShms
+		jc000    string
+		jc009    string
+		jc018    string
+		jc022    string
+		jc030    string
+		nhiPrice float64
+	}
+
+	var tempResults []tempResult
+	var janCodes []interface{}
+
 	for rows.Next() {
 		var tempJcshms model.JCShms
 		var jc000, jc009, jc018, jc022, jc030, jc013, jc037, jc039, jc050 sql.NullString
@@ -3204,7 +3233,40 @@ func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterVi
 				log.Printf("[WARN] Invalid JC050 data during search: '%s'", jc050.String)
 			}
 		}
-		tempJcshms.JC050 = nhiPriceVal
+
+		tempResults = append(tempResults, tempResult{
+			jcshms:   tempJcshms,
+			jc000:    jc000.String,
+			jc009:    jc009.String,
+			jc018:    jc018.String,
+			jc022:    jc022.String,
+			jc030:    jc030.String,
+			nhiPrice: nhiPriceVal,
+		})
+		janCodes = append(janCodes, jc000.String)
+	}
+
+	adoptedMap := make(map[string]bool)
+	if len(janCodes) > 0 {
+		query := "SELECT product_code FROM product_master WHERE product_code IN (?" + strings.Repeat(",?", len(janCodes)-1) + ")"
+		adoptedRows, err := conn.Query(query, janCodes...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check adopted products: %w", err)
+		}
+		defer adoptedRows.Close()
+		for adoptedRows.Next() {
+			var productCode string
+			if err := adoptedRows.Scan(&productCode); err != nil {
+				return nil, err
+			}
+			adoptedMap[productCode] = true
+		}
+	}
+
+	var results []model.ProductMasterView
+	for _, temp := range tempResults {
+		tempJcshms := temp.jcshms
+		tempJcshms.JC050 = temp.nhiPrice
 
 		var unitNhiPrice float64
 		if tempJcshms.JC044 > 0 {
@@ -3215,21 +3277,22 @@ func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterVi
 
 		view := model.ProductMasterView{
 			ProductMaster: model.ProductMaster{
-				ProductCode:         jc000.String,
-				YjCode:              jc009.String,
-				ProductName:         jc018.String,
-				KanaName:            jc022.String,
-				MakerName:           jc030.String,
-				UsageClassification: jc013.String,
-				PackageForm:         jc037.String,
-				YjUnitName:          units.ResolveName(jc039.String),
-				YjPackUnitQty:       jc044.Float64,
+				ProductCode:         temp.jc000,
+				YjCode:              temp.jc009,
+				ProductName:         temp.jc018,
+				KanaName:            temp.jc022,
+				MakerName:           temp.jc030,
+				UsageClassification: tempJcshms.JC013,
+				PackageForm:         tempJcshms.JC037,
+				YjUnitName:          units.ResolveName(tempJcshms.JC039),
+				YjPackUnitQty:       tempJcshms.JC044,
 				JanPackInnerQty:     tempJcshms.JA006.Float64,
 				JanPackUnitQty:      tempJcshms.JA008.Float64,
 				JanUnitCode:         janUnitCodeInt,
 				NhiPrice:            unitNhiPrice,
 			},
 			FormattedPackageSpec: units.FormatPackageSpec(&tempJcshms),
+			IsAdopted:            adoptedMap[temp.jc000],
 		}
 
 		if view.ProductMaster.JanUnitCode == 0 {
@@ -3240,6 +3303,7 @@ func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterVi
 		results = append(results, view)
 	}
 	return results, nil
+	// ▲▲▲【修正ここまで】▲▲▲
 }
 
 /**
@@ -5922,10 +5986,25 @@ func CreateMasterUpdateHandler(conn *sql.DB) http.HandlerFunc {
 				jancodeRow := newJancodeData[master.ProductCode]
 				// ProductMasterInputへの変換ロジックを createInputFromCSV に集約
 				input := createInputFromCSV(jcshmsRow, jancodeRow)
-				if master.Origin == "PROVISIONAL" && input.YjCode == "" {
-					input.Origin = "PROVISIONAL"
-					input.YjCode = master.YjCode
+
+				// ▼▼▼【ここから修正】▼▼▼
+				if input.YjCode == "" {
+					// JCSHMSにYJコードがない場合
+					if master.YjCode != "" {
+						// DBに既にYJコードがあれば（手入力されたものなど）、それを維持する
+						input.YjCode = master.YjCode
+					} else {
+						// DBにもYJコードがなければ、新規に採番する
+						newYjCode, err := db.NextSequenceInTx(tx, "MA2Y", "MA2Y", 8)
+						if err != nil {
+							http.Error(w, fmt.Sprintf("YJコードの採番に失敗 (JAN: %s): %v", master.ProductCode, err), http.StatusInternalServerError)
+							return
+						}
+						input.YjCode = newYjCode
+					}
 				}
+				// ▲▲▲【修正ここまで】▲▲▲
+
 				// 既存のユーザー設定項目を維持する
 				input.PurchasePrice = master.PurchasePrice
 				input.SupplierWholesale = master.SupplierWholesale
@@ -5933,9 +6012,7 @@ func CreateMasterUpdateHandler(conn *sql.DB) http.HandlerFunc {
 				input.ShelfNumber = master.ShelfNumber
 				input.Category = master.Category
 				input.UserNotes = master.UserNotes
-				// ▼▼▼【ここが修正箇所】▼▼▼
 				input.IsOrderStopped = master.IsOrderStopped // 発注可否設定を引き継ぐ
-				// ▲▲▲【修正ここまで】▲▲▲
 
 				if err := db.UpsertProductMasterInTx(tx, input); err != nil {
 					http.Error(w, fmt.Sprintf("マスターの上書き更新に失敗 (JAN: %s): %v", master.ProductCode, err), http.StatusInternalServerError)
@@ -6683,6 +6760,16 @@ func FindOrCreate(
 			// ヘルパー関数を呼び出して、新しいDB構造に基づいたデータを作成
 			input := createMasterInputFromJcshms(janCode, jcshms)
 
+			// ▼▼▼【ここから修正】YJコードがない場合に自動採番するロジックを追加 ▼▼▼
+			if input.YjCode == "" {
+				newYj, err := db.NextSequenceInTx(tx, "MA2Y", "MA2Y", 8)
+				if err != nil {
+					return nil, fmt.Errorf("failed to get next sequence for JCSHMS master with no YJ code: %w", err)
+				}
+				input.YjCode = newYj
+			}
+			// ▲▲▲【修正ここまで】▲▲▲
+
 			if err := db.UpsertProductMasterInTx(tx, input); err != nil {
 				return nil, fmt.Errorf("failed to create master from jcshms: %w", err)
 			}
@@ -7158,6 +7245,7 @@ type ProductMasterView struct {
 	ProductMaster
 	FormattedPackageSpec string `json:"formattedPackageSpec"`
 	JanUnitName          string `json:"janUnitName"`
+	IsAdopted            bool   `json:"isAdopted,omitempty"`
 }
 
 type InventoryProductView struct {
@@ -7300,18 +7388,26 @@ type Wholesaler struct {
 	Name string `json:"name"`
 }
 
+// ▼▼▼【ここから修正】▼▼▼
 type Backorder struct {
-	YjCode          string  `json:"yjCode"`
-	PackageForm     string  `json:"packageForm"`
-	JanPackInnerQty float64 `json:"janPackInnerQty"`
-	YjUnitName      string  `json:"yjUnitName"`
-	OrderDate       string  `json:"orderDate"`
-	YjQuantity      float64 `json:"yjQuantity"`
-	ProductName     string  `json:"productName"`
-	YjPackUnitQty   float64 `json:"yjPackUnitQty"`
-	JanPackUnitQty  float64 `json:"janPackUnitQty"`
-	JanUnitCode     int     `json:"janUnitCode"`
+	ID                int            `json:"id"`
+	OrderDate         string         `json:"orderDate"`
+	YjCode            string         `json:"yjCode"`
+	ProductName       string         `json:"productName"`
+	PackageForm       string         `json:"packageForm"`
+	JanPackInnerQty   float64        `json:"janPackInnerQty"`
+	YjUnitName        string         `json:"yjUnitName"`
+	OrderQuantity     float64        `json:"orderQuantity"`
+	RemainingQuantity float64        `json:"remainingQuantity"`
+	WholesalerCode    sql.NullString `json:"wholesalerCode,omitempty"`
+	YjPackUnitQty     float64        `json:"yjPackUnitQty"`
+	JanPackUnitQty    float64        `json:"janPackUnitQty"`
+	JanUnitCode       int            `json:"janUnitCode"`
+	// フロントエンドからの発注データ受け取り用フィールド
+	YjQuantity float64 `json:"yjQuantity,omitempty"`
 }
+
+// ▲▲▲【修正ここまで】▲▲▲
 
 type PriceUpdate struct {
 	ProductCode      string  `json:"productCode"`
@@ -7368,7 +7464,8 @@ type OrderCandidateYJGroup struct {
 
 type OrderCandidatePackageGroup struct {
 	model.StockLedgerPackageGroup
-	Masters []model.ProductMasterView `json:"masters"`
+	Masters            []model.ProductMasterView `json:"masters"`
+	ExistingBackorders []model.Backorder         `json:"existingBackorders"`
 }
 
 func GenerateOrderCandidatesHandler(conn *sql.DB) http.HandlerFunc {
@@ -7407,6 +7504,17 @@ func GenerateOrderCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
+		allBackorders, err := db.GetAllBackordersList(conn)
+		if err != nil {
+			http.Error(w, "Failed to get backorder list for candidates", http.StatusInternalServerError)
+			return
+		}
+		backordersByPackageKey := make(map[string][]model.Backorder)
+		for _, bo := range allBackorders {
+			key := fmt.Sprintf("%s|%s|%g|%s", bo.YjCode, bo.PackageForm, bo.JanPackInnerQty, bo.YjUnitName)
+			backordersByPackageKey[key] = append(backordersByPackageKey[key], bo)
+		}
+
 		var candidates []OrderCandidateYJGroup
 		for _, group := range yjGroups {
 			if group.IsReorderNeeded {
@@ -7419,6 +7527,7 @@ func GenerateOrderCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 					newPkgGroup := OrderCandidatePackageGroup{
 						StockLedgerPackageGroup: pkg,
 						Masters:                 []model.ProductMasterView{},
+						ExistingBackorders:      backordersByPackageKey[pkg.PackageKey],
 					}
 					for _, master := range pkg.Masters {
 						tempJcshms := model.JCShms{
@@ -7478,9 +7587,13 @@ func PlaceOrderHandler(conn *sql.DB) http.HandlerFunc {
 			if payload[i].OrderDate == "" {
 				payload[i].OrderDate = today
 			}
+			// ▼▼▼【ここから修正】▼▼▼
+			payload[i].OrderQuantity = payload[i].YjQuantity
+			payload[i].RemainingQuantity = payload[i].YjQuantity
+			// ▲▲▲【修正ここまで】▲▲▲
 		}
 
-		if err := db.UpsertBackordersInTx(tx, payload); err != nil {
+		if err := db.InsertBackordersInTx(tx, payload); err != nil {
 			http.Error(w, "Failed to save backorders", http.StatusInternalServerError)
 			return
 		}
@@ -9656,7 +9769,8 @@ func GetUsagePathHandler(conn *sql.DB) http.HandlerFunc {
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\css\styles.css -----
 /* C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\css\styles.css (全体) */
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: sans-serif; padding: 10px; background-color: #f4f4f4; }
+body { font-family: sans-serif;
+padding: 10px; background-color: #f4f4f4; }
 .hidden { display: none !important; }
 
 /* モーダル表示中にbodyのスクロールを禁止する */
@@ -9701,7 +9815,8 @@ header {
 table { border-collapse: collapse; width: 100%; table-layout: fixed; }
 th, td { border: 1px solid black; padding: 4px; vertical-align: middle; }
 th { text-align: center; background-color: #f0f0f0; }
-.yj-jan-code { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.yj-jan-code { overflow: hidden;
+white-space: nowrap; text-overflow: ellipsis; }
 .left { text-align: left; }
 .right { text-align: right; }
 
@@ -9713,11 +9828,13 @@ th { text-align: center; background-color: #f0f0f0; }
     font-size: 11pt;
 }
 
-#loading-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 9999; color: white; }
+#loading-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.5); display: flex;
+flex-direction: column; justify-content: center; align-items: center; z-index: 9999; color: white; }
 .spinner { border: 5px solid #f3f3f3; border-top: 5px solid #0d6efd; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin-bottom: 10px; }
 @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
-.notification-box { position: fixed; top: -100px; left: 50%; transform: translateX(-50%); padding: 15px 25px; border-radius: 5px; color: white; font-size: 16px; z-index: 10000; transition: top 0.5s; }
+.notification-box { position: fixed;
+top: -100px; left: 50%; transform: translateX(-50%); padding: 15px 25px; border-radius: 5px; color: white; font-size: 16px; z-index: 10000; transition: top 0.5s; }
 .notification-box.show { top: 20px; }
 .notification-box.success { background-color: #198754; }
 .notification-box.error { background-color: #ff0019; }
@@ -9769,6 +9886,13 @@ th { text-align: center; background-color: #f0f0f0; }
     background-color: #f8f9fa; /* 背景を少し明るく */
     cursor: not-allowed; /* 操作不可カーソル */
 }
+
+/* ▼▼▼【ここに追加】▼▼▼ */
+.adopted-item td {
+    color: red;
+    font-weight: bold;
+}
+/* ▲▲▲【追加ここまで】▲▲▲ */
 
 /* ▼▼▼ [ここから追加] ボタンのビビッドカラー設定 ▼▼▼ */
 .btn-red { background-color: #ff0000; color: white; border-color: #d90000; }
@@ -9905,6 +10029,7 @@ th { text-align: center; background-color: #f0f0f0; }
   .print-this-view #deadstock-output-container {
     display: none !important;
   }
+  
   .print-this-view #deadstock-print-area {
     display: block !important;
   }
@@ -11576,7 +11701,6 @@ function handleResultClick(event) {
 
 async function performSearch() {
   const query = hiraganaToKatakana(searchInput.value.trim());
-  
   if (!skipQueryLengthCheck && query.length < 2) {
     alert('検索キーワードを2文字以上入力してください。');
     searchResultsBody.innerHTML = '<tr><td colspan="6" class="center">2文字以上入力して検索してください。</td></tr>';
@@ -11607,11 +11731,13 @@ function renderSearchResults(products) {
     return;
   }
 
+  // ▼▼▼【ここから修正】▼▼▼
   let html = '';
   products.forEach(p => {
     const productData = JSON.stringify(p);
+    const rowClass = p.isAdopted ? 'class="adopted-item"' : '';
     html += `
-      <tr>
+      <tr ${rowClass}>
         <td class="left">${p.productName || ''}</td>
         <td class="left">${p.makerName || ''}</td>
         <td class="left">${p.formattedPackageSpec}</td>
@@ -11621,6 +11747,7 @@ function renderSearchResults(products) {
       </tr>
     `;
   });
+  // ▲▲▲【修正ここまで】▲▲▲
   searchResultsBody.innerHTML = html;
 }
 
@@ -13808,15 +13935,16 @@ function createMasterRowHTML(master = {}) {
     const rowId = master.productCode || `new-${Date.now()}`;
     const isProtected = master.origin === 'JCSHMS';
     const disabledAttr = isProtected ? 'disabled' : '';
-
+    // ▼▼▼【ここから修正】YJコードが空白の場合は編集できるようにreadonly条件を変更 ▼▼▼
     const row1 = `
         <tr class="data-row-top">
             <td colspan="2"><div class="field-group"><label>1. JAN</label><input type="text" name="productCode" value="${master.productCode || ''}" placeholder="製品コード(JAN)" ${!isNew ? 'readonly' : ''}></div></td>
-            <td colspan="2"><div class="field-group"><label>2. YJ</label><input type="text" name="yjCode" value="${master.yjCode || ''}" placeholder="YJコード" ${isNew || isProtected ? 'readonly' : ''}></div></td>
+            <td colspan="2"><div class="field-group"><label>2. YJ</label><input type="text" name="yjCode" value="${master.yjCode || ''}" placeholder="YJコード" ${isNew || (isProtected && master.yjCode) ? 'readonly' : ''}></div></td>
             <td colspan="2"><div class="field-group"><label>3. GS1</label><input type="text" name="gs1Code" value="${master.gs1Code || ''}" ${disabledAttr}></div></td>
             <td colspan="3"><div class="field-group"><label>4. 商品名</label><input type="text" name="productName" value="${master.productName || ''}" ${disabledAttr}></div></td>
             <td colspan="3"><div class="field-group"><label>5. カナ</label><input type="text" name="kanaName" value="${master.kanaName || ''}" ${disabledAttr}></div></td>
         </tr>`;
+    // ▲▲▲【修正ここまで】▲▲▲
 
     const row2 = `
         <tr class="data-row-middle">
@@ -14168,6 +14296,7 @@ async function processScanQueue() {
     processingIndicator.classList.add('hidden');
 }
 
+// ▼▼▼【ここから修正】▼▼▼
 function renderOrderCandidates(data, container, wholesalers) {
     if (!data || data.length === 0) {
         container.innerHTML = "<p>発注が必要な品目はありませんでした。</p>";
@@ -14189,6 +14318,22 @@ function renderOrderCandidates(data, container, wholesalers) {
                         不足数: ${formatBalance(yjShortfall)}
                     </span>
                 </div>
+        `;
+
+        // --- 既存の発注残リストを表示 ---
+        const existingBackordersForYj = yjGroup.packageLedgers.flatMap(p => p.existingBackorders || []);
+        if (existingBackordersForYj.length > 0) {
+            html += `<div class="existing-backorders-info">
+                        <strong>＜既存の発注残＞</strong>
+                        <ul>`;
+            existingBackordersForYj.forEach(bo => {
+                const wName = wholesalerMap.get(bo.wholesalerCode) || bo.wholesalerCode || '不明';
+                html += `<li>${bo.orderDate}: ${bo.productName} - 数量: ${bo.remainingQuantity.toFixed(2)} (${wName})</li>`;
+            });
+            html += `</ul></div>`;
+        }
+
+        html += `
                 <table class="data-table" style="margin-bottom: 20px;">
                     <thead>
                         <tr>
@@ -14267,6 +14412,7 @@ function renderOrderCandidates(data, container, wholesalers) {
     });
     container.innerHTML = html;
 }
+// ▲▲▲【修正ここまで】▲▲▲
 
 async function handleOrderBarcodeScan(e) {
     e.preventDefault();
@@ -17985,6 +18131,8 @@ func openBrowser(url string) {
 
 
 ----- C:\Users\wasab\OneDrive\デスクトップ\WASABI\schema.sql -----
+-- C:\Users\wasab\OneDrive\デスクトップ\WASABI\schema.sql
+
 -- 得意先マスターテーブル
 CREATE TABLE IF NOT EXISTS client_master (
   client_code TEXT PRIMARY KEY,
@@ -18003,7 +18151,7 @@ CREATE TABLE IF NOT EXISTS product_master (
     product_code TEXT PRIMARY KEY,
     yj_code TEXT,
     gs1_code TEXT,                       -- 調剤包装単位コード (JC122)
-    product_name TEXT,                     -- (役割変更) 規格を含まない基本製品名 (商品名 JC018)
+    product_name TEXT,                   -- (役割変更) 規格を含まない基本製品名 (商品名 JC018)
     kana_name TEXT,
     maker_name TEXT,
     
@@ -18081,8 +18229,6 @@ CREATE TABLE IF NOT EXISTS transaction_records (
   process_flag_ma TEXT
 );
 
--- (以降のテーブル定義は変更ありません)
-
 -- 予製レコードテーブル
 CREATE TABLE IF NOT EXISTS precomp_records (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -18113,17 +18259,24 @@ CREATE TABLE IF NOT EXISTS precomp_records (
   UNIQUE(client_code, jan_code)
 );
 
+-- ▼▼▼【ここから修正】▼▼▼
 -- 発注残管理テーブル
 CREATE TABLE IF NOT EXISTS backorders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_date TEXT NOT NULL,
   yj_code TEXT NOT NULL,
+  product_name TEXT,
   package_form TEXT NOT NULL,
   jan_pack_inner_qty REAL NOT NULL,
   yj_unit_name TEXT NOT NULL,
-  order_date TEXT NOT NULL,
-  yj_quantity REAL NOT NULL,
-  product_name TEXT,
-  PRIMARY KEY (yj_code, package_form, jan_pack_inner_qty, yj_unit_name)
+  order_quantity REAL NOT NULL,
+  remaining_quantity REAL NOT NULL,
+  wholesaler_code TEXT,
+  yj_pack_unit_qty REAL,
+  jan_pack_unit_qty REAL,
+  jan_unit_code INTEGER
 );
+-- ▲▲▲【修正ここまで】▲▲▲
 
 -- 手入力用ロット・期限情報テーブル
 CREATE TABLE IF NOT EXISTS dead_stock_list (
@@ -18139,6 +18292,7 @@ CREATE TABLE IF NOT EXISTS dead_stock_list (
   created_at TEXT NOT NULL,
   UNIQUE(product_code, expiry_date, lot_number)
 );
+
 -- JCSHMSマスター (SOU/JCSHMS.CSV から読み込み)
 CREATE TABLE IF NOT EXISTS jcshms (
   JC000 TEXT, JC001 TEXT, JC002 TEXT, JC003 TEXT, JC004 TEXT, JC005 TEXT, JC006 TEXT, JC007 TEXT, JC008 TEXT, JC009 TEXT,
@@ -18172,8 +18326,6 @@ CREATE TABLE IF NOT EXISTS code_sequences (
 );
 INSERT OR IGNORE INTO code_sequences(name, last_no) VALUES ('MA2Y', 0);
 INSERT OR IGNORE INTO code_sequences(name, last_no) VALUES ('CL', 0);
-
-
 -- パフォーマンス向上のためのインデックス
 CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_unique_slip
   ON transaction_records(transaction_date, client_code, receipt_number, line_number)

@@ -26,7 +26,8 @@ type OrderCandidateYJGroup struct {
 
 type OrderCandidatePackageGroup struct {
 	model.StockLedgerPackageGroup
-	Masters []model.ProductMasterView `json:"masters"`
+	Masters            []model.ProductMasterView `json:"masters"`
+	ExistingBackorders []model.Backorder         `json:"existingBackorders"`
 }
 
 func GenerateOrderCandidatesHandler(conn *sql.DB) http.HandlerFunc {
@@ -65,6 +66,17 @@ func GenerateOrderCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
+		allBackorders, err := db.GetAllBackordersList(conn)
+		if err != nil {
+			http.Error(w, "Failed to get backorder list for candidates", http.StatusInternalServerError)
+			return
+		}
+		backordersByPackageKey := make(map[string][]model.Backorder)
+		for _, bo := range allBackorders {
+			key := fmt.Sprintf("%s|%s|%g|%s", bo.YjCode, bo.PackageForm, bo.JanPackInnerQty, bo.YjUnitName)
+			backordersByPackageKey[key] = append(backordersByPackageKey[key], bo)
+		}
+
 		var candidates []OrderCandidateYJGroup
 		for _, group := range yjGroups {
 			if group.IsReorderNeeded {
@@ -77,6 +89,7 @@ func GenerateOrderCandidatesHandler(conn *sql.DB) http.HandlerFunc {
 					newPkgGroup := OrderCandidatePackageGroup{
 						StockLedgerPackageGroup: pkg,
 						Masters:                 []model.ProductMasterView{},
+						ExistingBackorders:      backordersByPackageKey[pkg.PackageKey],
 					}
 					for _, master := range pkg.Masters {
 						tempJcshms := model.JCShms{
@@ -136,9 +149,13 @@ func PlaceOrderHandler(conn *sql.DB) http.HandlerFunc {
 			if payload[i].OrderDate == "" {
 				payload[i].OrderDate = today
 			}
+			// ▼▼▼【ここから修正】▼▼▼
+			payload[i].OrderQuantity = payload[i].YjQuantity
+			payload[i].RemainingQuantity = payload[i].YjQuantity
+			// ▲▲▲【修正ここまで】▲▲▲
 		}
 
-		if err := db.UpsertBackordersInTx(tx, payload); err != nil {
+		if err := db.InsertBackordersInTx(tx, payload); err != nil {
 			http.Error(w, "Failed to save backorders", http.StatusInternalServerError)
 			return
 		}

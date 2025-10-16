@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings" // stringsパッケージをインポート
 	"wasabi/model"
 	"wasabi/units"
 )
@@ -22,6 +23,7 @@ import (
  * アプリ内にまだ存在しない公式の医薬品マスターを探すために使用されます。
  */
 func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterView, error) {
+	// ▼▼▼【ここから修正】▼▼▼
 	const q = `
 		SELECT
 			j.JC000, j.JC009, j.JC018, j.JC022, j.JC030, j.JC013, j.JC037, j.JC039,
@@ -49,7 +51,19 @@ func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterVi
 	}
 	defer rows.Close()
 
-	var results []model.ProductMasterView
+	type tempResult struct {
+		jcshms   model.JCShms
+		jc000    string
+		jc009    string
+		jc018    string
+		jc022    string
+		jc030    string
+		nhiPrice float64
+	}
+
+	var tempResults []tempResult
+	var janCodes []interface{}
+
 	for rows.Next() {
 		var tempJcshms model.JCShms
 		var jc000, jc009, jc018, jc022, jc030, jc013, jc037, jc039, jc050 sql.NullString
@@ -75,7 +89,40 @@ func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterVi
 				log.Printf("[WARN] Invalid JC050 data during search: '%s'", jc050.String)
 			}
 		}
-		tempJcshms.JC050 = nhiPriceVal
+
+		tempResults = append(tempResults, tempResult{
+			jcshms:   tempJcshms,
+			jc000:    jc000.String,
+			jc009:    jc009.String,
+			jc018:    jc018.String,
+			jc022:    jc022.String,
+			jc030:    jc030.String,
+			nhiPrice: nhiPriceVal,
+		})
+		janCodes = append(janCodes, jc000.String)
+	}
+
+	adoptedMap := make(map[string]bool)
+	if len(janCodes) > 0 {
+		query := "SELECT product_code FROM product_master WHERE product_code IN (?" + strings.Repeat(",?", len(janCodes)-1) + ")"
+		adoptedRows, err := conn.Query(query, janCodes...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check adopted products: %w", err)
+		}
+		defer adoptedRows.Close()
+		for adoptedRows.Next() {
+			var productCode string
+			if err := adoptedRows.Scan(&productCode); err != nil {
+				return nil, err
+			}
+			adoptedMap[productCode] = true
+		}
+	}
+
+	var results []model.ProductMasterView
+	for _, temp := range tempResults {
+		tempJcshms := temp.jcshms
+		tempJcshms.JC050 = temp.nhiPrice
 
 		var unitNhiPrice float64
 		if tempJcshms.JC044 > 0 {
@@ -86,21 +133,22 @@ func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterVi
 
 		view := model.ProductMasterView{
 			ProductMaster: model.ProductMaster{
-				ProductCode:         jc000.String,
-				YjCode:              jc009.String,
-				ProductName:         jc018.String,
-				KanaName:            jc022.String,
-				MakerName:           jc030.String,
-				UsageClassification: jc013.String,
-				PackageForm:         jc037.String,
-				YjUnitName:          units.ResolveName(jc039.String),
-				YjPackUnitQty:       jc044.Float64,
+				ProductCode:         temp.jc000,
+				YjCode:              temp.jc009,
+				ProductName:         temp.jc018,
+				KanaName:            temp.jc022,
+				MakerName:           temp.jc030,
+				UsageClassification: tempJcshms.JC013,
+				PackageForm:         tempJcshms.JC037,
+				YjUnitName:          units.ResolveName(tempJcshms.JC039),
+				YjPackUnitQty:       tempJcshms.JC044,
 				JanPackInnerQty:     tempJcshms.JA006.Float64,
 				JanPackUnitQty:      tempJcshms.JA008.Float64,
 				JanUnitCode:         janUnitCodeInt,
 				NhiPrice:            unitNhiPrice,
 			},
 			FormattedPackageSpec: units.FormatPackageSpec(&tempJcshms),
+			IsAdopted:            adoptedMap[temp.jc000],
 		}
 
 		if view.ProductMaster.JanUnitCode == 0 {
@@ -111,6 +159,7 @@ func SearchJcshmsByName(conn *sql.DB, nameQuery string) ([]model.ProductMasterVi
 		results = append(results, view)
 	}
 	return results, nil
+	// ▲▲▲【修正ここまで】▲▲▲
 }
 
 /**

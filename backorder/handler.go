@@ -57,16 +57,19 @@ func GetBackordersHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
+// ▼▼▼【ここから修正】▼▼▼
 /**
  * @brief 単一の発注残レコードを削除するためのHTTPハンドラです。
  * @param conn データベース接続
  * @return http.HandlerFunc HTTPリクエストを処理するハンドラ関数
  * @details
- * HTTPリクエストのボディから削除対象のBackorder情報を受け取り、DBから削除します。
+ * HTTPリクエストのボディから削除対象のIDを受け取り、DBから削除します。
  */
 func DeleteBackorderHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var payload model.Backorder
+		var payload struct {
+			ID int `json:"id"`
+		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
@@ -79,7 +82,7 @@ func DeleteBackorderHandler(conn *sql.DB) http.HandlerFunc {
 		}
 		defer tx.Rollback()
 
-		if err := db.DeleteBackorderInTx(tx, payload); err != nil {
+		if err := db.DeleteBackorderInTx(tx, payload.ID); err != nil {
 			http.Error(w, "Failed to delete backorder: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -99,12 +102,14 @@ func DeleteBackorderHandler(conn *sql.DB) http.HandlerFunc {
  * @param conn データベース接続
  * @return http.HandlerFunc HTTPリクエストを処理するハンドラ関数
  * @details
- * HTTPリクエストのボディから削除対象のBackorder情報の配列を受け取り、ループ処理でDBから削除します。
+ * HTTPリクエストのボディから削除対象のIDの配列を受け取り、ループ処理でDBから削除します。
  * 処理は単一のトランザクション内で行われ、一件でも失敗した場合は全てロールバックされます。
  */
 func BulkDeleteBackordersHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var payload []model.Backorder
+		var payload []struct {
+			ID int `json:"id"`
+		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
@@ -124,7 +129,7 @@ func BulkDeleteBackordersHandler(conn *sql.DB) http.HandlerFunc {
 		defer tx.Rollback()
 
 		for _, bo := range payload {
-			if err := db.DeleteBackorderInTx(tx, bo); err != nil {
+			if err := db.DeleteBackorderInTx(tx, bo.ID); err != nil {
 				http.Error(w, "Failed to delete backorder: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
@@ -139,3 +144,5 @@ func BulkDeleteBackordersHandler(conn *sql.DB) http.HandlerFunc {
 		json.NewEncoder(w).Encode(map[string]string{"message": "選択された発注残を削除しました。"})
 	}
 }
+
+// ▲▲▲【修正ここまで】▲▲▲

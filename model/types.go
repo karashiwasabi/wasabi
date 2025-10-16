@@ -170,6 +170,7 @@ type ProductMasterView struct {
 	ProductMaster
 	FormattedPackageSpec string `json:"formattedPackageSpec"`
 	JanUnitName          string `json:"janUnitName"`
+	IsAdopted            bool   `json:"isAdopted,omitempty"`
 }
 
 type InventoryProductView struct {
@@ -312,18 +313,26 @@ type Wholesaler struct {
 	Name string `json:"name"`
 }
 
+// ▼▼▼【ここから修正】▼▼▼
 type Backorder struct {
-	YjCode          string  `json:"yjCode"`
-	PackageForm     string  `json:"packageForm"`
-	JanPackInnerQty float64 `json:"janPackInnerQty"`
-	YjUnitName      string  `json:"yjUnitName"`
-	OrderDate       string  `json:"orderDate"`
-	YjQuantity      float64 `json:"yjQuantity"`
-	ProductName     string  `json:"productName"`
-	YjPackUnitQty   float64 `json:"yjPackUnitQty"`
-	JanPackUnitQty  float64 `json:"janPackUnitQty"`
-	JanUnitCode     int     `json:"janUnitCode"`
+	ID                int            `json:"id"`
+	OrderDate         string         `json:"orderDate"`
+	YjCode            string         `json:"yjCode"`
+	ProductName       string         `json:"productName"`
+	PackageForm       string         `json:"packageForm"`
+	JanPackInnerQty   float64        `json:"janPackInnerQty"`
+	YjUnitName        string         `json:"yjUnitName"`
+	OrderQuantity     float64        `json:"orderQuantity"`
+	RemainingQuantity float64        `json:"remainingQuantity"`
+	WholesalerCode    sql.NullString `json:"wholesalerCode,omitempty"`
+	YjPackUnitQty     float64        `json:"yjPackUnitQty"`
+	JanPackUnitQty    float64        `json:"janPackUnitQty"`
+	JanUnitCode       int            `json:"janUnitCode"`
+	// フロントエンドからの発注データ受け取り用フィールド
+	YjQuantity float64 `json:"yjQuantity,omitempty"`
 }
+
+// ▲▲▲【修正ここまで】▲▲▲
 
 type PriceUpdate struct {
 	ProductCode      string  `json:"productCode"`

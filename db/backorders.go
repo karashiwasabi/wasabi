@@ -8,46 +8,50 @@ import (
 	"wasabi/model"
 )
 
+// ▼▼▼【ここから修正】▼▼▼
+
 /**
- * @brief 複数の発注残レコードをトランザクション内で登録または更新します（UPSERT）。
+ * @brief 複数の発注残レコードをトランザクション内で登録します（INSERT）。
  * @param tx SQLトランザクションオブジェクト
- * @param backorders 登録・更新する発注残レコードのスライス
+ * @param backorders 登録する発注残レコードのスライス
  * @return error 処理中にエラーが発生した場合
  * @details
- * 複合主キー(yj_code, package_form, etc.)でコンフリクトが発生した場合、
- * 既存のレコードのyj_quantityに新しい数量を加算し、order_dateを更新します。
+ * 発注ごとに新しいレコードとしてデータベースに挿入します。
  */
-func UpsertBackordersInTx(tx *sql.Tx, backorders []model.Backorder) error {
+func InsertBackordersInTx(tx *sql.Tx, backorders []model.Backorder) error {
 	const q = `
-		INSERT INTO backorders (yj_code, package_form, jan_pack_inner_qty, yj_unit_name, order_date, yj_quantity, product_name)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(yj_code, package_form, jan_pack_inner_qty, yj_unit_name) DO UPDATE SET
-			yj_quantity = yj_quantity + excluded.yj_quantity,
-			order_date = excluded.order_date
-	`
+		INSERT INTO backorders (
+			order_date, yj_code, product_name, package_form, jan_pack_inner_qty, 
+			yj_unit_name, order_quantity, remaining_quantity, wholesaler_code,
+			yj_pack_unit_qty, jan_pack_unit_qty, jan_unit_code
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	stmt, err := tx.Prepare(q)
 	if err != nil {
-		return fmt.Errorf("failed to prepare backorder upsert statement: %w", err)
+		return fmt.Errorf("failed to prepare backorder insert statement: %w", err)
 	}
 	defer stmt.Close()
 
 	for _, bo := range backorders {
-		_, err := stmt.Exec(bo.YjCode, bo.PackageForm, bo.JanPackInnerQty, bo.YjUnitName, bo.OrderDate, bo.YjQuantity, bo.ProductName)
+		_, err := stmt.Exec(
+			bo.OrderDate, bo.YjCode, bo.ProductName, bo.PackageForm, bo.JanPackInnerQty,
+			bo.YjUnitName, bo.OrderQuantity, bo.RemainingQuantity, bo.WholesalerCode,
+			bo.YjPackUnitQty, bo.JanPackUnitQty, bo.JanUnitCode,
+		)
 		if err != nil {
-			return fmt.Errorf("failed to execute backorder upsert for yj %s: %w", bo.YjCode, err)
+			return fmt.Errorf("failed to execute backorder insert for yj %s: %w", bo.YjCode, err)
 		}
 	}
 	return nil
 }
 
 /**
- * @brief 納品データに基づいて発注残を消し込みます。
+ * @brief 納品データに基づいて発注残を消し込みます（FIFO: 先入れ先出し）。
  * @param conn データベース接続
  * @param deliveredItems 納品された品物のスライス
  * @return error 処理中にエラーが発生した場合
  * @details
- * 納品された各品物について、対応する発注残の数量を減らします。
- * 発注残数量が0以下になった場合は、そのレコードを削除します。
+ * 納品された各品物について、対応する発注残を古いものから順に消し込みます。
+ * 発注残数量が0になったレコードは削除されます。
  */
 func ReconcileBackorders(conn *sql.DB, deliveredItems []model.Backorder) error {
 	tx, err := conn.Begin()
@@ -57,40 +61,47 @@ func ReconcileBackorders(conn *sql.DB, deliveredItems []model.Backorder) error {
 	defer tx.Rollback()
 
 	for _, item := range deliveredItems {
-		var currentBackorderQty float64
-		err := tx.QueryRow(`
-			SELECT yj_quantity FROM backorders 
-			WHERE yj_code = ? AND package_form = ? AND jan_pack_inner_qty = ? AND yj_unit_name = ?`,
+		deliveryQty := item.YjQuantity
+
+		rows, err := tx.Query(`
+			SELECT id, remaining_quantity FROM backorders 
+			WHERE yj_code = ? AND package_form = ? AND jan_pack_inner_qty = ? AND yj_unit_name = ?
+			ORDER BY order_date, id`,
 			item.YjCode, item.PackageForm, item.JanPackInnerQty, item.YjUnitName,
-		).Scan(&currentBackorderQty)
-
+		)
 		if err != nil {
-			if err == sql.ErrNoRows {
-				continue // 対応する発注残がなければスキップ
-			}
-			return fmt.Errorf("failed to query backorder for yj %s: %w", item.YjCode, err)
+			return fmt.Errorf("failed to query backorders for reconciliation: %w", err)
 		}
 
-		newQty := currentBackorderQty - item.YjQuantity
-		if newQty <= 0 {
-			_, err := tx.Exec(`
-				DELETE FROM backorders 
-				WHERE yj_code = ? AND package_form = ? AND jan_pack_inner_qty = ? AND yj_unit_name = ?`,
-				item.YjCode, item.PackageForm, item.JanPackInnerQty, item.YjUnitName,
-			)
-			if err != nil {
-				return fmt.Errorf("failed to delete completed backorder for yj %s: %w", item.YjCode, err)
+		for rows.Next() {
+			if deliveryQty <= 0 {
+				break
 			}
-		} else {
-			_, err := tx.Exec(`
-				UPDATE backorders SET yj_quantity = ? 
-				WHERE yj_code = ? AND package_form = ? AND jan_pack_inner_qty = ? AND yj_unit_name = ?`,
-				newQty, item.YjCode, item.PackageForm, item.JanPackInnerQty, item.YjUnitName,
-			)
-			if err != nil {
-				return fmt.Errorf("failed to update backorder for yj %s: %w", item.YjCode, err)
+			var id int
+			var remainingQty float64
+			if err := rows.Scan(&id, &remainingQty); err != nil {
+				rows.Close()
+				return fmt.Errorf("failed to scan backorder row: %w", err)
+			}
+
+			if deliveryQty >= remainingQty {
+				// 納品数で発注残が完全にカバーされる場合
+				if _, err := tx.Exec(`DELETE FROM backorders WHERE id = ?`, id); err != nil {
+					rows.Close()
+					return fmt.Errorf("failed to delete reconciled backorder id %d: %w", id, err)
+				}
+				deliveryQty -= remainingQty
+			} else {
+				// 納品数の一部で発注残を減らす場合
+				newRemaining := remainingQty - deliveryQty
+				if _, err := tx.Exec(`UPDATE backorders SET remaining_quantity = ? WHERE id = ?`, newRemaining, id); err != nil {
+					rows.Close()
+					return fmt.Errorf("failed to update partially reconciled backorder id %d: %w", id, err)
+				}
+				deliveryQty = 0
 			}
 		}
+		rows.Close()
 	}
 	return tx.Commit()
 }
@@ -105,21 +116,25 @@ func ReconcileBackorders(conn *sql.DB, deliveredItems []model.Backorder) error {
  * 在庫元帳の計算（GetStockLedger）で使われます。
  */
 func GetAllBackordersMap(conn *sql.DB) (map[string]float64, error) {
-	rows, err := conn.Query("SELECT yj_code, package_form, jan_pack_inner_qty, yj_unit_name, yj_quantity FROM backorders")
+	const q = `
+		SELECT yj_code, package_form, jan_pack_inner_qty, yj_unit_name, SUM(remaining_quantity)
+		FROM backorders
+		GROUP BY yj_code, package_form, jan_pack_inner_qty, yj_unit_name`
+	rows, err := conn.Query(q)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query all backorders: %w", err)
+		return nil, fmt.Errorf("failed to query all backorders map: %w", err)
 	}
 	defer rows.Close()
 
 	backordersMap := make(map[string]float64)
 	for rows.Next() {
-		var bo model.Backorder
-		var qty float64
-		if err := rows.Scan(&bo.YjCode, &bo.PackageForm, &bo.JanPackInnerQty, &bo.YjUnitName, &qty); err != nil {
+		var yjCode, packageForm, yjUnitName string
+		var janPackInnerQty, totalRemaining float64
+		if err := rows.Scan(&yjCode, &packageForm, &janPackInnerQty, &yjUnitName, &totalRemaining); err != nil {
 			return nil, err
 		}
-		key := fmt.Sprintf("%s|%s|%g|%s", bo.YjCode, bo.PackageForm, bo.JanPackInnerQty, bo.YjUnitName)
-		backordersMap[key] = qty
+		key := fmt.Sprintf("%s|%s|%g|%s", yjCode, packageForm, janPackInnerQty, yjUnitName)
+		backordersMap[key] = totalRemaining
 	}
 	return backordersMap, nil
 }
@@ -129,24 +144,16 @@ func GetAllBackordersMap(conn *sql.DB) (map[string]float64, error) {
  * @param conn データベース接続
  * @return []model.Backorder 発注残レコードのスライス
  * @return error 処理中にエラーが発生した場合
- * @details
- * product_masterテーブルとJOINし、包装仕様の表示に必要な追加情報を取得します。
  */
 func GetAllBackordersList(conn *sql.DB) ([]model.Backorder, error) {
-	// ▼▼▼【ここから修正】▼▼▼
 	const q = `
 		SELECT
-			b.yj_code, b.package_form, b.jan_pack_inner_qty, b.yj_unit_name,
-			b.order_date, b.yj_quantity, b.product_name,
-			IFNULL(pm.yj_pack_unit_qty, 0), 
-			IFNULL(pm.jan_pack_unit_qty, 0), 
-			IFNULL(pm.jan_unit_code, 0)
-		FROM backorders AS b
-		LEFT JOIN product_master AS pm ON b.yj_code = pm.yj_code
-		GROUP BY b.yj_code, b.package_form, b.jan_pack_inner_qty, b.yj_unit_name
-		ORDER BY b.order_date, b.product_name
+			id, order_date, yj_code, product_name, package_form, jan_pack_inner_qty, 
+			yj_unit_name, order_quantity, remaining_quantity, wholesaler_code,
+			yj_pack_unit_qty, jan_pack_unit_qty, jan_unit_code
+		FROM backorders
+		ORDER BY order_date, product_name, id
 	`
-	// ▲▲▲【修正ここまで】▲▲▲
 	rows, err := conn.Query(q)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query all backorders list: %w", err)
@@ -157,8 +164,8 @@ func GetAllBackordersList(conn *sql.DB) ([]model.Backorder, error) {
 	for rows.Next() {
 		var bo model.Backorder
 		if err := rows.Scan(
-			&bo.YjCode, &bo.PackageForm, &bo.JanPackInnerQty, &bo.YjUnitName,
-			&bo.OrderDate, &bo.YjQuantity, &bo.ProductName,
+			&bo.ID, &bo.OrderDate, &bo.YjCode, &bo.ProductName, &bo.PackageForm, &bo.JanPackInnerQty,
+			&bo.YjUnitName, &bo.OrderQuantity, &bo.RemainingQuantity, &bo.WholesalerCode,
 			&bo.YjPackUnitQty, &bo.JanPackUnitQty, &bo.JanUnitCode,
 		); err != nil {
 			return nil, err
@@ -169,25 +176,26 @@ func GetAllBackordersList(conn *sql.DB) ([]model.Backorder, error) {
 }
 
 /**
- * @brief 指定されたキーの発注残レコードをトランザクション内で削除します。
+ * @brief 指定されたIDの発注残レコードをトランザクション内で削除します。
  * @param tx SQLトランザクションオブジェクト
- * @param backorder 削除対象のキー情報を持つBackorder構造体
+ * @param id 削除対象のID
  * @return error 処理中にエラーが発生した場合
  */
-func DeleteBackorderInTx(tx *sql.Tx, backorder model.Backorder) error {
-	const q = `DELETE FROM backorders 
-				WHERE yj_code = ? AND package_form = ? AND jan_pack_inner_qty = ? AND yj_unit_name = ?`
+func DeleteBackorderInTx(tx *sql.Tx, id int) error {
+	const q = `DELETE FROM backorders WHERE id = ?`
 
-	res, err := tx.Exec(q, backorder.YjCode, backorder.PackageForm, backorder.JanPackInnerQty, backorder.YjUnitName)
+	res, err := tx.Exec(q, id)
 	if err != nil {
-		return fmt.Errorf("failed to delete backorder for yj %s: %w", backorder.YjCode, err)
+		return fmt.Errorf("failed to delete backorder for id %d: %w", id, err)
 	}
 	rowsAffected, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("failed to get rows affected for backorder yj %s: %w", backorder.YjCode, err)
+		return fmt.Errorf("failed to get rows affected for backorder id %d: %w", id, err)
 	}
 	if rowsAffected == 0 {
-		return fmt.Errorf("no backorder found to delete for yj %s with specified package", backorder.YjCode)
+		return fmt.Errorf("no backorder found to delete for id %d", id)
 	}
 	return nil
 }
+
+// ▲▲▲【修正ここまで】▲▲▲

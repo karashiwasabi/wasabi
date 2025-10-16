@@ -1,14 +1,14 @@
-// C:\Dev\WASABI\static\js\backorder.js
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\js\backorder.js
 
 let view, outputContainer;
 
+// ▼▼▼【ここから修正】▼▼▼
 function renderBackorders(data) {
     if (!data || data.length === 0) {
         outputContainer.innerHTML = "<p>現在、発注残はありません。</p>";
         return;
     }
 
-    // ▼▼▼ [修正点] UIに一括操作ボタンとテーブルヘッダーのチェックボックスを追加 ▼▼▼
     let html = `
         <div class="controls-grid" style="margin-bottom: 10px; display: flex; gap: 10px;">
             <button class="btn" id="bulk-delete-backorder-btn" style="background-color: #dc3545; color: white;">選択した項目を一括削除</button>
@@ -20,35 +20,31 @@ function renderBackorders(data) {
                     <th style="width: 5%;"><input type="checkbox" id="select-all-backorders-checkbox"></th>
                     <th style="width: 10%;">発注日</th>
                     <th style="width: 10%;">YJコード</th>
-                    <th style="width: 30%;">製品名</th>
-                    <th style="width: 25%;">包装仕様</th>
-                    <th style="width: 10%;">発注残数量</th>
+                    <th style="width: 25%;">製品名</th>
+                    <th style="width: 20%;">包装仕様</th>
+                    <th style="width: 10%;">発注数量</th>
+                    <th style="width: 10%;">残数量</th>
                     <th style="width: 10%;">個別操作</th>
                 </tr>
             </thead>
             <tbody>
     `;
-    // ▲▲▲ 修正ここまで ▲▲▲
 
     data.forEach(bo => {
         const pkgSpec = bo.formattedPackageSpec;
 
-        // ▼▼▼ [修正点] 行の先頭にチェックボックスを追加し、個別削除ボタンの文言を修正 ▼▼▼
         html += `
-            <tr data-yj-code="${bo.yjCode}"
-                data-package-form="${bo.packageForm}"
-                data-jan-pack-inner-qty="${bo.janPackInnerQty}"
-                data-yj-unit-name="${bo.yjUnitName}">
+            <tr data-id="${bo.id}">
                 <td class="center"><input type="checkbox" class="backorder-select-checkbox"></td>
                 <td>${bo.orderDate}</td>
                 <td>${bo.yjCode}</td>
                 <td class="left">${bo.productName}</td>
                 <td class="left">${pkgSpec}</td>
-                <td class="right">${bo.yjQuantity.toFixed(2)}</td>
+                <td class="right">${bo.orderQuantity.toFixed(2)}</td>
+                <td class="right">${bo.remainingQuantity.toFixed(2)}</td>
                 <td class="center"><button class="btn delete-backorder-btn">削除</button></td>
             </tr>
         `;
-        // ▲▲▲ 修正ここまで ▲▲▲
     });
     html += `</tbody></table>`;
     outputContainer.innerHTML = html;
@@ -66,21 +62,17 @@ async function loadAndRenderBackorders() {
     }
 }
 
-// ▼▼▼ [修正点] イベント処理をイベント委譲方式にまとめ、一括削除ロジックを追加 ▼▼▼
 async function handleBackorderEvents(e) {
     const target = e.target;
 
     // 個別削除ボタン
     if (target.classList.contains('delete-backorder-btn')) {
         const row = target.closest('tr');
-        if (!confirm(`「${row.cells[3].textContent}」の発注残を削除しますか？`)) {
+        if (!confirm(`「${row.cells[3].textContent}」の発注残（発注日: ${row.cells[1].textContent}）を削除しますか？`)) {
             return;
         }
         const payload = {
-            yjCode: row.dataset.yjCode,
-            packageForm: row.dataset.packageForm,
-            janPackInnerQty: parseFloat(row.dataset.janPackInnerQty),
-            yjUnitName: row.dataset.yjUnitName,
+            id: parseInt(row.dataset.id, 10),
         };
         window.showLoading();
         try {
@@ -127,10 +119,7 @@ async function handleBackorderEvents(e) {
         const payload = Array.from(checkedRows).map(cb => {
             const row = cb.closest('tr');
             return {
-                yjCode: row.dataset.yjCode,
-                packageForm: row.dataset.packageForm,
-                janPackInnerQty: parseFloat(row.dataset.janPackInnerQty),
-                yjUnitName: row.dataset.yjUnitName,
+                id: parseInt(row.dataset.id, 10),
             };
         });
 
@@ -161,4 +150,4 @@ export function initBackorderView() {
     view.addEventListener('show', loadAndRenderBackorders);
     outputContainer.addEventListener('click', handleBackorderEvents);
 }
-// ▲▲▲ 修正ここまで ▲▲▲
+// ▲▲▲【修正ここまで】▲▲▲

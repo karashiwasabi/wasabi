@@ -182,6 +182,7 @@ async function processScanQueue() {
     processingIndicator.classList.add('hidden');
 }
 
+// ▼▼▼【ここから修正】▼▼▼
 function renderOrderCandidates(data, container, wholesalers) {
     if (!data || data.length === 0) {
         container.innerHTML = "<p>発注が必要な品目はありませんでした。</p>";
@@ -203,6 +204,22 @@ function renderOrderCandidates(data, container, wholesalers) {
                         不足数: ${formatBalance(yjShortfall)}
                     </span>
                 </div>
+        `;
+
+        // --- 既存の発注残リストを表示 ---
+        const existingBackordersForYj = yjGroup.packageLedgers.flatMap(p => p.existingBackorders || []);
+        if (existingBackordersForYj.length > 0) {
+            html += `<div class="existing-backorders-info">
+                        <strong>＜既存の発注残＞</strong>
+                        <ul>`;
+            existingBackordersForYj.forEach(bo => {
+                const wName = wholesalerMap.get(bo.wholesalerCode) || bo.wholesalerCode || '不明';
+                html += `<li>${bo.orderDate}: ${bo.productName} - 数量: ${bo.remainingQuantity.toFixed(2)} (${wName})</li>`;
+            });
+            html += `</ul></div>`;
+        }
+
+        html += `
                 <table class="data-table" style="margin-bottom: 20px;">
                     <thead>
                         <tr>
@@ -281,6 +298,7 @@ function renderOrderCandidates(data, container, wholesalers) {
     });
     container.innerHTML = html;
 }
+// ▲▲▲【修正ここまで】▲▲▲
 
 async function handleOrderBarcodeScan(e) {
     e.preventDefault();
