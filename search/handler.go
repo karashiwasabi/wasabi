@@ -4,20 +4,13 @@ package search
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"net/http"
-	"wasabi/db"
-	"wasabi/model"
-	"wasabi/units"
+	"wasabi/db" // ▼▼▼【ここに追加】▼▼▼
+	"wasabi/mappers"
 )
 
 /**
  * @brief 製品名・カナ名でJCSHMSマスターを検索するAPIハンドラ (/api/products/search)
- * @param conn データベース接続
- * @return http.HandlerFunc HTTPリクエストを処理するハンドラ関数
- * @details
- * クエリパラメータ "q" で検索キーワードを受け取ります。キーワードは2文字以上必要です。
- * 製品検索モーダルなどで使用されます。
  */
 func SearchJcshmsByNameHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -38,11 +31,6 @@ func SearchJcshmsByNameHandler(conn *sql.DB) http.HandlerFunc {
 
 /**
  * @brief 製品名・カナ名で製品マスター全体を検索するAPIハンドラ (/api/masters/search_all)
- * @param conn データベース接続
- * @return http.HandlerFunc HTTPリクエストを処理するハンドラ関数
- * @details
- * クエリパラメータ "q" で検索キーワードを受け取ります。キーワードは2文字以上必要です。
- * JCSHMS由来でない、手動登録されたマスターも検索対象に含みます。
  */
 func SearchAllMastersHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -63,11 +51,6 @@ func SearchAllMastersHandler(conn *sql.DB) http.HandlerFunc {
 
 /**
  * @brief YJコードに紐づく製品マスターのリストを取得するAPIハンドラ (/api/masters/by_yj_code)
- * @param conn データベース接続
- * @return http.HandlerFunc HTTPリクエストを処理するハンドラ関数
- * @details
- * クエリパラメータ "yj_code" でYJコードを受け取ります。
- * 「棚卸調整」画面などで、同一YJコードの包装バリエーションを全て取得するために使用されます。
  */
 func GetMastersByYjCodeHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -86,7 +69,6 @@ func GetMastersByYjCodeHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// ▼▼▼【ここから修正】▼▼▼
 // GetProductByGS1Handler はGS1コードを元に製品情報を検索し、製品マスター全体を返します。
 func GetProductByGS1Handler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -107,33 +89,11 @@ func GetProductByGS1Handler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// 包装仕様の文字列を生成するために一時的な構造体にデータを詰め替える
-		tempJcshms := model.JCShms{
-			JC037: master.PackageForm,
-			JC039: master.YjUnitName,
-			JC044: master.YjPackUnitQty,
-			JA006: sql.NullFloat64{Float64: master.JanPackInnerQty, Valid: true},
-			JA008: sql.NullFloat64{Float64: master.JanPackUnitQty, Valid: true},
-			JA007: sql.NullString{String: fmt.Sprintf("%d", master.JanUnitCode), Valid: true},
-		}
-		// JAN単位名を解決する
-		var janUnitName string
-		if master.JanUnitCode == 0 {
-			janUnitName = master.YjUnitName
-		} else {
-			janUnitName = units.ResolveName(fmt.Sprintf("%d", master.JanUnitCode))
-		}
-
-		// 画面表示用のViewモデルに変換
-		masterView := model.ProductMasterView{
-			ProductMaster:        *master,
-			FormattedPackageSpec: units.FormatPackageSpec(&tempJcshms),
-			JanUnitName:          janUnitName,
-		}
+		// ▼▼▼【ここから修正】共通変換関数を使用 ▼▼▼
+		masterView := mappers.ToProductMasterView(master)
+		// ▲▲▲【修正ここまで】▲▲▲
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(masterView)
 	}
 }
-
-// ▲▲▲【修正ここまで】▲▲▲

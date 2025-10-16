@@ -4,14 +4,13 @@ package product
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 	"time"
 	"wasabi/config"
 	"wasabi/db"
+	"wasabi/mappers" // mappersパッケージをインポート
 	"wasabi/model"
-	"wasabi/units"
 )
 
 var kanaRowMap = map[string][]string{
@@ -100,19 +99,9 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 					for _, prod := range pkg.Products {
 						if !seenYjCodes[prod.YjCode] {
 							master := prod.ProductMaster
-							tempJcshms := model.JCShms{
-								JC037: master.PackageForm,
-								JC039: master.YjUnitName,
-								JC044: master.YjPackUnitQty,
-								JA006: sql.NullFloat64{Float64: master.JanPackInnerQty, Valid: true},
-								JA008: sql.NullFloat64{Float64: master.JanPackUnitQty, Valid: true},
-								JA007: sql.NullString{String: fmt.Sprintf("%d", master.JanUnitCode), Valid: true},
-							}
-							view := model.ProductMasterView{
-								ProductMaster:        master,
-								FormattedPackageSpec: units.FormatPackageSpec(&tempJcshms),
-								JanUnitName:          units.ResolveName(fmt.Sprintf("%d", master.JanUnitCode)),
-							}
+							// ▼▼▼【ここから修正】共通変換関数を使用 ▼▼▼
+							view := mappers.ToProductMasterView(&master)
+							// ▲▲▲【修正ここまで】▲▲▲
 							results = append(results, view)
 							seenYjCodes[master.YjCode] = true
 						}
@@ -202,16 +191,9 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 					return
 				}
 				if !seenYjCodes[master.YjCode] {
-					tempJcshms := model.JCShms{
-						JC037: master.PackageForm, JC039: master.YjUnitName, JC044: master.YjPackUnitQty,
-						JA006: sql.NullFloat64{Float64: master.JanPackInnerQty, Valid: true},
-						JA008: sql.NullFloat64{Float64: master.JanPackUnitQty, Valid: true},
-						JA007: sql.NullString{String: fmt.Sprintf("%d", master.JanUnitCode), Valid: true},
-					}
-					view := model.ProductMasterView{
-						ProductMaster: *master, FormattedPackageSpec: units.FormatPackageSpec(&tempJcshms),
-						JanUnitName: units.ResolveName(fmt.Sprintf("%d", master.JanUnitCode)),
-					}
+					// ▼▼▼【ここから修正】共通変換関数を使用 ▼▼▼
+					view := mappers.ToProductMasterView(master)
+					// ▲▲▲【修正ここまで】▲▲▲
 					results = append(results, view)
 					seenYjCodes[master.YjCode] = true
 				}
@@ -236,9 +218,6 @@ func GetProductLedgerHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// GetStockLedgerのロジックを参考に、単一製品コードに特化した台帳を生成する
-
-		// 1. 対象製品の全期間の取引を取得
 		txRows, err := conn.Query(`SELECT `+db.TransactionColumns+` FROM transaction_records WHERE jan_code = ? ORDER BY transaction_date, id`, productCode)
 		if err != nil {
 			http.Error(w, "Failed to get transactions for product: "+err.Error(), http.StatusInternalServerError)
@@ -256,13 +235,11 @@ func GetProductLedgerHandler(conn *sql.DB) http.HandlerFunc {
 			allTxsForProduct = append(allTxsForProduct, t)
 		}
 
-		// 2. 表示期間を設定（直近30日間とする）
 		endDate := time.Now()
 		startDate := endDate.AddDate(0, 0, -30)
 		startDateStr := startDate.Format("20060102")
 		endDateStr := endDate.Format("20060102")
 
-		// 3. 期間前在庫（繰越在庫）を計算
 		var startingBalance float64
 		latestInventoryDateBeforePeriod := ""
 		txsBeforePeriod := []*model.TransactionRecord{}
@@ -271,7 +248,7 @@ func GetProductLedgerHandler(conn *sql.DB) http.HandlerFunc {
 		for _, t := range allTxsForProduct {
 			if t.TransactionDate < startDateStr {
 				txsBeforePeriod = append(txsBeforePeriod, t)
-				if t.Flag == 0 { // 棚卸レコード
+				if t.Flag == 0 {
 					inventorySumsByDate[t.TransactionDate] += t.YjQuantity
 					if t.TransactionDate > latestInventoryDateBeforePeriod {
 						latestInventoryDateBeforePeriod = t.TransactionDate
@@ -293,7 +270,6 @@ func GetProductLedgerHandler(conn *sql.DB) http.HandlerFunc {
 			}
 		}
 
-		// 4. 期間内の変動と残高を計算
 		var ledgerTxs []model.LedgerTransaction
 		runningBalance := startingBalance
 
@@ -313,7 +289,6 @@ func GetProductLedgerHandler(conn *sql.DB) http.HandlerFunc {
 					}
 				}
 
-				// 棚卸(flag=0)の場合はその日の棚卸合計値で残高を上書きし、それ以外は変動量を加算する
 				if t.Flag == 0 {
 					if inventorySum, ok := periodInventorySums[t.TransactionDate]; ok {
 						runningBalance = inventorySum
@@ -327,7 +302,6 @@ func GetProductLedgerHandler(conn *sql.DB) http.HandlerFunc {
 			}
 		}
 
-		// 5. 関連する予製引当を取得
 		precomps, err := db.GetPreCompoundingDetailsByProductCodes(conn, []string{productCode})
 		if err != nil {
 			http.Error(w, "Failed to get precomp details: "+err.Error(), http.StatusInternalServerError)
@@ -341,3 +315,34 @@ func GetProductLedgerHandler(conn *sql.DB) http.HandlerFunc {
 		})
 	}
 }
+
+// ▼▼▼【ここから追加】▼▼▼
+// GetMasterByCodeHandler は製品コード（JANコード）を元に単一の製品マスター情報を取得します。
+func GetMasterByCodeHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		productCode := strings.TrimPrefix(r.URL.Path, "/api/master/by_code/")
+		if productCode == "" {
+			http.Error(w, "Product code is required", http.StatusBadRequest)
+			return
+		}
+
+		master, err := db.GetProductMasterByCode(conn, productCode)
+		if err != nil {
+			http.Error(w, "Failed to get product by code: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		if master == nil {
+			http.Error(w, "Product not found", http.StatusNotFound)
+			return
+		}
+
+		// 共通関数を使って画面表示用のViewモデルに変換
+		masterView := mappers.ToProductMasterView(master)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(masterView)
+	}
+}
+
+// ▲▲▲【追加ここまで】▲▲▲

@@ -385,9 +385,14 @@
 </div>
 
 <div id="order-view" class="hidden">
-    <div class="controls-grid" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
-        <div style="width: 100%; display: flex; gap: 10px; align-items: flex-end; border-bottom: 1px solid #ccc; padding-bottom: 10px;">
-            <form id="order-barcode-form" style="flex-grow: 1;">
+    <div class="controls-grid" style="display: flex; flex-direction: column; gap: 15px; margin-bottom: 15px; border: 1px solid #ccc; padding: 10px;">
+        
+        <div style="display: flex; gap: 10px; align-items: flex-end; border-bottom: 1px solid #ccc; padding-bottom: 15px;">
+            <div class="field-group" style="flex-grow: 1;">
+                <label style="font-weight: bold;">個別追加</label>
+                <button id="add-order-item-from-master-btn" class="btn">マスターから検索追加</button>
+            </div>
+            <form id="order-barcode-form" style="flex-grow: 2;">
                 <div class="field-group">
                     <label for="order-barcode-input" style="font-weight: bold;">バーコードで個別追加</label>
                     <input type="text" id="order-barcode-input" inputmode="latin" placeholder="バーコードをスキャンするか、GS1コードを入力してEnter" style="ime-mode: disabled;">
@@ -398,33 +403,38 @@
                 <button id="continuous-order-btn" class="btn btn-violet">連続バーコード発注</button>
             </div>
         </div>
-        <div class="field-group">
-            <label for="order-kanaName">薬品名カナ</label>
-            <input type="text" id="order-kanaName" placeholder="（前方一致）">
-        </div>
-        <div class="field-group">
-            <label for="order-dosageForm">剤形</label>
-            <input type="text" id="order-dosageForm" placeholder="（部分一致）">
-        </div>
-        <div class="field-group">
-            <label for="order-shelf-number">棚番</label>
-            <input type="text" id="order-shelf-number" placeholder="（部分一致）">
-        </div>
-        <div class="field-group">
-            <label for="order-reorder-coefficient">発注点係数</label>
-            <input type="number" id="order-reorder-coefficient" value="1.5" step="0.1" style="width: 80px;">
-        </div>
-        <div class="field-group">
-            <button id="generate-order-candidates-btn" class="btn">不足品リストを作成</button>
-        </div>
-                <div class="field-group">
-            <button id="createOrderCsvBtn" class="btn" style="background-color: #198754; color: white;">発注書作成 (CSVダウンロード)</button>
+
+        <div style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end;">
+            <div class="field-group">
+                <label style="font-weight: bold;">不足品リスト絞り込み</label>
+            </div>
+            <div class="field-group">
+                <label for="order-kanaName">薬品名カナ</label>
+                <input type="text" id="order-kanaName" placeholder="（前方一致）">
+            </div>
+            <div class="field-group">
+                <label for="order-dosageForm">剤形</label>
+                <input type="text" id="order-dosageForm" placeholder="（部分一致）">
+            </div>
+            <div class="field-group">
+                <label for="order-shelf-number">棚番</label>
+                <input type="text" id="order-shelf-number" placeholder="（部分一致）">
+            </div>
+            <div class="field-group">
+                <label for="order-reorder-coefficient">発注点係数</label>
+                <input type="number" id="order-reorder-coefficient" value="1.5" step="0.1" style="width: 80px;">
+            </div>
+            <div class="field-group">
+                <button id="generate-order-candidates-btn" class="btn">不足品リストを作成</button>
+            </div>
+            <div class="field-group" style="margin-left: auto;">
+                <button id="createOrderCsvBtn" class="btn" style="background-color: #198754; color: white;">発注書作成 (CSVダウンロード)</button>
+            </div>
         </div>
     </div>
     <div id="order-candidates-output">
     </div>
 </div>
-
 <div id="backorder-view" class="hidden">
     <div class="filter-container">
         <p class="view-subtitle" style="margin:0;">発注残一覧</p>

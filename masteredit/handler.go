@@ -13,8 +13,6 @@ import (
 	"wasabi/model"
 )
 
-// (GetEditableMastersHandler, UpdateMasterHandler, CreateProvisionalMasterHandler, SetOrderStoppedHandler は変更なし)
-
 func GetEditableMastersHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		masters, err := db.GetAllProductMasters(conn)
@@ -212,14 +210,11 @@ func SetOrderStoppedHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// ▼▼▼【ここから追加】▼▼▼
-// BulkUpdateShelfNumbersRequest は棚番一括更新APIのリクエストボディの構造体です。
 type BulkUpdateShelfNumbersRequest struct {
 	ShelfNumber string   `json:"shelfNumber"`
 	Gs1Codes    []string `json:"gs1Codes"`
 }
 
-// BulkUpdateShelfNumbersHandler は、複数のGS1コードに紐づく品目の棚番を一括で更新します。
 func BulkUpdateShelfNumbersHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req BulkUpdateShelfNumbersRequest
@@ -251,12 +246,10 @@ func BulkUpdateShelfNumbersHandler(conn *sql.DB) http.HandlerFunc {
 		var notFoundCodes []string
 
 		for _, gs1Code := range req.Gs1Codes {
-			// (01)が付いている場合や前後に空白がある場合を考慮
 			cleanGs1 := strings.TrimSpace(strings.TrimPrefix(gs1Code, "(01)"))
 
 			res, err := stmt.Exec(req.ShelfNumber, cleanGs1)
 			if err != nil {
-				// 個々のエラーはログに出力するが、処理は続行する
 				log.Printf("Failed to update shelf number for gs1_code %s: %v", cleanGs1, err)
 				continue
 			}
@@ -289,4 +282,79 @@ func BulkUpdateShelfNumbersHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// ▲▲▲【追加ここまで】▲▲▲
+// ▼▼▼【ここから修正】▼▼▼
+type CreateFromJcshmsRequest struct {
+	ProductCode string `json:"productCode"` // JANコード
+}
+
+// CreateFromJcshmsHandler はJANコードを元にJCSHMSからマスターを作成します。
+func CreateFromJcshmsHandler(conn *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req CreateFromJcshmsRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		if req.ProductCode == "" {
+			http.Error(w, "productCode is required", http.StatusBadRequest)
+			return
+		}
+
+		tx, err := conn.Begin()
+		if err != nil {
+			http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback()
+
+		// JCSHMSマスターを検索
+		jcshmsRecord, err := db.GetJcshmsRecordByJan(tx, req.ProductCode)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				http.Error(w, "JCSHMS master not found for this product code", http.StatusNotFound)
+			} else {
+				http.Error(w, "Failed to search JCSHMS master: "+err.Error(), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		// JCSHMSレコードを製品マスターの入力形式に変換
+		input := mappers.JcshmsToProductMasterInput(jcshmsRecord, req.ProductCode)
+
+		// YJコードが存在しない場合は自動採番
+		if input.YjCode == "" {
+			newYj, err := db.NextSequenceInTx(tx, "MA2Y", "MA2Y", 8)
+			if err != nil {
+				http.Error(w, "Failed to get next sequence for YJ code: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			input.YjCode = newYj
+		}
+
+		// データベースにUPSERT
+		if err := db.UpsertProductMasterInTx(tx, input); err != nil {
+			http.Error(w, "Failed to create master from JCSHMS: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// 登録したマスター情報を取得
+		newMaster, err := db.GetProductMasterByCode(tx, req.ProductCode)
+		if err != nil || newMaster == nil {
+			http.Error(w, "Failed to retrieve newly created master: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		if err := tx.Commit(); err != nil {
+			http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
+			return
+		}
+
+		// 共通関数を使って画面表示用のViewモデルに変換して返す
+		masterView := mappers.ToProductMasterView(newMaster)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(masterView)
+	}
+}
+
+// ▲▲▲【修正ここまで】▲▲▲

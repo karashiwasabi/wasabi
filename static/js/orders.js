@@ -1,8 +1,8 @@
 // C:/Users/wasab/OneDrive/デスクトップ/WASABI/static/js/orders.js
 import { hiraganaToKatakana, getLocalDateString, toHalfWidth } from './utils.js';
 import { wholesalerMap } from './master_data.js';
+import { showModal } from './inout_modal.js';
 
-// 連続スキャン用のグローバル変数
 let continuousOrderModal, continuousOrderBtn, closeContinuousModalBtn;
 let continuousBarcodeForm, continuousBarcodeInput, scannedItemsList, scannedItemsCount, processingIndicator;
 let scanQueue = [];
@@ -15,19 +15,13 @@ function formatBalance(balance) {
     return balance;
 }
 
-/**
- * 発注リストに品目を追加、または既に存在する場合は数量を更新する関数
- * @param {object} productMaster - 追加する製品のマスターデータ
- */
 function addOrUpdateOrderItem(productMaster) {
     const outputContainer = document.getElementById('order-candidates-output');
     const productCode = productMaster.productCode;
     const yjCode = productMaster.yjCode;
 
-    // 1. 既に同じJANコードの行が存在するかチェック
     const existingRow = outputContainer.querySelector(`tr[data-jan-code="${productCode}"]`);
     if (existingRow) {
-        // 存在する場合、数量を1増やす
         const quantityInput = existingRow.querySelector('.order-quantity-input');
         if (quantityInput) {
             quantityInput.value = parseInt(quantityInput.value, 10) + 1;
@@ -36,7 +30,6 @@ function addOrUpdateOrderItem(productMaster) {
         return;
     }
 
-    // 2. 新しい行のHTMLを生成
     let wholesalerOptions = '<option value="">--- 選択 ---</option>';
     wholesalerMap.forEach((name, code) => {
         const isSelected = (code === productMaster.supplierWholesale);
@@ -73,15 +66,12 @@ function addOrUpdateOrderItem(productMaster) {
         </tr>
     `;
 
-    // 3. 対応するYJコードのグループを探す
     let yjGroupWrapper = outputContainer.querySelector(`.order-yj-group-wrapper[data-yj-code="${yjCode}"]`);
 
     if (yjGroupWrapper) {
-        // 4a. 既存のYJグループに新しい行を追加
         const tbody = yjGroupWrapper.querySelector('tbody');
         tbody.insertAdjacentHTML('beforeend', newRowHTML);
     } else {
-        // 4b. YJグループが存在しない場合、新しいグループ全体を作成
         const yjHeaderHTML = `
             <div class="agg-yj-header">
                 <span>YJ: ${yjCode}</span>
@@ -117,9 +107,6 @@ function addOrUpdateOrderItem(productMaster) {
     window.showNotification(`「${productMaster.productName}」を発注リストに追加しました。`, 'success');
 }
 
-/**
- * 連続スキャンモーダル内のスキャン済みリストの表示を更新する関数
- */
 function updateScannedItemsDisplay() {
     const counts = scanQueue.reduce((acc, code) => {
         acc[code] = (acc[code] || 0) + 1;
@@ -135,20 +122,16 @@ function updateScannedItemsDisplay() {
     scannedItemsCount.textContent = scanQueue.length;
 }
 
-/**
- * バックグラウンドでスキャンキューを処理する非同期関数
- */
 async function processScanQueue() {
-    if (isProcessingQueue) return; // 既に処理中なら何もしない
+    if (isProcessingQueue) return;
 
     isProcessingQueue = true;
     processingIndicator.classList.remove('hidden');
 
     while (scanQueue.length > 0) {
-        const barcode = scanQueue.shift(); // キューから1件取り出す
+        const barcode = scanQueue.shift();
 
         try {
-            // GS1コードから製品情報を取得（既存のロジックを再利用）
             let gs1Code = '';
             if (barcode.startsWith('01') && barcode.length > 16) {
                 gs1Code = barcode.substring(2, 16);
@@ -159,7 +142,6 @@ async function processScanQueue() {
             const res = await fetch(`/api/product/by_gs1?gs1_code=${gs1Code}`);
             if (!res.ok) {
                 if (res.status === 404) {
-                    // マスターが存在しない場合は自動で作成
                     const newMaster = await createAndFetchMaster(gs1Code);
                     addOrUpdateOrderItem(newMaster);
                 } else {
@@ -173,7 +155,6 @@ async function processScanQueue() {
             console.error(`バーコード[${barcode}]の処理に失敗:`, err);
             window.showNotification(`バーコード[${barcode}]の処理に失敗しました: ${err.message}`, 'error');
         } finally {
-            // モーダル内の表示を更新して、処理済みの項目をリストから消す
             updateScannedItemsDisplay();
         }
     }
@@ -182,7 +163,6 @@ async function processScanQueue() {
     processingIndicator.classList.add('hidden');
 }
 
-// ▼▼▼【ここから修正】▼▼▼
 function renderOrderCandidates(data, container, wholesalers) {
     if (!data || data.length === 0) {
         container.innerHTML = "<p>発注が必要な品目はありませんでした。</p>";
@@ -206,14 +186,13 @@ function renderOrderCandidates(data, container, wholesalers) {
                 </div>
         `;
 
-        // --- 既存の発注残リストを表示 ---
         const existingBackordersForYj = yjGroup.packageLedgers.flatMap(p => p.existingBackorders || []);
         if (existingBackordersForYj.length > 0) {
             html += `<div class="existing-backorders-info">
                         <strong>＜既存の発注残＞</strong>
                         <ul>`;
             existingBackordersForYj.forEach(bo => {
-                const wName = wholesalerMap.get(bo.wholesalerCode) || bo.wholesalerCode || '不明';
+                const wName = wholesalerMap.get(bo.wholesalerCode.String) || bo.wholesalerCode.String || '不明';
                 html += `<li>${bo.orderDate}: ${bo.productName} - 数量: ${bo.remainingQuantity.toFixed(2)} (${wName})</li>`;
             });
             html += `</ul></div>`;
@@ -298,7 +277,6 @@ function renderOrderCandidates(data, container, wholesalers) {
     });
     container.innerHTML = html;
 }
-// ▲▲▲【修正ここまで】▲▲▲
 
 async function handleOrderBarcodeScan(e) {
     e.preventDefault();
@@ -386,6 +364,7 @@ export function initOrders() {
     const barcodeInput = document.getElementById('order-barcode-input');
     const barcodeForm = document.getElementById('order-barcode-form');
     const shelfNumberInput = document.getElementById('order-shelf-number');
+    const addFromMasterBtn = document.getElementById('add-order-item-from-master-btn');
 
     continuousOrderModal = document.getElementById('continuous-order-modal');
     continuousOrderBtn = document.getElementById('continuous-order-btn');
@@ -395,6 +374,43 @@ export function initOrders() {
     scannedItemsList = document.getElementById('scanned-items-list');
     scannedItemsCount = document.getElementById('scanned-items-count');
     processingIndicator = document.getElementById('processing-indicator');
+
+    // ▼▼▼【ここから修正】▼▼▼
+    addFromMasterBtn.addEventListener('click', () => {
+        showModal(view, async (selectedProduct) => {
+            window.showLoading('品目を準備しています...');
+            try {
+                let masterToAdd;
+                if (selectedProduct.isAdopted) {
+                    // 採用済みの場合は、JANコードで完全なマスター情報を取得しなおす
+                    const res = await fetch(`/api/master/by_code/${selectedProduct.productCode}`);
+                    if (!res.ok) {
+                        const errJson = await res.json().catch(() => ({ message: '採用済みマスター情報の取得に失敗しました。' }));
+                        throw new Error(errJson.message);
+                    }
+                    masterToAdd = await res.json();
+                } else {
+                    // 未採用の場合は、JCSHMSからマスターを新規作成するAPIを叩く
+                    const createRes = await fetch('/api/master/create_from_jcshms', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ productCode: selectedProduct.productCode })
+                    });
+                    if (!createRes.ok) {
+                        const errData = await createRes.json();
+                        throw new Error(errData.message || 'JCSHMSからのマスター作成に失敗しました。');
+                    }
+                    masterToAdd = await createRes.json();
+                }
+                addOrUpdateOrderItem(masterToAdd);
+            } catch (err) {
+                window.showNotification(err.message, 'error');
+            } finally {
+                window.hideLoading();
+            }
+        });
+    });
+    // ▲▲▲【修正ここまで】▲▲▲
 
     continuousOrderBtn.addEventListener('click', () => {
         scanQueue = [];
@@ -489,6 +505,7 @@ export function initOrders() {
                     yjQuantity: quantity * orderMultiplier,
                     productName: row.dataset.productName,
                     yjPackUnitQty: parseFloat(row.dataset.yjPackUnitQty) || 0,
+                    wholesalerCode: { String: wholesalerCode, Valid: wholesalerCode !== "" },
                 });
             }
         });

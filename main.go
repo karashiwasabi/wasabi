@@ -32,7 +32,7 @@ import (
 	"wasabi/product"
 	"wasabi/reprocess"
 	"wasabi/returns"
-	"wasabi/search"
+	"wasabi/search" // ▼▼▼【ここを修正】 "db" という別名を削除 ▼▼▼
 	"wasabi/sequence"
 	"wasabi/settings"
 	"wasabi/stock"
@@ -75,8 +75,11 @@ func main() {
 	mux.HandleFunc("/api/masters/cleanup/candidates", cleanup.GetCandidatesHandler(conn))
 	mux.HandleFunc("/api/masters/cleanup/execute", cleanup.ExecuteCleanupHandler(conn))
 	mux.HandleFunc("/api/clients", client.GetAllClientsHandler(conn))
+	// ▼▼▼【ここから修正】APIハンドラの呼び出し元を "db" から "search" に修正 ▼▼▼
 	mux.HandleFunc("/api/products/search", search.SearchJcshmsByNameHandler(conn))
 	mux.HandleFunc("/api/masters/search_all", search.SearchAllMastersHandler(conn))
+	mux.HandleFunc("/api/product/by_gs1", search.GetProductByGS1Handler(conn))
+	// ▲▲▲【修正ここまで】▲▲▲
 	mux.HandleFunc("/api/masters/by_yj_code", search.GetMastersByYjCodeHandler(conn))
 	mux.HandleFunc("/api/valuation", valuation.GetValuationHandler(conn))
 	mux.HandleFunc("/api/valuation/export", valuation.ExportValuationHandler(conn))
@@ -96,9 +99,9 @@ func main() {
 	mux.HandleFunc("/api/master/update", masteredit.UpdateMasterHandler(conn))
 	mux.HandleFunc("/api/master/create_provisional", masteredit.CreateProvisionalMasterHandler(conn))
 	mux.HandleFunc("/api/master/set_order_stopped", masteredit.SetOrderStoppedHandler(conn))
-	// ▼▼▼【ここに追加】▼▼▼
 	mux.HandleFunc("/api/masters/bulk_update_shelf_numbers", masteredit.BulkUpdateShelfNumbersHandler(conn))
-	// ▲▲▲【追加ここまで】▲▲▲
+	mux.HandleFunc("/api/master/create_from_jcshms", masteredit.CreateFromJcshmsHandler(conn))
+	mux.HandleFunc("/api/master/by_code/", product.GetMasterByCodeHandler(conn))
 	mux.HandleFunc("/api/customers/export", backup.ExportCustomersHandler(conn))
 	mux.HandleFunc("/api/customers/import", backup.ImportCustomersHandler(conn))
 	mux.HandleFunc("/api/products/export", backup.ExportProductsHandler(conn))
@@ -143,14 +146,13 @@ func main() {
 	mux.HandleFunc("/api/edge/download", edge.DownloadHandler(conn))
 	mux.HandleFunc("/api/sequence/next/", sequence.GetNextSequenceHandler(conn))
 	mux.HandleFunc("/api/products/search_filtered", product.SearchProductsHandler(conn))
-	mux.HandleFunc("/api/product/by_gs1", search.GetProductByGS1Handler(conn))
 	mux.HandleFunc("/api/inventory/adjust/data", guidedinventory.GetInventoryDataHandler(conn))
 	mux.HandleFunc("/api/inventory/adjust/save", guidedinventory.SaveInventoryDataHandler(conn))
 	mux.HandleFunc("/api/inventory/by_date", transaction.GetInventoryByDateHandler(conn))
 	mux.HandleFunc("/api/transaction/delete_by_id/", transaction.DeleteTransactionByIDHandler(conn))
 	mux.HandleFunc("/api/config/usage_path", settings.GetUsagePathHandler(conn))
 	mux.HandleFunc("/api/ledger/product/", product.GetProductLedgerHandler(conn))
-	// Serve Frontend
+
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "./static/index.html")
@@ -171,7 +173,7 @@ func openBrowser(url string) {
 		err = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
 	case "darwin":
 		err = exec.Command("open", url).Start()
-	default: // linux, etc.
+	default:
 		err = exec.Command("xdg-open", url).Start()
 	}
 	if err != nil {
