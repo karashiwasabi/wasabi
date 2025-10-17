@@ -8,6 +8,7 @@ let dosageFormFilter, kanaInitialFilter, selectProductBtn, deadStockOnlyFilter, 
 let currentYjCode = null;
 let lastLoadedDataCache = null;
 
+// ▼▼▼【ここから修正】▼▼▼
 function parseGS1_128(code) {
     let rest = code;
     const data = {};
@@ -21,8 +22,15 @@ function parseGS1_128(code) {
     }
 
     if (rest.startsWith('17')) {
-        if (rest.length < 8) return data; 
-        data.expiryDate = rest.substring(2, 8);
+        if (rest.length < 8) return data;
+        const yy_mm_dd = rest.substring(2, 8); // 例: "251000"
+        if (yy_mm_dd.length === 6) {
+            const yy = yy_mm_dd.substring(0, 2); // "25"
+            const mm = yy_mm_dd.substring(2, 4); // "10"
+            data.expiryDate = `20${yy}${mm}`;   // "202510" に変換
+        } else {
+            data.expiryDate = yy_mm_dd; // 予期せぬ形式の場合はそのまま
+        }
         rest = rest.substring(8);
     }
 
@@ -37,6 +45,7 @@ function parseGS1_128(code) {
    
     return data;
 }
+// ▲▲▲【修正ここまで】▲▲▲
 
 async function handleAdjustmentBarcodeScan(e) {
     e.preventDefault();
@@ -433,6 +442,7 @@ async function saveInventoryData() {
             const expiryInput = topRow.querySelector('.expiry-input');
             const lotInput = bottomRow.querySelector('.lot-input');
             if (!quantityInput || !expiryInput || !lotInput) continue;
+        
             const quantity = parseFloat(quantityInput.value) || 0;
             const expiry = expiryInput.value.trim();
             const lot = lotInput.value.trim();

@@ -228,20 +228,28 @@ export function initLogic() {
         document.body.classList.remove('modal-open');
     });
 
+    // ▼▼▼【ここから修正】▼▼▼
     shelfBarcodeForm.addEventListener('submit', (e) => {
         e.preventDefault();
         const barcode = shelfBarcodeInput.value.trim();
         if (barcode) {
-            if (!shelfScanPool.some(item => item.gs1 === barcode)) {
-                shelfScanPool.push({ gs1: barcode, name: null });
+            // GS1-128形式の場合、(01)に続く14桁のGS1コード部分のみを抽出
+            let gs1Code = barcode;
+            if (barcode.startsWith('01') && barcode.length >= 16) {
+                gs1Code = barcode.substring(2, 16);
+            }
+
+            if (!shelfScanPool.some(item => item.gs1 === gs1Code)) {
+                shelfScanPool.push({ gs1: gs1Code, name: null });
                 updateShelfScannedList(shelfScannedList, shelfScannedCount, shelfScanPool);
-                resolveProductNameForShelfScan(barcode);
+                resolveProductNameForShelfScan(gs1Code);
             } else {
                 window.showNotification('このバーコードは既にリストにあります。', 'error');
             }
         }
         shelfBarcodeInput.value = '';
     });
+    // ▲▲▲【修正ここまで】▲▲▲
 
     shelfRegisterBtn.addEventListener('click', handleShelfRegister);
 
