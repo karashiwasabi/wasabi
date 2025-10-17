@@ -70,28 +70,33 @@ type ProductMasterInput struct {
 }
 
 // (以下はWASABIに元々あった型定義)
+// ▼▼▼【ここから修正】▼▼▼
 type JCShms struct {
-	JC009 string
-	JC013 string
-	JC018 string
-	JC020 string
-	JC022 string
-	JC030 string
-	JC037 string
-	JC039 string
-	JC044 float64
-	JC050 float64
-	JC061 int
-	JC062 int
-	JC063 int
-	JC064 int
-	JC065 int
-	JC066 int
-	JC122 string
+	JC009 string  // YJコード
+	JC013 string  // 使用区分
+	JC018 string  // 商品名
+	JC020 string  // 規格容量
+	JC022 string  // 商品名カナ
+	JC030 string  // 販売元名
+	JC037 string  // 包装形態
+	JC039 string  // 包装単位(単位)
+	JC044 float64 // 包装薬価係数 (YJ包装単位薬価数量)
+	JC049 float64 // 現単位薬価
+	JC050 float64 // 現包装薬価
+	JC061 int     // 毒
+	JC062 int     // 劇
+	JC063 int     // 麻
+	JC064 int     // 向
+	JC065 int     // 覚
+	JC066 int     // 覚原
+	JC122 string  // 調剤包装単位コード(GS1)
+	JC124 float64 // 最小薬価換算係数
 	JA006 sql.NullFloat64
 	JA007 sql.NullString
 	JA008 sql.NullFloat64
 }
+
+// ▲▲▲【修正ここまで】▲▲▲
 
 type ValuationPackageDetail struct {
 	ProductCode   string  `json:"productCode"`
@@ -313,7 +318,6 @@ type Wholesaler struct {
 	Name string `json:"name"`
 }
 
-// ▼▼▼【ここから修正】▼▼▼
 type Backorder struct {
 	ID                int            `json:"id"`
 	OrderDate         string         `json:"orderDate"`
@@ -331,8 +335,6 @@ type Backorder struct {
 	// フロントエンドからの発注データ受け取り用フィールド
 	YjQuantity float64 `json:"yjQuantity,omitempty"`
 }
-
-// ▲▲▲【修正ここまで】▲▲▲
 
 type PriceUpdate struct {
 	ProductCode      string  `json:"productCode"`

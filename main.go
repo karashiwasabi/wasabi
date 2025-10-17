@@ -32,7 +32,7 @@ import (
 	"wasabi/product"
 	"wasabi/reprocess"
 	"wasabi/returns"
-	"wasabi/search" // ▼▼▼【ここを修正】 "db" という別名を削除 ▼▼▼
+	"wasabi/search"
 	"wasabi/sequence"
 	"wasabi/settings"
 	"wasabi/stock"
@@ -75,20 +75,21 @@ func main() {
 	mux.HandleFunc("/api/masters/cleanup/candidates", cleanup.GetCandidatesHandler(conn))
 	mux.HandleFunc("/api/masters/cleanup/execute", cleanup.ExecuteCleanupHandler(conn))
 	mux.HandleFunc("/api/clients", client.GetAllClientsHandler(conn))
-	// ▼▼▼【ここから修正】APIハンドラの呼び出し元を "db" から "search" に修正 ▼▼▼
 	mux.HandleFunc("/api/products/search", search.SearchJcshmsByNameHandler(conn))
 	mux.HandleFunc("/api/masters/search_all", search.SearchAllMastersHandler(conn))
 	mux.HandleFunc("/api/product/by_gs1", search.GetProductByGS1Handler(conn))
-	// ▲▲▲【修正ここまで】▲▲▲
 	mux.HandleFunc("/api/masters/by_yj_code", search.GetMastersByYjCodeHandler(conn))
 	mux.HandleFunc("/api/valuation", valuation.GetValuationHandler(conn))
 	mux.HandleFunc("/api/valuation/export", valuation.ExportValuationHandler(conn))
 	mux.HandleFunc("/api/dat/upload", dat.UploadDatHandler(conn))
 	mux.HandleFunc("/api/usage/upload", usage.UploadUsageHandler(conn))
 	mux.HandleFunc("/api/inout/save", inout.SaveInOutHandler(conn))
-	mux.HandleFunc("/api/inventory/upload", inventory.UploadInventoryHandler(conn))
-	mux.HandleFunc("/api/inventory/list", inventory.ListInventoryProductsHandler(conn))
-	mux.HandleFunc("/api/inventory/save_manual", inventory.SaveManualInventoryHandler(conn))
+
+	// 問題のある棚卸機能を無効化
+	// mux.HandleFunc("/api/inventory/upload", inventory.UploadInventoryHandler(conn))
+	// mux.HandleFunc("/api/inventory/list", inventory.ListInventoryProductsHandler(conn))
+	// mux.HandleFunc("/api/inventory/save_manual", inventory.SaveManualInventoryHandler(conn))
+
 	mux.HandleFunc("/api/inventory/migrate", inventory.MigrateInventoryHandler(conn))
 	mux.HandleFunc("/api/aggregation", aggregation.GetAggregationHandler(conn))
 	mux.HandleFunc("/api/units/map", units.GetTaniMapHandler())

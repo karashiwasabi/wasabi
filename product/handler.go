@@ -9,7 +9,7 @@ import (
 	"time"
 	"wasabi/config"
 	"wasabi/db"
-	"wasabi/mappers" // mappersパッケージをインポート
+	"wasabi/mappers"
 	"wasabi/model"
 )
 
@@ -99,9 +99,7 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 					for _, prod := range pkg.Products {
 						if !seenYjCodes[prod.YjCode] {
 							master := prod.ProductMaster
-							// ▼▼▼【ここから修正】共通変換関数を使用 ▼▼▼
 							view := mappers.ToProductMasterView(&master)
-							// ▲▲▲【修正ここまで】▲▲▲
 							results = append(results, view)
 							seenYjCodes[master.YjCode] = true
 						}
@@ -191,9 +189,7 @@ func SearchProductsHandler(conn *sql.DB) http.HandlerFunc {
 					return
 				}
 				if !seenYjCodes[master.YjCode] {
-					// ▼▼▼【ここから修正】共通変換関数を使用 ▼▼▼
 					view := mappers.ToProductMasterView(master)
-					// ▲▲▲【修正ここまで】▲▲▲
 					results = append(results, view)
 					seenYjCodes[master.YjCode] = true
 				}
@@ -210,6 +206,7 @@ type ProductLedgerResponse struct {
 	PrecompDetails     []model.TransactionRecord `json:"precompDetails"`
 }
 
+// ▼▼▼【ここから修正】▼▼▼
 func GetProductLedgerHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		productCode := strings.TrimPrefix(r.URL.Path, "/api/ledger/product/")
@@ -218,90 +215,48 @@ func GetProductLedgerHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		txRows, err := conn.Query(`SELECT `+db.TransactionColumns+` FROM transaction_records WHERE jan_code = ? ORDER BY transaction_date, id`, productCode)
+		// 対象製品のマスター情報を取得してYJコードを得る
+		master, err := db.GetProductMasterByCode(conn, productCode)
 		if err != nil {
-			http.Error(w, "Failed to get transactions for product: "+err.Error(), http.StatusInternalServerError)
+			http.Error(w, "Failed to get master for product: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		defer txRows.Close()
-
-		var allTxsForProduct []*model.TransactionRecord
-		for txRows.Next() {
-			t, err := db.ScanTransactionRecord(txRows)
-			if err != nil {
-				http.Error(w, "Failed to scan transaction record: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
-			allTxsForProduct = append(allTxsForProduct, t)
+		if master == nil {
+			http.Error(w, "Product master not found", http.StatusNotFound)
+			return
 		}
 
+		// 期間設定 (過去30日)
 		endDate := time.Now()
 		startDate := endDate.AddDate(0, 0, -30)
-		startDateStr := startDate.Format("20060102")
-		endDateStr := endDate.Format("20060102")
 
-		var startingBalance float64
-		latestInventoryDateBeforePeriod := ""
-		txsBeforePeriod := []*model.TransactionRecord{}
-		inventorySumsByDate := make(map[string]float64)
-
-		for _, t := range allTxsForProduct {
-			if t.TransactionDate < startDateStr {
-				txsBeforePeriod = append(txsBeforePeriod, t)
-				if t.Flag == 0 {
-					inventorySumsByDate[t.TransactionDate] += t.YjQuantity
-					if t.TransactionDate > latestInventoryDateBeforePeriod {
-						latestInventoryDateBeforePeriod = t.TransactionDate
-					}
-				}
-			}
+		// 修正済みのGetStockLedgerを呼び出す
+		filters := model.AggregationFilters{
+			StartDate: startDate.Format("20060102"),
+			EndDate:   endDate.Format("20060102"),
+			YjCode:    master.YjCode,
+		}
+		ledgerGroups, err := db.GetStockLedger(conn, filters)
+		if err != nil {
+			http.Error(w, "Failed to get stock ledger for product: "+err.Error(), http.StatusInternalServerError)
+			return
 		}
 
-		if latestInventoryDateBeforePeriod != "" {
-			startingBalance = inventorySumsByDate[latestInventoryDateBeforePeriod]
-			for _, t := range txsBeforePeriod {
-				if t.TransactionDate > latestInventoryDateBeforePeriod {
-					startingBalance += t.SignedYjQty()
-				}
-			}
-		} else {
-			for _, t := range txsBeforePeriod {
-				startingBalance += t.SignedYjQty()
-			}
-		}
-
+		// 結果から該当製品の取引履歴を抽出する
 		var ledgerTxs []model.LedgerTransaction
-		runningBalance := startingBalance
-
-		periodInventorySums := make(map[string]float64)
-		for _, t := range allTxsForProduct {
-			if t.TransactionDate >= startDateStr && t.TransactionDate <= endDateStr && t.Flag == 0 {
-				periodInventorySums[t.TransactionDate] += t.YjQuantity
-			}
-		}
-
-		lastProcessedDate := ""
-		for _, t := range allTxsForProduct {
-			if t.TransactionDate >= startDateStr && t.TransactionDate <= endDateStr {
-				if t.TransactionDate != lastProcessedDate && lastProcessedDate != "" {
-					if inventorySum, ok := periodInventorySums[lastProcessedDate]; ok {
-						runningBalance = inventorySum
+		for _, group := range ledgerGroups {
+			for _, pkg := range group.PackageLedgers {
+				for _, m := range pkg.Masters {
+					if m.ProductCode == productCode {
+						ledgerTxs = pkg.Transactions
+						goto Found
 					}
 				}
-
-				if t.Flag == 0 {
-					if inventorySum, ok := periodInventorySums[t.TransactionDate]; ok {
-						runningBalance = inventorySum
-					}
-				} else {
-					runningBalance += t.SignedYjQty()
-				}
-
-				ledgerTxs = append(ledgerTxs, model.LedgerTransaction{TransactionRecord: *t, RunningBalance: runningBalance})
-				lastProcessedDate = t.TransactionDate
 			}
 		}
+	Found:
 
+		// 予製情報を取得
 		precomps, err := db.GetPreCompoundingDetailsByProductCodes(conn, []string{productCode})
 		if err != nil {
 			http.Error(w, "Failed to get precomp details: "+err.Error(), http.StatusInternalServerError)
@@ -316,8 +271,8 @@ func GetProductLedgerHandler(conn *sql.DB) http.HandlerFunc {
 	}
 }
 
-// ▼▼▼【ここから追加】▼▼▼
-// GetMasterByCodeHandler は製品コード（JANコード）を元に単一の製品マスター情報を取得します。
+// ▲▲▲【修正ここまで】▲▲▲
+
 func GetMasterByCodeHandler(conn *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		productCode := strings.TrimPrefix(r.URL.Path, "/api/master/by_code/")
@@ -337,12 +292,9 @@ func GetMasterByCodeHandler(conn *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// 共通関数を使って画面表示用のViewモデルに変換
 		masterView := mappers.ToProductMasterView(master)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(masterView)
 	}
 }
-
-// ▲▲▲【追加ここまで】▲▲▲

@@ -4,7 +4,10 @@ import { loadMasterData } from './master_data.js';
 import { initInOut, resetInOutView } from './inout.js';
 import { initDatUpload } from './dat.js';
 import { initUsageUpload } from './usage.js';
-import { initInventoryUpload } from './inventory.js';
+// ▼▼▼【ここから修正】▼▼▼
+// import { initInventoryUpload } from './inventory.js';
+// import { initManualInventory } from './manual_inventory.js';
+// ▲▲▲【修正ここまで】▲▲▲
 import { initInventoryAdjustment } from './inventory_adjustment.js';
 import { initInventoryHistory } from './inventory_history.js';
 import { initLedgerView } from './ledger.js';
@@ -16,7 +19,6 @@ import { initModal } from './inout_modal.js';
 import { initDeadStock } from './deadstock.js';
 import { initSettings, onViewShow as onSettingsViewShow } from './settings.js';
 import { initMedrec } from './medrec.js';
-import { initManualInventory } from './manual_inventory.js';
 import { initPrecomp, resetPrecompView } from './precomp.js';
 import { initOrders } from './orders.js';
 import { initJcshmsUpdate } from './jcshms_update.js';
@@ -52,19 +54,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     const inOutBtn = document.getElementById('inOutViewBtn');
     const datBtn = document.getElementById('datBtn');
     const usageBtn = document.getElementById('usageBtn');
-    const inventoryBtn = document.getElementById('inventoryBtn');
+    // ▼▼▼【ここから修正】▼▼▼
+    // const inventoryBtn = document.getElementById('inventoryBtn');
+    // const manualInventoryBtn = document.getElementById('manualInventoryBtn');
+    // ▲▲▲【修正ここまで】▲▲▲
     const inventoryAdjustmentBtn = document.getElementById('inventoryAdjustmentBtn');
     const inventoryHistoryBtn = document.getElementById('inventoryHistoryBtn');
     const ledgerBtn = document.getElementById('ledgerBtn');
-    const manualInventoryBtn = document.getElementById('manualInventoryBtn');
     const aggregationBtn = document.getElementById('aggregationBtn');
     const masterEditBtn = document.getElementById('masterEditViewBtn');
     const settingsBtn = document.getElementById('settingsBtn');
     const datFileInput = document.getElementById('datFileInput');
     const usageFileInput = document.getElementById('usageFileInput');
-    const inventoryFileInput = document.getElementById('inventoryFileInput');
+    // ▼▼▼【ここから修正】▼▼▼
+    // const inventoryFileInput = document.getElementById('inventoryFileInput');
+    // ▲▲▲【修正ここまで】▲▲▲
     const uploadOutputContainer = document.getElementById('upload-output-container');
-    const inventoryOutputContainer = document.getElementById('inventory-output-container');
+    // ▼▼▼【ここから修正】▼▼▼
+    // const inventoryOutputContainer = document.getElementById('inventory-output-container');
+    // ▲▲▲【修正ここまで】▲▲▲
     const aggregationOutputContainer = document.getElementById('aggregation-output-container');
     const deadStockBtn = document.getElementById('deadStockBtn');
     const deadstockOutputContainer = document.getElementById('deadstock-output-container');
@@ -82,7 +90,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     initInOut();
     initDatUpload();
     initUsageUpload();
-    initInventoryUpload();
+    // ▼▼▼【ここから修正】▼▼▼
+    // initInventoryUpload();
+    // initManualInventory();
+    // ▲▲▲【修正ここまで】▲▲▲
     initInventoryAdjustment();
     initInventoryHistory();
     initLedgerView();
@@ -94,7 +105,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     initDeadStock();
     initSettings();
     initMedrec();
-    initManualInventory();
     initPrecomp();
     initOrders();
     initJcshmsUpdate();
@@ -159,15 +169,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-    inventoryBtn.addEventListener('click', () => {
-        showView('inventory-view');
-        if (inventoryOutputContainer) inventoryOutputContainer.innerHTML = '';
-        inventoryFileInput.click();
-    });
-    manualInventoryBtn.addEventListener('click', () => {
-        showView('manual-inventory-view');
-        document.getElementById('manual-inventory-view').dispatchEvent(new Event('show'));
-    });
+    // ▼▼▼【ここから修正】▼▼▼
+    // inventoryBtn.addEventListener('click', () => {
+    //     showView('inventory-view');
+    //     if (inventoryOutputContainer) inventoryOutputContainer.innerHTML = '';
+    //     inventoryFileInput.click();
+    // });
+    // manualInventoryBtn.addEventListener('click', () => {
+    //     showView('manual-inventory-view');
+    //     document.getElementById('manual-inventory-view').dispatchEvent(new Event('show'));
+    // });
+    // ▲▲▲【修正ここまで】▲▲▲
     inventoryHistoryBtn.addEventListener('click', () => {
         showView('inventory-history-view');
     });

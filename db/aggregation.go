@@ -1,5 +1,4 @@
-// C:\Users\wasab\OneDrive\デスクトップ\WASABI\WASABI\db\aggregation.go
-
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\db\aggregation.go
 package db
 
 import (
@@ -11,6 +10,8 @@ import (
 	"wasabi/units"
 )
 
+// ▼▼▼【ここから修正】▼▼▼
+
 /**
  * @brief 在庫元帳レポートを生成します。
  * @param conn データベース接続
@@ -20,52 +21,46 @@ import (
  * @details
  * この関数はアプリケーションの在庫計算における中心的なロジックです。
  * 以下のステップで在庫元帳を生成します。
- * 1. フィルタ条件に合致する製品マスターを取得します。
- * 2. 取得した製品マスターに関連する全期間の取引履歴を一括で取得します。
- * 3. 製品をYJコードごと、さらに包装ごとにグループ化します。
- * 4. 各包装グループについて以下の計算を行います。
- * a. 期間開始前の取引履歴を遡り、最後の棚卸を基点とした「期間前在庫（繰越在庫）」を算出します。
- * b. 期間内の取引を時系列で処理し、「期間内変動」「最大使用量」「期間終了在庫」を算出します。
- * c. 発注残と予製引当数を考慮し、「有効在庫」と「発注点」を計算します。
- * 5. 全ての包装グループのデータをYJコードごとに集計し、最終的なレポートを生成します。
- * 6. 結果を剤型とカナ名でソートして返却します。
+ * 1. フィルタ条件に合致する製品マスターから、対象となるYJコード群を特定します。
+ * 2. 各YJコードについて、product_master と transaction_records の両方から関連する全ての製品コード(JAN)を収集します。
+ * 3. 収集した製品コードに関連する全期間の取引履歴を一括で取得します。
+ * 4. YJコードグループ全体の取引履歴から「最新の棚卸日」を特定します。
+ * 5. 各包装グループについて、グループ全体の「最新棚卸日」を基点とした「期間前在庫（繰越在庫）」を算出します。
+ * - 最新棚卸日に記録がない包装は、その時点での在庫を0とみなします。
+ * 6. 期間内の取引を時系列で処理し、「期間内変動」「最大使用量」「期間終了在庫」を算出します。
+ * 7. 発注残と予製引当数を考慮し、「有効在庫」と「発注点」を計算します。
+ * 8. 全ての包装グループのデータをYJコードごとに集計し、最終的なレポートを生成します。
+ * 9. 結果を剤型とカナ名でソートして返却します。
  */
 func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.StockLedgerYJGroup, error) {
 	backordersMap, err := GetAllBackordersMap(conn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get backorders for aggregation: %w", err)
 	}
-
 	precompTotals, err := GetPreCompoundingTotals(conn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pre-compounding totals for aggregation: %w", err)
 	}
 
-	// ステップ1: フィルターに合致する製品マスターを取得
-	// 検索対象を製品マスター(product_master)に厳密に限定
+	// ステップ1: フィルターに合致する製品マスターを取得し、対象YJコードを特定
 	masterQuery := `SELECT ` + SelectColumns + ` FROM product_master p WHERE 1=1 `
 	var masterArgs []interface{}
-
 	if filters.YjCode != "" {
 		masterQuery += " AND p.yj_code = ? "
 		masterArgs = append(masterArgs, filters.YjCode)
 	}
-
 	if filters.KanaName != "" {
 		masterQuery += " AND (p.kana_name LIKE ? OR p.product_name LIKE ?) "
 		masterArgs = append(masterArgs, "%"+filters.KanaName+"%", "%"+filters.KanaName+"%")
 	}
-
 	if filters.DosageForm != "" && filters.DosageForm != "all" {
 		masterQuery += " AND p.usage_classification = ? "
 		masterArgs = append(masterArgs, filters.DosageForm)
 	}
-
 	if filters.ShelfNumber != "" {
 		masterQuery += " AND p.shelf_number LIKE ? "
 		masterArgs = append(masterArgs, "%"+filters.ShelfNumber+"%")
 	}
-
 	if len(filters.DrugTypes) > 0 && filters.DrugTypes[0] != "" {
 		var conditions []string
 		flagMap := map[string]string{
@@ -95,7 +90,7 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 	defer masterRows.Close()
 
 	mastersByYjCode := make(map[string][]*model.ProductMaster)
-	var productCodes []string
+	yjCodeMap := make(map[string]bool)
 	for masterRows.Next() {
 		m, err := ScanProductMaster(masterRows)
 		if err != nil {
@@ -103,57 +98,44 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		}
 		if m.YjCode != "" {
 			mastersByYjCode[m.YjCode] = append(mastersByYjCode[m.YjCode], m)
+			yjCodeMap[m.YjCode] = true
 		}
-		productCodes = append(productCodes, m.ProductCode)
 	}
-	if len(productCodes) == 0 {
+	if len(yjCodeMap) == 0 {
 		return []model.StockLedgerYJGroup{}, nil
 	}
 
-	// ステップ2: 関連する全期間のトランザクションを取得 (バッチ処理)
-	transactionsByProductCode := make(map[string][]*model.TransactionRecord)
-	const batchSize = 500
-
-	for i := 0; i < len(productCodes); i += batchSize {
-		end := i + batchSize
-		if end > len(productCodes) {
-			end = len(productCodes)
-		}
-		batch := productCodes[i:end]
-
-		if len(batch) > 0 {
-			txArgs := make([]interface{}, len(batch))
-			for j, pc := range batch {
-				txArgs[j] = pc
-			}
-
-			txQuery := `SELECT ` + TransactionColumns + ` FROM transaction_records WHERE jan_code IN (?` + strings.Repeat(",?", len(batch)-1) + `) ORDER BY transaction_date, id`
-			txRows, err := conn.Query(txQuery, txArgs...)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get transactions batch: %w", err)
-			}
-
-			for txRows.Next() {
-				t, err := ScanTransactionRecord(txRows)
-				if err != nil {
-					txRows.Close()
-					return nil, err
-				}
-				transactionsByProductCode[t.JanCode] = append(transactionsByProductCode[t.JanCode], t)
-			}
-			txRows.Close()
-		}
+	var yjCodes []string
+	for yj := range yjCodeMap {
+		yjCodes = append(yjCodes, yj)
 	}
 
-	// ステップ3: YJコードごとに集計処理
+	// ステップ2 & 3: 関連する全ての製品コードと取引履歴を取得
+	allProductCodes, err := getAllProductCodesForYjCodes(conn, yjCodes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get all product codes for yj codes: %w", err)
+	}
+
+	allMasters, err := getMastersByProductCodes(conn, allProductCodes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get all masters for product codes: %w", err)
+	}
+
+	transactionsByProductCode, err := getTransactionsByProductCodes(conn, allProductCodes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get all transactions for product codes: %w", err)
+	}
+
+	// ステップ4: YJコードごとに集計処理
 	var result []model.StockLedgerYJGroup
-	for yjCode, mastersInYjGroup := range mastersByYjCode {
+	for _, yjCode := range yjCodes {
+		mastersInYjGroup := mastersByYjCode[yjCode]
 		if len(mastersInYjGroup) == 0 {
 			continue
 		}
 
-		var representativeProductName string
-		var representativeYjUnitName string
+		// YJグループの代表情報を設定
+		var representativeProductName, representativeYjUnitName string
 		if len(mastersInYjGroup) > 0 {
 			representativeProductName = mastersInYjGroup[0].ProductName
 			representativeYjUnitName = mastersInYjGroup[0].YjUnitName
@@ -165,13 +147,35 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 				}
 			}
 		}
-
 		yjGroup := model.StockLedgerYJGroup{
 			YjCode:      yjCode,
 			ProductName: representativeProductName,
 			YjUnitName:  units.ResolveName(representativeYjUnitName),
 		}
 
+		// YJグループに属する全ての取引を集める
+		var allTxsForYjGroup []*model.TransactionRecord
+		for _, m := range allMasters {
+			if m.YjCode == yjCode {
+				allTxsForYjGroup = append(allTxsForYjGroup, transactionsByProductCode[m.ProductCode]...)
+			}
+		}
+		sort.Slice(allTxsForYjGroup, func(i, j int) bool {
+			if allTxsForYjGroup[i].TransactionDate != allTxsForYjGroup[j].TransactionDate {
+				return allTxsForYjGroup[i].TransactionDate < allTxsForYjGroup[j].TransactionDate
+			}
+			return allTxsForYjGroup[i].ID < allTxsForYjGroup[j].ID
+		})
+
+		// YJグループ全体の最新棚卸日を特定
+		latestInventoryDateForGroup := ""
+		for _, t := range allTxsForYjGroup {
+			if t.Flag == 0 && t.TransactionDate > latestInventoryDateForGroup {
+				latestInventoryDateForGroup = t.TransactionDate
+			}
+		}
+
+		// 包装キーでマスターをグループ化
 		mastersByPackageKey := make(map[string][]*model.ProductMaster)
 		for _, m := range mastersInYjGroup {
 			key := fmt.Sprintf("%s|%s|%g|%s", m.YjCode, m.PackageForm, m.JanPackInnerQty, m.YjUnitName)
@@ -180,85 +184,91 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 
 		var allPackageLedgers []model.StockLedgerPackageGroup
 		for key, mastersInPackageGroup := range mastersByPackageKey {
-			var allTxsForPackage []*model.TransactionRecord
-			for _, m := range mastersInPackageGroup {
-				allTxsForPackage = append(allTxsForPackage, transactionsByProductCode[m.ProductCode]...)
-			}
-			sort.Slice(allTxsForPackage, func(i, j int) bool {
-				if allTxsForPackage[i].TransactionDate != allTxsForPackage[j].TransactionDate {
-					return allTxsForPackage[i].TransactionDate < allTxsForPackage[j].TransactionDate
-				}
-				return allTxsForPackage[i].ID < allTxsForPackage[j].ID
-			})
-
 			var startingBalance float64
-			latestInventoryDateBeforePeriod := ""
-			txsBeforePeriod := []*model.TransactionRecord{}
-			inventorySumsByDate := make(map[string]float64)
-
-			for _, t := range allTxsForPackage {
-				if t.TransactionDate < filters.StartDate {
-					txsBeforePeriod = append(txsBeforePeriod, t)
-					if t.Flag == 0 {
-						inventorySumsByDate[t.TransactionDate] += t.YjQuantity
-						if t.TransactionDate > latestInventoryDateBeforePeriod {
-							latestInventoryDateBeforePeriod = t.TransactionDate
+			// ステップ5: 期間前在庫を計算
+			if latestInventoryDateForGroup != "" {
+				baseStockOnDate := 0.0
+				for _, m := range mastersInPackageGroup {
+					for _, t := range transactionsByProductCode[m.ProductCode] {
+						if t.Flag == 0 && t.TransactionDate == latestInventoryDateForGroup {
+							baseStockOnDate += t.YjQuantity
 						}
 					}
 				}
-			}
 
-			if latestInventoryDateBeforePeriod != "" {
-				startingBalance = inventorySumsByDate[latestInventoryDateBeforePeriod]
-				for _, t := range txsBeforePeriod {
-					if t.TransactionDate > latestInventoryDateBeforePeriod {
-						startingBalance += t.SignedYjQty()
+				netChangeAfterInv := 0.0
+				for _, m := range mastersInPackageGroup {
+					for _, t := range transactionsByProductCode[m.ProductCode] {
+						if t.TransactionDate > latestInventoryDateForGroup && t.TransactionDate < filters.StartDate {
+							netChangeAfterInv += t.SignedYjQty()
+						}
 					}
 				}
+				startingBalance = baseStockOnDate + netChangeAfterInv
 			} else {
-				for _, t := range txsBeforePeriod {
-					startingBalance += t.SignedYjQty()
+				// 棚卸履歴が全くない場合
+				netChangeBeforePeriod := 0.0
+				for _, m := range mastersInPackageGroup {
+					for _, t := range transactionsByProductCode[m.ProductCode] {
+						if t.TransactionDate < filters.StartDate {
+							netChangeBeforePeriod += t.SignedYjQty()
+						}
+					}
 				}
+				startingBalance = netChangeBeforePeriod
 			}
 
+			// ステップ6: 期間内変動を計算
 			var transactionsInPeriod []model.LedgerTransaction
 			var netChange, maxUsage float64
 			runningBalance := startingBalance
 
+			var txsForPackageInPeriod []*model.TransactionRecord
+			for _, m := range mastersInPackageGroup {
+				for _, t := range transactionsByProductCode[m.ProductCode] {
+					if t.TransactionDate >= filters.StartDate && t.TransactionDate <= filters.EndDate {
+						txsForPackageInPeriod = append(txsForPackageInPeriod, t)
+					}
+				}
+			}
+			sort.Slice(txsForPackageInPeriod, func(i, j int) bool {
+				if txsForPackageInPeriod[i].TransactionDate != txsForPackageInPeriod[j].TransactionDate {
+					return txsForPackageInPeriod[i].TransactionDate < txsForPackageInPeriod[j].TransactionDate
+				}
+				return txsForPackageInPeriod[i].ID < txsForPackageInPeriod[j].ID
+			})
+
 			periodInventorySums := make(map[string]float64)
-			for _, t := range allTxsForPackage {
-				if t.TransactionDate >= filters.StartDate && t.TransactionDate <= filters.EndDate && t.Flag == 0 {
+			for _, t := range txsForPackageInPeriod {
+				if t.Flag == 0 {
 					periodInventorySums[t.TransactionDate] += t.YjQuantity
 				}
 			}
 
 			lastProcessedDate := ""
-			for _, t := range allTxsForPackage {
-				if t.TransactionDate >= filters.StartDate && t.TransactionDate <= filters.EndDate {
-					if t.TransactionDate != lastProcessedDate && lastProcessedDate != "" {
-						if inventorySum, ok := periodInventorySums[lastProcessedDate]; ok {
-							runningBalance = inventorySum
-						}
+			for _, t := range txsForPackageInPeriod {
+				if t.TransactionDate != lastProcessedDate && lastProcessedDate != "" {
+					if inventorySum, ok := periodInventorySums[lastProcessedDate]; ok {
+						runningBalance = inventorySum
 					}
-
-					if t.Flag == 0 {
-						if inventorySum, ok := periodInventorySums[t.TransactionDate]; ok {
-							runningBalance = inventorySum
-						}
-					} else {
-						runningBalance += t.SignedYjQty()
-					}
-
-					transactionsInPeriod = append(transactionsInPeriod, model.LedgerTransaction{TransactionRecord: *t, RunningBalance: runningBalance})
-
-					netChange += t.SignedYjQty()
-					if t.Flag == 3 && t.YjQuantity > maxUsage {
-						maxUsage = t.YjQuantity
-					}
-					lastProcessedDate = t.TransactionDate
 				}
+
+				if t.Flag == 0 {
+					if inventorySum, ok := periodInventorySums[t.TransactionDate]; ok {
+						runningBalance = inventorySum
+					}
+				} else {
+					runningBalance += t.SignedYjQty()
+				}
+				transactionsInPeriod = append(transactionsInPeriod, model.LedgerTransaction{TransactionRecord: *t, RunningBalance: runningBalance})
+				netChange += t.SignedYjQty()
+				if t.Flag == 3 && t.YjQuantity > maxUsage {
+					maxUsage = t.YjQuantity
+				}
+				lastProcessedDate = t.TransactionDate
 			}
 
+			// ステップ7: 発注点などを計算
 			backorderQty := backordersMap[key]
 			effectiveEndingBalance := runningBalance + backorderQty
 
@@ -274,10 +284,17 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 
 			var precompTotalForPackage float64
 			for _, master := range mastersInPackageGroup {
+				// 現在マスターにない製品の在庫は0として扱う
+				if _, ok := allMasters[master.ProductCode]; !ok {
+					pkg.EndingBalance = 0
+					pkg.EffectiveEndingBalance = 0
+					pkg.StartingBalance = 0
+				}
 				if total, ok := precompTotals[master.ProductCode]; ok {
 					precompTotalForPackage += total
 				}
 			}
+
 			pkg.BaseReorderPoint = maxUsage * filters.Coefficient
 			pkg.PrecompoundedTotal = precompTotalForPackage
 			pkg.ReorderPoint = pkg.BaseReorderPoint + pkg.PrecompoundedTotal
@@ -288,6 +305,7 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 			allPackageLedgers = append(allPackageLedgers, pkg)
 		}
 
+		// ステップ8: YJグループ全体で集計
 		if len(allPackageLedgers) > 0 {
 			var yjTotalEnding, yjTotalNetChange, yjTotalReorderPoint, yjTotalBaseReorderPoint, yjTotalPrecompounded float64
 			var yjTotalStarting float64
@@ -319,11 +337,9 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		}
 	}
 
+	// ステップ9: ソートと最終フィルタリング
 	sort.Slice(result, func(i, j int) bool {
-		prio := map[string]int{
-			"1": 1, "内": 1, "2": 2, "外": 2, "3": 3, "注": 3,
-			"4": 4, "歯": 4, "5": 5, "機": 5, "6": 6, "他": 6,
-		}
+		prio := map[string]int{"1": 1, "内": 1, "2": 2, "外": 2, "3": 3, "注": 3, "4": 4, "歯": 4, "5": 5, "機": 5, "6": 6, "他": 6}
 		masterI := mastersByYjCode[result[i].YjCode][0]
 		masterJ := mastersByYjCode[result[j].YjCode][0]
 		prioI, okI := prio[strings.TrimSpace(masterI.UsageClassification)]
@@ -361,5 +377,128 @@ func GetStockLedger(conn *sql.DB, filters model.AggregationFilters) ([]model.Sto
 		}
 		return filteredResult, nil
 	}
+
 	return result, nil
 }
+
+// ヘルパー関数群
+func getAllProductCodesForYjCodes(conn *sql.DB, yjCodes []string) ([]string, error) {
+	if len(yjCodes) == 0 {
+		return []string{}, nil
+	}
+
+	placeholders := strings.Repeat("?,", len(yjCodes)-1) + "?"
+	query := fmt.Sprintf(`
+		SELECT DISTINCT product_code FROM product_master WHERE yj_code IN (%s)
+		UNION
+		SELECT DISTINCT jan_code FROM transaction_records WHERE yj_code IN (%s)
+	`, placeholders, placeholders)
+
+	args := make([]interface{}, len(yjCodes)*2)
+	for i, code := range yjCodes {
+		args[i] = code
+		args[i+len(yjCodes)] = code
+	}
+
+	rows, err := conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var codes []string
+	for rows.Next() {
+		var code string
+		if err := rows.Scan(&code); err != nil {
+			return nil, err
+		}
+		if code != "" {
+			codes = append(codes, code)
+		}
+	}
+	return codes, nil
+}
+
+func getMastersByProductCodes(conn *sql.DB, productCodes []string) (map[string]*model.ProductMaster, error) {
+	mastersMap := make(map[string]*model.ProductMaster)
+	if len(productCodes) == 0 {
+		return mastersMap, nil
+	}
+
+	const batchSize = 500
+	for i := 0; i < len(productCodes); i += batchSize {
+		end := i + batchSize
+		if end > len(productCodes) {
+			end = len(productCodes)
+		}
+		batch := productCodes[i:end]
+
+		if len(batch) > 0 {
+			placeholders := strings.Repeat("?,", len(batch)-1) + "?"
+			query := fmt.Sprintf("SELECT "+SelectColumns+" FROM product_master WHERE product_code IN (%s)", placeholders)
+			args := make([]interface{}, len(batch))
+			for j, pc := range batch {
+				args[j] = pc
+			}
+
+			rows, err := conn.Query(query, args...)
+			if err != nil {
+				return nil, err
+			}
+
+			for rows.Next() {
+				m, err := ScanProductMaster(rows)
+				if err != nil {
+					rows.Close()
+					return nil, err
+				}
+				mastersMap[m.ProductCode] = m
+			}
+			rows.Close()
+		}
+	}
+	return mastersMap, nil
+}
+
+func getTransactionsByProductCodes(conn *sql.DB, productCodes []string) (map[string][]*model.TransactionRecord, error) {
+	transactionsMap := make(map[string][]*model.TransactionRecord)
+	if len(productCodes) == 0 {
+		return transactionsMap, nil
+	}
+
+	const batchSize = 500
+	for i := 0; i < len(productCodes); i += batchSize {
+		end := i + batchSize
+		if end > len(productCodes) {
+			end = len(productCodes)
+		}
+		batch := productCodes[i:end]
+
+		if len(batch) > 0 {
+			placeholders := strings.Repeat("?,", len(batch)-1) + "?"
+			query := fmt.Sprintf("SELECT "+TransactionColumns+" FROM transaction_records WHERE jan_code IN (%s) ORDER BY transaction_date, id", placeholders)
+			args := make([]interface{}, len(batch))
+			for j, pc := range batch {
+				args[j] = pc
+			}
+
+			rows, err := conn.Query(query, args...)
+			if err != nil {
+				return nil, err
+			}
+
+			for rows.Next() {
+				t, err := ScanTransactionRecord(rows)
+				if err != nil {
+					rows.Close()
+					return nil, err
+				}
+				transactionsMap[t.JanCode] = append(transactionsMap[t.JanCode], t)
+			}
+			rows.Close()
+		}
+	}
+	return transactionsMap, nil
+}
+
+// ▲▲▲【修正ここまで】▲▲▲

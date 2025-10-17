@@ -10,6 +10,7 @@ import (
 	"wasabi/model"
 )
 
+// ▼▼▼【ここを修正】▼▼▼
 const TransactionColumns = `
     id, transaction_date, client_code, receipt_number, line_number, flag,
     jan_code, yj_code, product_name, kana_name, usage_classification, package_form, package_spec, maker_name,
@@ -18,6 +19,8 @@ const TransactionColumns = `
     subtotal, tax_amount, tax_rate, expiry_date, lot_number, flag_poison,
     flag_deleterious, flag_narcotic, flag_psychotropic, flag_stimulant,
     flag_stimulant_raw, process_flag_ma`
+
+// ▲▲▲【修正ここまで】▲▲▲
 
 func ScanTransactionRecord(row interface{ Scan(...interface{}) error }) (*model.TransactionRecord, error) {
 	var r model.TransactionRecord
@@ -316,7 +319,7 @@ func DeleteZeroFillInventoryTransactions(tx *sql.Tx, date string, janCodes []str
 
 func GetLastInventoryDateMap(conn *sql.DB) (map[string]string, error) {
 	rows, err := conn.Query(`
-        SELECT jan_code, MAX(transaction_date) 
+         SELECT jan_code, MAX(transaction_date) 
         FROM transaction_records 
         WHERE flag = 0 AND jan_code != ''
         GROUP BY jan_code
@@ -405,4 +408,34 @@ func GetLastInventoryDate(tx *sql.Tx, janCode string) string {
 		return lastDate.String
 	}
 	return ""
+}
+
+func GetAllTransactionsByProductCodes(conn *sql.DB, productCodes []string) ([]*model.TransactionRecord, error) {
+	if len(productCodes) == 0 {
+		return []*model.TransactionRecord{}, nil
+	}
+
+	placeholders := strings.Repeat("?,", len(productCodes)-1) + "?"
+	query := fmt.Sprintf(`SELECT `+TransactionColumns+` FROM transaction_records WHERE jan_code IN (%s) ORDER BY transaction_date, id`, placeholders)
+
+	args := make([]interface{}, len(productCodes))
+	for i, code := range productCodes {
+		args[i] = code
+	}
+
+	rows, err := conn.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get transactions by product codes: %w", err)
+	}
+	defer rows.Close()
+
+	var records []*model.TransactionRecord
+	for rows.Next() {
+		r, err := ScanTransactionRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, r)
+	}
+	return records, nil
 }

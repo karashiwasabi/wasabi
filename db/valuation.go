@@ -96,7 +96,7 @@ func GetInventoryValuation(conn *sql.DB, filters model.ValuationFilters) ([]Valu
 		spec := units.FormatPackageSpec(&tempJcshms)
 
 		// ▼▼▼【ここから修正】▼▼▼
-		// repMaster.NhiPrice は既にYJ単位あたりの単価として保存されているため、そのまま使用します。
+		// repMaster.NhiPrice は既に正しいYJ単位あたりの単価として保存されているため、そのまま使用します。
 		unitNhiPrice := repMaster.NhiPrice
 
 		// totalNhiValue(薬価金額)は「総在庫数(YJ単位) × YJ単価」で計算します。

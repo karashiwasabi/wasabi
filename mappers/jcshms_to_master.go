@@ -10,11 +10,14 @@ import (
 // JcshmsToProductMasterInput はJCSHMSのレコードをProductMasterInputに変換します。
 func JcshmsToProductMasterInput(jcshms *model.JCShms, janCode string) model.ProductMasterInput {
 	// ▼▼▼【ここから修正】薬価を単価に変換するロジックを修正 ▼▼▼
+	// 「現単位薬価(JC049) * 最小薬価換算係数(JC124)」でYJ単位あたりの単価を算出
 	var unitNhiPrice float64
-	// JC044(YJ包装単位薬価数量)が0より大きい場合のみ計算
-	if jcshms.JC044 > 0 {
-		// JC050(包装薬価) / JC044(YJ包装単位薬価数量) でYJ単位あたりの単価を算出
-		unitNhiPrice = jcshms.JC050 / jcshms.JC044
+	// 係数が0より大きい場合は乗算する
+	if jcshms.JC124 > 0 {
+		unitNhiPrice = jcshms.JC049 * jcshms.JC124
+	} else {
+		// 係数が0または未設定の場合は、現単位薬価をそのまま使用する
+		unitNhiPrice = jcshms.JC049
 	}
 	// ▲▲▲【修正ここまで】▲▲▲
 

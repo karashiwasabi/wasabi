@@ -3660,6 +3660,7 @@ import (
 	"wasabi/model"
 )
 
+// ▼▼▼【ここを修正】▼▼▼
 const TransactionColumns = `
     id, transaction_date, client_code, receipt_number, line_number, flag,
     jan_code, yj_code, product_name, kana_name, usage_classification, package_form, package_spec, maker_name,
@@ -3668,6 +3669,8 @@ const TransactionColumns = `
     subtotal, tax_amount, tax_rate, expiry_date, lot_number, flag_poison,
     flag_deleterious, flag_narcotic, flag_psychotropic, flag_stimulant,
     flag_stimulant_raw, process_flag_ma`
+
+// ▲▲▲【修正ここまで】▲▲▲
 
 func ScanTransactionRecord(row interface{ Scan(...interface{}) error }) (*model.TransactionRecord, error) {
 	var r model.TransactionRecord
@@ -3966,7 +3969,7 @@ func DeleteZeroFillInventoryTransactions(tx *sql.Tx, date string, janCodes []str
 
 func GetLastInventoryDateMap(conn *sql.DB) (map[string]string, error) {
 	rows, err := conn.Query(`
-        SELECT jan_code, MAX(transaction_date) 
+         SELECT jan_code, MAX(transaction_date) 
         FROM transaction_records 
         WHERE flag = 0 AND jan_code != ''
         GROUP BY jan_code
@@ -4055,6 +4058,36 @@ func GetLastInventoryDate(tx *sql.Tx, janCode string) string {
 		return lastDate.String
 	}
 	return ""
+}
+
+func GetAllTransactionsByProductCodes(conn *sql.DB, productCodes []string) ([]*model.TransactionRecord, error) {
+	if len(productCodes) == 0 {
+		return []*model.TransactionRecord{}, nil
+	}
+
+	placeholders := strings.Repeat("?,", len(productCodes)-1) + "?"
+	query := fmt.Sprintf(`SELECT `+TransactionColumns+` FROM transaction_records WHERE jan_code IN (%s) ORDER BY transaction_date, id`, placeholders)
+
+	args := make([]interface{}, len(productCodes))
+	for i, code := range productCodes {
+		args[i] = code
+	}
+
+	rows, err := conn.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get transactions by product codes: %w", err)
+	}
+	defer rows.Close()
+
+	var records []*model.TransactionRecord
+	for rows.Next() {
+		r, err := ScanTransactionRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, r)
+	}
+	return records, nil
 }
 
 
@@ -11892,6 +11925,7 @@ let dosageFormFilter, kanaInitialFilter, selectProductBtn, deadStockOnlyFilter, 
 let currentYjCode = null;
 let lastLoadedDataCache = null;
 
+// ▼▼▼【ここから修正】▼▼▼
 function parseGS1_128(code) {
     let rest = code;
     const data = {};
@@ -11905,8 +11939,15 @@ function parseGS1_128(code) {
     }
 
     if (rest.startsWith('17')) {
-        if (rest.length < 8) return data; 
-        data.expiryDate = rest.substring(2, 8);
+        if (rest.length < 8) return data;
+        const yy_mm_dd = rest.substring(2, 8); // 例: "251000"
+        if (yy_mm_dd.length === 6) {
+            const yy = yy_mm_dd.substring(0, 2); // "25"
+            const mm = yy_mm_dd.substring(2, 4); // "10"
+            data.expiryDate = `20${yy}${mm}`;   // "202510" に変換
+        } else {
+            data.expiryDate = yy_mm_dd; // 予期せぬ形式の場合はそのまま
+        }
         rest = rest.substring(8);
     }
 
@@ -11921,6 +11962,7 @@ function parseGS1_128(code) {
    
     return data;
 }
+// ▲▲▲【修正ここまで】▲▲▲
 
 async function handleAdjustmentBarcodeScan(e) {
     e.preventDefault();
@@ -12317,6 +12359,7 @@ async function saveInventoryData() {
             const expiryInput = topRow.querySelector('.expiry-input');
             const lotInput = bottomRow.querySelector('.lot-input');
             if (!quantityInput || !expiryInput || !lotInput) continue;
+        
             const quantity = parseFloat(quantityInput.value) || 0;
             const expiry = expiryInput.value.trim();
             const lot = lotInput.value.trim();
@@ -13796,20 +13839,28 @@ export function initLogic() {
         document.body.classList.remove('modal-open');
     });
 
+    // ▼▼▼【ここから修正】▼▼▼
     shelfBarcodeForm.addEventListener('submit', (e) => {
         e.preventDefault();
         const barcode = shelfBarcodeInput.value.trim();
         if (barcode) {
-            if (!shelfScanPool.some(item => item.gs1 === barcode)) {
-                shelfScanPool.push({ gs1: barcode, name: null });
+            // GS1-128形式の場合、(01)に続く14桁のGS1コード部分のみを抽出
+            let gs1Code = barcode;
+            if (barcode.startsWith('01') && barcode.length >= 16) {
+                gs1Code = barcode.substring(2, 16);
+            }
+
+            if (!shelfScanPool.some(item => item.gs1 === gs1Code)) {
+                shelfScanPool.push({ gs1: gs1Code, name: null });
                 updateShelfScannedList(shelfScannedList, shelfScannedCount, shelfScanPool);
-                resolveProductNameForShelfScan(barcode);
+                resolveProductNameForShelfScan(gs1Code);
             } else {
                 window.showNotification('このバーコードは既にリストにあります。', 'error');
             }
         }
         shelfBarcodeInput.value = '';
     });
+    // ▲▲▲【修正ここまで】▲▲▲
 
     shelfRegisterBtn.addEventListener('click', handleShelfRegister);
 
