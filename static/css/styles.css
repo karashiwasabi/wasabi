@@ -1,5 +1,9 @@
 /* C:\Users\wasab\OneDrive\デスクトップ\WASABI\static\css\styles.css (全体) */
 * { margin: 0; padding: 0; box-sizing: border-box; }
+  @page {
+    size: A4 portrait; /* */
+    margin: 1cm; /* */
+  }
 body { font-family: sans-serif;
 padding: 10px; background-color: #f4f4f4; }
 .hidden { display: none !important; }
@@ -21,288 +25,390 @@ header {
     position: sticky;
     top: 0;
     z-index: 100;
-}
+} /* */
 
 .btn {
-    font-size: inherit;      /* 文字サイズを通常のHTMLと同じにする */
-    padding: 2px 5px;        /* 余白を上下に2px、左右に5pxに設定 */
-    min-width: 75px;         /* ボタンの最小幅を75pxに設定 */
-    text-align: center;      /* 文字を中央揃えにする */
-    vertical-align: middle;  /* 隣接する要素との垂直方向の位置を調整 */
-    background-color: #e9ecef;
-    border: 1px solid #ced4da;
-    border-radius: 4px;
-    cursor: pointer;
+    font-size: inherit;      /* 文字サイズを通常のHTMLと同じにする */ /* */
+    padding: 2px 5px;        /* 余白を上下に2px、左右に5pxに設定 */ /* */
+    min-width: 75px;         /* ボタンの最小幅を75pxに設定 */ /* */
+    text-align: center;      /* 文字を中央揃えにする */ /* */
+    vertical-align: middle;  /* 隣接する要素との垂直方向の位置を調整 */ /* */
+    background-color: #e9ecef; /* */
+    border: 1px solid #ced4da; /* */
+    border-radius: 4px; /* */
+    cursor: pointer; /* */
 }
 
-.btn:hover { background-color: #dee2e6; }
+.btn:hover { background-color: #dee2e6; } /* */
 
 .filter-container, .inout-header-controls {
-    gap: 5px 10px;
-    padding: 5px;
-    margin-bottom: 5px;
+    gap: 5px 10px; /* */
+    padding: 5px; /* */
+    margin-bottom: 5px; /* */
 }
 
-table { border-collapse: collapse; width: 100%; table-layout: fixed; }
-th, td { border: 1px solid black; padding: 4px; vertical-align: middle; }
-th { text-align: center; background-color: #f0f0f0; }
+table { border-collapse: collapse; width: 100%; table-layout: fixed; } /* */
+th, td { border: 1px solid black; padding: 4px; vertical-align: middle; } /* */
+th { text-align: center; background-color: #f0f0f0; } /* */
 .yj-jan-code { overflow: hidden;
-white-space: nowrap; text-overflow: ellipsis; }
-.left { text-align: left; }
-.right { text-align: right; }
+white-space: nowrap; text-overflow: ellipsis; } /* */
+.left { text-align: left; } /* */
+.right { text-align: right; } /* */
 
 .data-table td input[type="text"],
 .data-table td input[type="number"] {
-    width: 100%;
-    border: 1px solid #999;
-    padding: 4px;
-    font-size: 11pt;
+    width: 100%; /* */
+    border: 1px solid #999; /* */
+    padding: 4px; /* */
+    font-size: 11pt; /* */
 }
 
 #loading-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.5); display: flex;
-flex-direction: column; justify-content: center; align-items: center; z-index: 9999; color: white; }
-.spinner { border: 5px solid #f3f3f3; border-top: 5px solid #0d6efd; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin-bottom: 10px; }
-@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+flex-direction: column; justify-content: center; align-items: center; z-index: 9999; color: white; } /* */
+.spinner { border: 5px solid #f3f3f3; border-top: 5px solid #0d6efd; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin-bottom: 10px; } /* */
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } } /* */
 
 .notification-box { position: fixed;
-top: -100px; left: 50%; transform: translateX(-50%); padding: 15px 25px; border-radius: 5px; color: white; font-size: 16px; z-index: 10000; transition: top 0.5s; }
-.notification-box.show { top: 20px; }
-.notification-box.success { background-color: #198754; }
-.notification-box.error { background-color: #ff0019; }
+top: -100px; left: 50%; transform: translateX(-50%); padding: 15px 25px; border-radius: 5px; color: white; font-size: 16px; z-index: 10000; transition: top 0.5s; } /* */
+.notification-box.show { top: 20px; } /* */
+.notification-box.success { background-color: #198754; } /* */
+.notification-box.error { background-color: #ff0019; } /* */
 
-.modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.6); display: flex; align-items: center; justify-content: center; z-index: 2000; }
-.modal-content { background-color: #ffffff; border: 1px solid #000000; padding: 20px; width: 80%; max-width: 900px; max-height: 90vh; display: flex; flex-direction: column; }
-.modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
-.close-button { font-size: 24px; border: none; background: none; cursor: pointer; }
+.modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.6); display: flex; align-items: center; justify-content: center; z-index: 2000; } /* */
+.modal-content { background-color: #ffffff; border: 1px solid #000000; padding: 20px; width: 80%; max-width: 900px; max-height: 90vh; display: flex; flex-direction: column; } /* */
+.modal-header { display: flex;
+justify-content: space-between; align-items: center; margin-bottom: 15px; } /* */
+.close-button { font-size: 24px; border: none; background: none; cursor: pointer; } /* */
 
 .modal-body {
-    flex-grow: 1; /* 親要素(.modal-content)の高さに合わせて伸縮 */
-    overflow-y: auto; /* 内容がはみ出したら縦スクロールバーを表示 */
+    flex-grow: 1; /* 親要素(.modal-content)の高さに合わせて伸縮 */ /* */
+    overflow-y: auto; /* 内容がはみ出したら縦スクロールバーを表示 */ /* */
 }
 
 .view-title, .view-subtitle, .modal-title {
-    font-size: 1em;
-    font-weight: bold;
-    margin: 0;
-    padding: 5px 0;
+    font-size: 1em; /* */
+    font-weight: bold; /* */
+    margin: 0; /* */
+    padding: 5px 0; /* */
 }
 
-.agg-yj-header { background-color: #343a40; color: white; padding: 4px; margin-top: 10px; font-weight: bold; font-size: 1em; display: flex; align-items: center; }
-.agg-pkg-header { background-color: #e9ecef; padding: 4px; border: 1px solid #ccc; border-bottom: none; font-weight: bold; font-size: 1em; }
-.agg-yj-header .product-name { margin-left: 20px; flex-grow: 1; }
+.agg-yj-header { background-color: #343a40; color: white; padding: 4px; margin-top: 10px; font-weight: bold; font-size: 1em; display: flex; align-items: center; } /* */
+.agg-pkg-header { background-color: #e9ecef; padding: 4px; border: 1px solid #ccc; border-bottom: none; font-weight: bold; font-size: 1em; } /* */
+.agg-yj-header .product-name { margin-left: 20px; flex-grow: 1; } /* */
 
 .tx-return, .tx-return td {
-    color: #dc3545; /* 赤色 */
-    font-weight: bold;
+    color: #dc3545; /* 赤色 */ /* */
+    font-weight: bold; /* */
 }
 
 .tx-inventory, .tx-inventory td {
-    color: #0d6efd; /* 青色 */
-    font-weight: bold;
+    color: #0d6efd; /* 青色 */ /* */
+    font-weight: bold; /* */
 }
 
 .provisional-order-item {
-    background-color: #e9ecef !important; /* 薄いグレー */
-    color: #6c757d; /* やや薄い文字色 */
+    background-color: #e9ecef !important; /* 薄いグレー */ /* */
+    color: #6c757d; /* やや薄い文字色 */ /* */
 }
 
 /* ▼▼▼【ここから修正】▼▼▼ */
 .provisional-order-item td:not(.order-actions-cell) {
-    text-decoration: line-through; /* 取り消し線 */
+    text-decoration: line-through; /* 取り消し線 */ /* */
 }
-/* ▲▲▲【修正ここまで】▲▲▲ */
+/* ▲▲▲【修正ここまで】▲▲▲ */ /* */
 
 .provisional-order-item select:disabled,
 .provisional-order-item input:disabled {
-    background-color: #f8f9fa; /* 背景を少し明るく */
-    cursor: not-allowed; /* 操作不可カーソル */
+    background-color: #f8f9fa; /* 背景を少し明るく */ /* */
+    cursor: not-allowed; /* 操作不可カーソル */ /* */
 }
 
 /* ▼▼▼【ここに追加】▼▼▼ */
 .adopted-item td {
-    color: red;
-    font-weight: bold;
+    color: red; /* */
+    font-weight: bold; /* */
 }
-/* ▲▲▲【追加ここまで】▲▲▲ */
+/* ▲▲▲【追加ここまで】▲▲▲ */ /* */
 
 /* ▼▼▼ [ここから追加] ボタンのビビッドカラー設定 ▼▼▼ */
-.btn-red { background-color: #ff0000; color: white; border-color: #d90000; }
-.btn-red:hover { background-color: #d90000; }
+.btn-red { background-color: #ff0000; color: white; border-color: #d90000; } /* */
+.btn-red:hover { background-color: #d90000; } /* */
 
-.btn-rose { background-color: #ff007f; color: white; border-color: #d9006c; }
-.btn-rose:hover { background-color: #d9006c; }
+.btn-rose { background-color: #ff007f; color: white; border-color: #d9006c; } /* */
+.btn-rose:hover { background-color: #d9006c; } /* */
 
-.btn-magenta { background-color: #ff00ff; color: white; border-color: #d900d9; }
-.btn-magenta:hover { background-color: #d900d9; }
+.btn-magenta { background-color: #ff00ff; color: white; border-color: #d900d9; } /* */
+.btn-magenta:hover { background-color: #d900d9; } /* */
 
-.btn-violet { background-color: #7f00ff; color: white; border-color: #6c00d9; }
-.btn-violet:hover { background-color: #6c00d9; }
+.btn-violet { background-color: #7f00ff; color: white; border-color: #6c00d9; } /* */
+.btn-violet:hover { background-color: #6c00d9; } /* */
 
-.btn-blue { background-color: #0000ff; color: white; border-color: #0000d9; }
-.btn-blue:hover { background-color: #0000d9; }
+.btn-blue { background-color: #0000ff; color: white; border-color: #0000d9; } /* */
+.btn-blue:hover { background-color: #0000d9; } /* */
 
-.btn-azure { background-color: #007fff; color: white; border-color: #006cd9; }
-.btn-azure:hover { background-color: #006cd9; }
+.btn-azure { background-color: #007fff; color: white;
+border-color: #006cd9; } /* */
+.btn-azure:hover { background-color: #006cd9; } /* */
 
-.btn-cyan { background-color: #00ffff; color: black; border-color: #00d9d9; }
-.btn-cyan:hover { background-color: #00d9d9; }
+.btn-cyan { background-color: #00ffff; color: black; border-color: #00d9d9; } /* */
+.btn-cyan:hover { background-color: #00d9d9; } /* */
 
-.btn-spring-green { background-color: #00ff7f; color: black; border-color: #00d96c; }
-.btn-spring-green:hover { background-color: #00d96c; }
+.btn-spring-green { background-color: #00ff7f; color: black; border-color: #00d96c; } /* */
+.btn-spring-green:hover { background-color: #00d96c; } /* */
 
-.btn-green { background-color: #00ff00; color: black; border-color: #00d900; }
-.btn-green:hover { background-color: #00d900; }
+.btn-green { background-color: #00ff00; color: black; border-color: #00d900; } /* */
+.btn-green:hover { background-color: #00d900; } /* */
 
-.btn-chartreuse { background-color: #7fff00; color: black; border-color: #6cd900; }
-.btn-chartreuse:hover { background-color: #6cd900; }
+.btn-chartreuse { background-color: #7fff00; color: black; border-color: #6cd900; } /* */
+.btn-chartreuse:hover { background-color: #6cd900; } /* */
 
-.btn-yellow { background-color: #ffff00; color: black; border-color: #d9d900; }
-.btn-yellow:hover { background-color: #d9d900; }
+.btn-yellow { background-color: #ffff00; color: black; border-color: #d9d900; } /* */
+.btn-yellow:hover { background-color: #d9d900; } /* */
 
-.btn-orange { background-color: #ff7f00; color: white; border-color: #d96c00; }
-.btn-orange:hover { background-color: #d96c00; }
-/* ▲▲▲ [追加ここまで] ▲▲▲ */
+.btn-orange { background-color: #ff7f00; color: white; border-color: #d96c00; } /* */
+.btn-orange:hover { background-color: #d96c00; } /* */
+/* ▲▲▲ [追加ここまで] ▲▲▲ */ /* */
 
 #scanned-items-list {
-    background-color: #f8f9fa;
+    background-color: #f8f9fa; /* */
 }
 .scanned-item {
-    display: flex;
-    justify-content: space-between;
-    padding: 4px 8px;
-    border-bottom: 1px solid #e9ecef;
+    display: flex; /* */
+    justify-content: space-between; /* */
+    padding: 4px 8px; /* */
+    border-bottom: 1px solid #e9ecef; /* */
 }
 .scanned-item:last-child {
-    border-bottom: none;
+    border-bottom: none; /* */
 }
 .scanned-item-name {
-    flex-grow: 1;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    margin-right: 10px;
+    flex-grow: 1; /* */
+    white-space: nowrap; /* */
+    overflow: hidden; /* */
+    text-overflow: ellipsis; /* */
+    margin-right: 10px; /* */
 }
 .scanned-item-count {
-    font-weight: bold;
+    font-weight: bold; /* */
 }
 .processing-indicator:not(.hidden) {
-    display: block !important;
+    display: block !important; /* */
 }
 
 /* ▼▼▼【ここに追加】▼▼▼ */
 .scanned-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center; /* 垂直方向中央揃え */
-    padding: 4px 8px;
-    border-bottom: 1px solid #e9ecef;
-    font-size: 12px; /* 少し小さく */
+    display: flex; /* */
+    justify-content: space-between; /* */
+    align-items: center; /* 垂直方向中央揃え */ /* */
+    padding: 4px 8px; /* */
+    border-bottom: 1px solid #e9ecef; /* */
+    font-size: 12px; /* 少し小さく */ /* */
 }
 .scanned-item:last-child {
-    border-bottom: none;
+    border-bottom: none; /* */
 }
 .scanned-item-name {
-    flex-grow: 1;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    margin-right: 10px;
+    flex-grow: 1; /* */
+    white-space: nowrap; /* */
+    overflow: hidden; /* */
+    text-overflow: ellipsis; /* */
+    margin-right: 10px; /* */
 }
 .scanned-item-count {
-    font-weight: bold;
-    min-width: 30px; /* カウント部分の幅を確保 */
-    text-align: right;
+    font-weight: bold; /* */
+    min-width: 30px; /* カウント部分の幅を確保 */ /* */
+    text-align: right; /* */
 }
 #shelf-scanned-list .scanned-item-name {
-    color: #555;
+    color: #555; /* */
 }
 #shelf-scanned-list .scanned-item-name.resolved {
-    color: #000; /* 品目名が解決したら黒文字に */
-    font-weight: normal;
+    color: #000; /* 品目名が解決したら黒文字に */ /* */
+    font-weight: normal; /* */
 }
-/* ▲▲▲【追加ここまで】▲▲▲ */
+/* ▲▲▲【追加ここまで】▲▲▲ */ /* */
 
 /* ▼▼▼ [修正点] 印刷用CSSを汎用的な仕組みに全面的に書き換え ▼▼▼ */
 @media print {
   /* ページ設定: A4横向き */
   @page {
-    size: A4 landscape;
-    margin: 1cm;
+    size: A4 landscape; /* */
+    margin: 1cm; /* */
   }
 
   /* 基本設定 */
   body {
-    padding: 0 !important;
-    background-color: #fff !important;
+    padding: 0 !important; /* */
+    background-color: #fff !important; /* */
   }
-  
+
   /* 印刷時に不要な要素（ヘッダーや操作ボタンなど）を非表示 */
   #search-modal, #loading-overlay, #notification-box,
   header, .btn, input, select, .filter-container, .inout-header-controls, .inout-details-header,
   .controls-grid, .settings-form-container, .entry-controls, .product-header .btn, .buttons-group,
   #valuation-print-controls {
-    display: none !important;
+    display: none !important; /* */
   }
-  
+
   /* mainタグ配下のビューを一旦すべて非表示に */
   main > div {
-    display: none !important;
+    display: none !important; /* */
   }
 
   /* 「print-this-view」クラスが付いたビューのみを表示させる */
   main > div.print-this-view {
-    display: block !important;
-    border: none !important;
-    padding: 0 !important;
+    display: block !important; /* */
+    border: none !important; /* */
+    padding: 0 !important; /* */
   }
 
   /* ▼▼▼ [修正点] 印刷対象エリア内の不要な要素を非表示にする設定を追加 ▼▼▼ */
   .print-this-view #deadstock-output-container {
-    display: none !important;
+    display: none !important; /* */
   }
-  
+
   .print-this-view #deadstock-print-area {
-    display: block !important;
+    display: block !important; /* */
   }
-  /* ▲▲▲ 修正ここまで ▲▲▲ */
+  /* ▲▲▲ 修正ここまで ▲▲▲ */ /* */
 
 
   /* 印刷するビュー内の要素のスタイルを統一 */
   .print-this-view, .print-this-view * {
-    font-size: 9pt !important;
-    color: black !important;
-    background-color: transparent !important;
+    font-size: 9pt !important; /* */
+    color: black !important; /* */
+    background-color: transparent !important; /* */
   }
-  
+
+
   /* テーブルのスタイル */
-  .print-this-view table, 
-  .print-this-view th, 
+  .print-this-view table,
+  .print-this-view th,
   .print-this-view td {
-    border: 1px solid #000;
-    padding: 2px 4px !important;
+    border: 1px solid #000; /* */
+    padding: 2px 4px !important; /* */
   }
-  
+
   .print-this-view table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 5px !important;
+    width: 100%; /* */
+    border-collapse: collapse; /* */
+    margin-top: 5px !important; /* */
   }
-  
+
   /* 印刷時の改ページ制御 */
   .print-this-view .agg-yj-header:first-child {
-      page-break-before: auto;
+      page-break-before: auto; /* */
   }
   .print-this-view thead {
-    display: table-header-group;
+    display: table-header-group; /* */
   }
   .print-this-view tr {
-    page-break-inside: avoid;
+    page-break-inside: avoid; /* */
   }
     /* ▼▼▼【ここに追加】▼▼▼ */
   /* デッドストックリストの印刷時に、期間前取引履歴を非表示にする */
   .print-this-view .recent-history-container {
-    display: none !important;
+    display: none !important; /* */
   }
-  /* ▲▲▲【追加ここまで】▲▲▲ */
+
+  /* ▲▲▲【追加ここまで】▲▲▲ */ /* */
 }
-/* ▲▲▲ 修正ここまで ▲▲▲ */
+/* ▲▲▲ 修正ここまで ▲▲▲ */ /* */
+
+/* ----- 在庫評価画面用のスタイル ----- */
+#valuation-output-container {
+  /* 幅いっぱいに広がるように */
+  width: 100%;
+  /* 等幅フォントを指定 */
+  font-family: monospace;
+  /* 文字サイズ: ここは調整が必要です (後述) */
+  font-size: 10pt; /* まずは固定値で試す */
+  /* white-space: normal; はデフォルトなので通常不要 */
+  background-color: #f0f8ff; /* 薄い青背景 */
+  border: 2px solid #333;   /* 枠線 */
+  box-sizing: border-box;
+  padding: 10px; /* 内側の余白 */
+  margin-top: 10px;
+}
+
+/* 各行のスタイル調整 (必要に応じて) */
+#valuation-output-container .item-row {
+  /* 行間の調整などが必要な場合はここに追加 */
+  line-height: 1.4; /* 例: 少し行間を広げる */
+}
+
+/* グループヘッダーのスタイル調整 (必要に応じて) */
+#valuation-output-container .agg-yj-header {
+  font-family: sans-serif; /* ヘッダーは通常のフォントに戻すなど */
+  font-size: 10pt; /* 文字サイズを合わせる */
+  background-color: #e0e0e0; /* 背景色を変更 */
+  border: 1px solid #333;
+  margin-top: 5px;
+}
+/* ----- 在庫評価画面用のスタイル ここまで ----- */
+
+/* ▼▼▼【ここから追加】 予製中断時のスタイル ▼▼▼ */
+#precomp-details-container.is-inactive {
+    opacity: 0.5; /* 半透明にする */ /* */
+    pointer-events: none; /* クリックなどの操作を無効化 */ /* */
+}
+#precomp-details-container.is-inactive::before {
+    content: "中断中"; /* */
+    position: absolute; /* */
+    top: 50%; /* */
+    left: 50%; /* */
+    transform: translate(-50%, -50%) rotate(-15deg); /* */
+    font-size: 3em; /* */
+    color: rgba(220, 53, 69, 0.5); /* 赤系の半透明 */ /* */
+    font-weight: bold; /* */
+    z-index: 10; /* */
+    pointer-events: none; /* 文字自体はクリックできないように */ /* */
+}
+/* ▲▲▲【追加ここまで】▲▲▲ */ /* */
+
+/* ----- ▼▼▼【ここから追加】 集計画面用のスタイル ▼▼▼ ----- */
+#aggregation-output-container {
+  /* 幅いっぱいに広がるように */
+  width: 100%;
+  /* 等幅フォントを指定 */
+  font-family: monospace;
+  /* 文字サイズ: ここは調整が必要です */
+  font-size: 10pt; /* まずは固定値で試す */
+  background-color: #f0f8ff; /* 薄い青背景 */
+  border: 2px solid #333;   /* 枠線 */
+  box-sizing: border-box;
+  padding: 10px; /* 内側の余白 */
+  margin-top: 10px;
+}
+
+/* 集計画面内のテーブル文字サイズも合わせる */
+#aggregation-output-container table,
+#aggregation-output-container table th,
+#aggregation-output-container table td {
+  font-family: monospace;
+  font-size: 10pt; /* コンテナと同じサイズに */
+}
+
+/* 集計画面のヘッダーは通常のフォントに戻す場合 */
+#aggregation-output-container .agg-yj-header,
+#aggregation-output-container .agg-pkg-header {
+  font-family: sans-serif;
+  font-size: 10pt; /* 文字サイズは合わせる */
+}
+
+/* 必要に応じて集計テーブルの列幅を調整 */
+#aggregation-output-container .data-table .col-1 { width: 3%; }
+#aggregation-output-container .data-table .col-2 { width: 8%; }
+#aggregation-output-container .data-table .col-3 { width: 8%; } /* YJ/JAN */
+#aggregation-output-container .data-table .col-4 { width: 15%; } /* 製品名/包装 */
+#aggregation-output-container .data-table .col-5 { width: 15%; } /* 製品名/メーカー */
+#aggregation-output-container .data-table .col-6 { width: 5%; } /* 個数/剤型 */
+#aggregation-output-container .data-table .col-7 { width: 7%; } /* YJ数量/JAN数量 */
+#aggregation-output-container .data-table .col-8 { width: 7%; } /* YJ包装数/JAN包装数 */
+#aggregation-output-container .data-table .col-9 { width: 5%; } /* YJ単位/JAN単位 */
+#aggregation-output-container .data-table .col-10 { width: 7%; } /* 単価/金額 */
+#aggregation-output-container .data-table .col-11 { width: 5%; } /* 税額/税率 */
+#aggregation-output-container .data-table .col-12 { width: 5%; } /* 期限/ロット */
+#aggregation-output-container .data-table .col-13 { width: 7%; } /* 得意先/伝票番号 */
+#aggregation-output-container .data-table .col-14 { width: 3%; } /* 行/MA */
+/* ----- ▲▲▲【追加ここまで】 集計画面用のスタイル ▲▲▲ ----- */

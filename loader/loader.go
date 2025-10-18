@@ -1,3 +1,4 @@
+// C:\Users\wasab\OneDrive\デスクトップ\WASABI\loader\loader.go
 package loader
 
 import (
@@ -13,11 +14,19 @@ import (
 	"golang.org/x/text/transform"
 )
 
+// ▼▼▼【ここから修正】▼▼▼
 var tableSchemas = map[string]map[int]string{
 	"jcshms": {
-		44: "real",
-		50: "real",
-		61: "int", 62: "int", 63: "int", 64: "int", 65: "int", 66: "int",
+		45:  "real", // JC044
+		50:  "real", // JC049
+		51:  "real", // JC050
+		62:  "int",  // JC061
+		63:  "int",  // JC062
+		64:  "int",  // JC063
+		65:  "int",  // JC064
+		66:  "int",  // JC065
+		67:  "int",  // JC066
+		125: "real", // JC124
 	},
 	"jancode": {
 		7: "real",
@@ -25,19 +34,19 @@ var tableSchemas = map[string]map[int]string{
 	},
 }
 
+// ▲▲▲【修正ここまで】▲▲▲
+
 // InitDatabase creates the schema and loads master data from CSV files.
 func InitDatabase(db *sql.DB) error {
 	if err := applySchema(db); err != nil {
 		return fmt.Errorf("failed to apply schema.sql: %w", err)
 	}
-	// ▼▼▼ [修正点] 関数呼び出しを loadCSV から LoadCSV に変更 ▼▼▼
 	if err := LoadCSV(db, "SOU/JCSHMS.CSV", "jcshms", 125, false); err != nil {
 		return fmt.Errorf("failed to load JCSHMS.CSV: %w", err)
 	}
 	if err := LoadCSV(db, "SOU/JANCODE.CSV", "jancode", 30, true); err != nil {
 		return fmt.Errorf("failed to load JANCODE.CSV: %w", err)
 	}
-	// ▲▲▲ 修正ここまで ▲▲▲
 	return nil
 }
 
@@ -92,7 +101,9 @@ func LoadCSV(db *sql.DB, filepath, tablename string, columns int, skipHeader boo
 		}
 
 		args := make([]interface{}, columns)
-		for i, val := range row[:columns] {
+		for i := 0; i < columns; i++ {
+			val := row[i]
+			// CSVの列番号は0から始まるので、スキーマのキー(1から始まる)に合わせるために+1する
 			if colType, ok := schema[i+1]; ok {
 				trimmedVal := strings.TrimSpace(val)
 				switch colType {

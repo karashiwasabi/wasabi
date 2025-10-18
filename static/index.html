@@ -16,6 +16,7 @@
     <button id="medrecDownloadBtn" class="btn btn-azure">chrome連携</button>
     <button id="edgeDownloadBtn" class="btn btn-azure">edge連携</button>
     <button id="usageBtn" class="btn btn-red">処方</button>
+    
     <button id="inventoryAdjustmentBtn" class="btn btn-green">棚卸調整</button>
     <button id="inventoryHistoryBtn" class="btn btn-green">棚卸履歴</button>
     <button id="ledgerBtn" class="btn btn-green">管理台帳</button>
@@ -39,7 +40,9 @@
 <main>
     <input type="file" id="datFileInput" multiple style="display:none;">
     <input type="file" id="usageFileInput" style="display:none;">
-    <div id="in-out-view" class="inout-view-container">
+    <input type="file" id="inventoryFileInput" style="display:none;">
+
+<div id="in-out-view" class="inout-view-container">
     <div class="inout-header-controls">
         <div class="field-group"><label for="in-out-date">日付</label><input type="date" id="in-out-date"></div>
         <div class="field-group"><label for="in-out-type">種別</label><select id="in-out-type"><option>入庫</option><option>出庫</option></select></div>
@@ -54,6 +57,43 @@
 <div id="upload-view" class="hidden">
     <p id="upload-view-title" class="view-subtitle">File Upload</p>
     <div id="upload-output-container"></div>
+</div>
+
+<div id="inventory-view" class="hidden">
+    <p class="view-subtitle">Inventory File Upload</p>
+    <div id="inventory-output-container"></div>
+</div>
+
+<div id="manual-inventory-view" class="hidden">
+    <p class="view-title">棚卸（手入力）</p>
+    <div class="filter-container" style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end;">
+    <div class="field-group">
+            <label for="manual-inv-date">棚卸日</label>
+            <input type="date" id="manual-inv-date">
+        </div>
+        <div class="field-group">
+            <label for="manual-inv-kanaName">製品名/カナ名</label>
+            <input type="text" id="manual-inv-kanaName" placeholder="（部分一致）">
+        </div>
+<div class="field-group">
+    <label for="manual-inv-dosageForm">剤型</label>
+    <select id="manual-inv-dosageForm">
+        <option value="">すべて</option>
+        <option value="内">内</option>
+        <option value="外">外</option>
+        <option value="歯">歯</option>
+        <option value="注">注</option>
+        <option value="機">機</option>
+        <option value="他">他</option>
+    </select>
+</div>
+        <div class="buttons-group">
+            <button id="save-manual-inv-btn" class="btn" style="background-color: #0d6efd; color: white;">この内容で棚卸を保存</button>
+        </div>
+    </div>
+    <div id="manual-inventory-container">
+        <p>読み込み中...</p>
+    </div>
 </div>
 
 <div id="inventory-adjustment-view" class="hidden inout-view-container">
@@ -528,6 +568,7 @@
             <div class="buttons-group">
                 <button id="run-valuation-btn" class="btn">計算実行</button>
                 <button id="export-valuation-btn" class="btn">Excelエクスポート</button>
+                <button id="export-valuation-pdf-btn" class="btn">PDFエクスポート</button>
             </div>
         </div>
 
@@ -596,6 +637,7 @@
             <label>品目を選択</label>
             <button id="ledger-select-product-btn" class="btn">検索して選択...</button>
         </div>
+        
         <div class="field-group">
             <label for="ledger-shelf-number">棚番</label>
             <input type="text" id="ledger-shelf-number" placeholder="（部分一致）">
@@ -687,6 +729,8 @@
 </div>
 <div id="notification-box" class="notification-box"></div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="/static/js/ipaexg.js"></script>
 <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strings"
 	"time"
 	"wasabi/db"
 	"wasabi/mappers"
@@ -80,38 +79,16 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 			dateStr = time.Now().Format("20060102")
 		}
 
+		// ▼▼▼【ここから修正】▼▼▼
 		if payload.OriginalReceiptNumber != "" {
 			receiptNumber = payload.OriginalReceiptNumber
-
-			payloadProductCodes := make(map[string]bool)
-			for _, rec := range payload.Records {
-				if rec.ProductCode != "" {
-					payloadProductCodes[rec.ProductCode] = true
-				}
+			// 既存の伝票を編集する場合、まず古い明細をすべて削除する
+			if err := db.DeleteTransactionsByReceiptNumberInTx(tx, receiptNumber); err != nil {
+				http.Error(w, "Failed to delete old items from slip", http.StatusInternalServerError)
+				return
 			}
-
-			if len(payloadProductCodes) > 0 {
-				var codesToDelete []interface{}
-				var placeholders []string
-				codesToDelete = append(codesToDelete, receiptNumber)
-				for code := range payloadProductCodes {
-					codesToDelete = append(codesToDelete, code)
-					placeholders = append(placeholders, "?")
-				}
-
-				deleteQuery := fmt.Sprintf("DELETE FROM transaction_records WHERE receipt_number = ? AND jan_code NOT IN (%s)", strings.Join(placeholders, ","))
-				if _, err := tx.Exec(deleteQuery, codesToDelete...); err != nil {
-					http.Error(w, "Failed to delete removed items from slip", http.StatusInternalServerError)
-					return
-				}
-			} else {
-				if err := db.DeleteTransactionsByReceiptNumberInTx(tx, receiptNumber); err != nil {
-					http.Error(w, "Failed to delete all items from slip", http.StatusInternalServerError)
-					return
-				}
-			}
-
 		} else {
+			// 新規伝票の場合、新しい伝票番号を採番する
 			var lastSeq int
 			q := `SELECT CAST(SUBSTR(receipt_number, 11) AS INTEGER) FROM transaction_records 
 				  WHERE receipt_number LIKE ? ORDER BY 1 DESC LIMIT 1`
@@ -123,6 +100,7 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 			newSeq := lastSeq + 1
 			receiptNumber = fmt.Sprintf("io%s%03d", dateStr, newSeq)
 		}
+		// ▲▲▲【修正ここまで】▲▲▲
 
 		var finalRecords []model.TransactionRecord
 		flagMap := map[string]int{"入庫": 11, "出庫": 12}
@@ -169,13 +147,8 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 			}
 
 			yjQuantity := rec.JanQuantity * master.JanPackInnerQty
-
-			// ▼▼▼【ここから修正】▼▼▼
-			// 単価にはマスターの薬価（YJ単位）を使用
 			unitPrice := master.NhiPrice
-			// 金額を「YJ数量 × YJ単位薬価」で計算
 			subtotal := yjQuantity * unitPrice
-			// ▲▲▲【修正ここまで】▲▲▲
 
 			tr := model.TransactionRecord{
 				TransactionDate: dateStr,
@@ -187,7 +160,7 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 				JanQuantity:     rec.JanQuantity,
 				DatQuantity:     rec.DatQuantity,
 				YjQuantity:      yjQuantity,
-				Subtotal:        subtotal, // 正しく計算された金額を設定
+				Subtotal:        subtotal,
 				ExpiryDate:      rec.ExpiryDate,
 				LotNumber:       rec.LotNumber,
 			}
@@ -198,7 +171,6 @@ func SaveInOutHandler(conn *sql.DB) http.HandlerFunc {
 				tr.ProcessFlagMA = "PROVISIONAL"
 			}
 
-			// マッピング関数を呼ぶ（この中でUnitPriceが設定される）
 			mappers.MapProductMasterToTransaction(&tr, master)
 			finalRecords = append(finalRecords, tr)
 		}

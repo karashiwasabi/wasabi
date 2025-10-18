@@ -21,7 +21,6 @@ function formatPackageSpec(master) {
     if (!master) return '';
     const yjUnitName = master.yjUnitName || '';
     let spec = `${master.packageForm || ''} ${master.yjPackUnitQty || 0}${yjUnitName}`;
-
     if (master.janPackInnerQty > 0 && master.janPackUnitQty > 0) {
         const janUnitName = (master.janUnitCode === 0 || !unitMap[master.janUnitCode]) 
             ? yjUnitName 
@@ -60,14 +59,23 @@ function renderDeadStockList(data) {
                 
                 const spec = formatPackageSpec(prod);
                 const lastUsed = prod.lastUsageDate ? `${prod.lastUsageDate.slice(0,4)}-${prod.lastUsageDate.slice(4,6)}-${prod.lastUsageDate.slice(6,8)}` : '使用履歴なし';
+                
+                // ▼▼▼【ここから修正】理論在庫をYJ単位からJAN単位に変換 ▼▼▼
+                let janStock = prod.currentStock; // デフォルト値
+                if (prod.janPackInnerQty > 0) {
+                    // YJ単位の理論在庫を内包装数量で割り、JAN単位の在庫数を算出
+                    janStock = prod.currentStock / prod.janPackInnerQty;
+                }
+                
                 tableRowsHTML += `
                     <tr>
                         <td class="left" ${rowSpan}>${prod.productName}</td>
                         <td ${rowSpan}>${prod.productCode}</td>
                         <td class="left" ${rowSpan}>${prod.makerName}</td>
                         <td class="left" ${rowSpan}>${spec}</td>
-                        <td class="right" ${rowSpan}>${prod.currentStock.toFixed(2)} ${janUnitName}</td>
+                        <td class="right" ${rowSpan}>${janStock.toFixed(2)} ${janUnitName}</td>
                         <td ${rowSpan}>${lastUsed}</td>`;
+                // ▲▲▲【修正ここまで】▲▲▲
 
                 if (savedRecords.length > 0) {
                     const firstRec = savedRecords[0];

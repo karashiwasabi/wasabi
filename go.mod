@@ -5,6 +5,7 @@ go 1.24.3
 require (
 	github.com/chromedp/cdproto v0.0.0-20250803210736-d308e07a266d
 	github.com/chromedp/chromedp v0.14.1
+	github.com/jung-kurt/gofpdf v1.16.2
 	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/xuri/excelize/v2 v2.9.1
 	golang.org/x/text v0.29.0

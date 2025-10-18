@@ -157,12 +157,35 @@ export function createFinalInputRow(master, deadStockRecord = null, isPrimary = 
  */
 function generateInputSectionsHtml(packageLedgers, yjUnitName = '単位', cache, yesterdaysTotal) {
     const packageGroupsHtml = (packageLedgers || []).map(pkgLedger => {
-        // ▼▼▼【修正】前日の包装別在庫を取得 ▼▼▼
         let yesterdaysPkgStock = 0;
         if(cache.yesterdaysStock && cache.yesterdaysStock.packageLedgers){
             const prevPkg = cache.yesterdaysStock.packageLedgers.find(p => p.packageKey === pkgLedger.packageKey);
             if(prevPkg) {
                 yesterdaysPkgStock = prevPkg.endingBalance || 0;
+            }
+        }
+        
+        // ▼▼▼【ここから修正】▼▼▼
+        let totalStockDisplay = `${(pkgLedger.endingBalance || 0).toFixed(2)} ${yjUnitName}`; // デフォルト表示
+        let yesterdaysTotalStockDisplay = `${yesterdaysPkgStock.toFixed(2)} ${yjUnitName}`; // デフォルト表示
+
+        if (pkgLedger.masters && pkgLedger.masters.length > 0) {
+            const firstMaster = pkgLedger.masters[0];
+            const janPackInnerQty = firstMaster.janPackInnerQty;
+
+            const getJanUnitName = (master) => (master.janUnitCode === 0 || !unitMap[master.janUnitCode])
+                ? master.yjUnitName
+                : (unitMap[master.janUnitCode] || master.yjUnitName);
+
+            const firstJanUnitName = getJanUnitName(firstMaster);
+            const allSameJanUnit = pkgLedger.masters.every(m => getJanUnitName(m) === firstJanUnitName);
+
+            if (allSameJanUnit && janPackInnerQty > 0) {
+                const totalJanStock = (pkgLedger.endingBalance || 0) / janPackInnerQty;
+                totalStockDisplay = `${totalJanStock.toFixed(2)} ${firstJanUnitName}`;
+                
+                const yesterdaysTotalJanStock = yesterdaysPkgStock / janPackInnerQty;
+                yesterdaysTotalStockDisplay = `${yesterdaysTotalJanStock.toFixed(2)} ${firstJanUnitName}`;
             }
         }
         // ▲▲▲【修正ここまで】▲▲▲
@@ -177,7 +200,7 @@ function generateInputSectionsHtml(packageLedgers, yjUnitName = '単位', cache,
             
             const janUnitName = (master.janUnitCode === 0 || !unitMap[master.janUnitCode]) ? master.yjUnitName : (unitMap[master.janUnitCode] || master.yjUnitName);
             
-            // ▼▼▼【ここから修正】ご指示の表示を追加 ▼▼▼
+            // ▼▼▼【ここから修正】表示に新しい変数を使用 ▼▼▼
             const userInputArea = `
             <div class="user-input-area" style="font-size: 14px; padding: 10px; background-color: #fffbdd;">
                     <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; justify-content: space-between;">
@@ -186,7 +209,7 @@ function generateInputSectionsHtml(packageLedgers, yjUnitName = '単位', cache,
                             <input type="number" class="physical-stock-input" data-product-code="${master.productCode}" step="any">
                             <span>(${janUnitName})</span>
                         </div>
-                        <span style="font-size: 12px; color: #555;">本日理論在庫(包装計): ${(pkgLedger.endingBalance || 0).toFixed(2)} ${yjUnitName}</span>
+                        <span style="font-size: 12px; color: #555;">本日理論在庫(包装計): ${totalStockDisplay}</span>
                     </div>
                     <div style="display: flex; align-items: center; gap: 8px; font-weight: bold; color: #dc3545; justify-content: space-between;">
                         <div style="display: flex; align-items: center; gap: 8px;">
@@ -195,7 +218,7 @@ function generateInputSectionsHtml(packageLedgers, yjUnitName = '単位', cache,
                             <span>(${janUnitName})</span>
                             <span style="font-size: 11px; color: #555; margin-left: 10px;">(この数値が棚卸データとして登録されます)</span>
                         </div>
-                        <span style="font-size: 12px; color: #555;">前日理論在庫(包装計): ${yesterdaysPkgStock.toFixed(2)} ${yjUnitName}</span>
+                        <span style="font-size: 12px; color: #555;">前日理論在庫(包装計): ${yesterdaysTotalStockDisplay}</span>
                     </div>
                 </div>`;
             // ▲▲▲【修正ここまで】▲▲▲

@@ -93,25 +93,17 @@ func GetInventoryValuation(conn *sql.DB, filters model.ValuationFilters) ([]Valu
 			JA008: sql.NullFloat64{Float64: repMaster.JanPackUnitQty, Valid: true},
 			JA007: sql.NullString{String: fmt.Sprintf("%d", repMaster.JanUnitCode), Valid: true},
 		}
-		spec := units.FormatPackageSpec(&tempJcshms)
+		spec := units.FormatSimplePackageSpec(&tempJcshms)
 
-		// ▼▼▼【ここから修正】▼▼▼
-		// repMaster.NhiPrice は既に正しいYJ単位あたりの単価として保存されているため、そのまま使用します。
 		unitNhiPrice := repMaster.NhiPrice
-
-		// totalNhiValue(薬価金額)は「総在庫数(YJ単位) × YJ単価」で計算します。
 		totalNhiValue := totalStockForPackage * unitNhiPrice
-
-		// packageNhiPrice(包装薬価)は「YJ単価 × YJ包装数量」で逆算して表示します。
 		packageNhiPrice := unitNhiPrice * repMaster.YjPackUnitQty
 
-		// repMaster.PurchasePrice は包装単位の納入価として保存されているため、YJ単位の単価を計算します。
 		var totalPurchaseValue float64
 		if repMaster.YjPackUnitQty > 0 {
 			unitPurchasePrice := repMaster.PurchasePrice / repMaster.YjPackUnitQty
 			totalPurchaseValue = totalStockForPackage * unitPurchasePrice
 		}
-		// ▲▲▲【修正ここまで】▲▲▲
 
 		detailRows = append(detailRows, model.ValuationDetailRow{
 			YjCode:               repMaster.YjCode,
@@ -149,7 +141,13 @@ func GetInventoryValuation(conn *sql.DB, filters model.ValuationFilters) ([]Valu
 	var finalResult []ValuationGroup
 	for _, group := range resultGroups {
 		sort.Slice(group.DetailRows, func(i, j int) bool {
-			return mastersByJanCode[group.DetailRows[i].ProductCode].KanaName < mastersByJanCode[group.DetailRows[j].ProductCode].KanaName
+			// 製品名でソートするためにマスター情報を参照
+			masterI, okI := mastersByJanCode[group.DetailRows[i].ProductCode]
+			masterJ, okJ := mastersByJanCode[group.DetailRows[j].ProductCode]
+			if !okI || !okJ {
+				return group.DetailRows[i].ProductCode < group.DetailRows[j].ProductCode
+			}
+			return masterI.KanaName < masterJ.KanaName
 		})
 		finalResult = append(finalResult, *group)
 	}

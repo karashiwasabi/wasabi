@@ -81,6 +81,9 @@ func main() {
 	mux.HandleFunc("/api/masters/by_yj_code", search.GetMastersByYjCodeHandler(conn))
 	mux.HandleFunc("/api/valuation", valuation.GetValuationHandler(conn))
 	mux.HandleFunc("/api/valuation/export", valuation.ExportValuationHandler(conn))
+	// ▼▼▼ この行を追加 ▼▼▼
+	mux.HandleFunc("/api/valuation/export_pdf", valuation.ExportValuationPDFHandler(conn))
+	// ▲▲▲ 追加ここまで ▲▲▲
 	mux.HandleFunc("/api/dat/upload", dat.UploadDatHandler(conn))
 	mux.HandleFunc("/api/usage/upload", usage.UploadUsageHandler(conn))
 	mux.HandleFunc("/api/inout/save", inout.SaveInOutHandler(conn))
